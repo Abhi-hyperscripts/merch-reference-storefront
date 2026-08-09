@@ -297,6 +297,26 @@ function loadRazorpay() {
 /* --- After either path ---------------------------------------------------- */
 
 function done(order) {
+  /* Stash `giftCardApplied` and `amountDue` before navigating.
+
+     They exist ONLY on this checkout response. GET /api/orders/{id} returns
+     the order shape, which has `total` and no notion of what a gift card
+     covered — so a confirmation page that only re-fetches shows the full
+     total to someone who paid ₹500 less than that, and it looks like they
+     were overcharged. */
+  try {
+    sessionStorage.setItem(
+      'merch.lastOrder',
+      JSON.stringify({
+        id: order.id,
+        giftCardApplied: order.giftCardApplied || 0,
+        amountDue: order.amountDue,
+      }),
+    );
+  } catch {
+    /* Private-mode storage failures must not lose the order. */
+  }
+
   /* Clear only now — if anything above threw, the basket is still intact. */
   cart.clear();
   sessionStorage.removeItem('merch.pending');

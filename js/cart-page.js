@@ -80,17 +80,34 @@ function renderTotals() {
   const lines = cart.lines();
   const subtotal = cart.localSubtotal();
 
-  /* A coupon and an automatic discount are separate things and the store
-     treats them separately, so show whichever applies rather than silently
-     picking one. */
+  /* DO NOT STACK A COUPON ON TOP OF AN AUTOMATIC DISCOUNT.
+
+     Whether the two combine is decided by the merchant's books, not by this
+     storefront — the API forwards a coupon code and the books settle the
+     final figure. Subtracting both here quietly promises a discount the store
+     may never give: the cart said ₹1,624.15 and the order came to ₹2,249.10,
+     because only one of the two was actually applied.
+
+     So take the STORE'S OWN figure. Both previews return `newSubtotal`, which
+     is the subtotal it computed after applying that one thing. Prefer the
+     coupon when there is one, because that is the discount the shopper
+     deliberately asked for and expects to see. Where the two really do stack,
+     the order comes out cheaper than quoted, which is the safe direction to
+     be wrong in. */
   const couponOff = couponPreview?.valid ? couponPreview.discountAmount : 0;
   const autoOff = autoDiscount?.applies ? autoDiscount.discountAmount : 0;
+
+  const discountedSubtotal = couponPreview?.valid
+    ? couponPreview.newSubtotal
+    : autoDiscount?.applies
+      ? autoDiscount.newSubtotal
+      : subtotal;
 
   const freeShipping = autoDiscount?.applies && autoDiscount.freeShipping;
   /* Again: `shipping.shipping` (the cheapest option), never `available`. */
   const ship = freeShipping ? 0 : Number(shipping?.shipping) || 0;
 
-  const afterDiscounts = Math.max(0, subtotal - couponOff - autoOff) + ship;
+  const afterDiscounts = Math.max(0, discountedSubtotal) + ship;
 
   /* A gift card is not a discount — it is money already paid. So it comes off
      the total to give the amount still due, and it can only ever cover what is
@@ -98,10 +115,19 @@ function renderTotals() {
   const giftUse = giftCard?.valid ? Math.min(giftCard.balance, afterDiscounts) : 0;
   const due = Math.max(0, afterDiscounts - giftUse);
 
+  /* Show only the one that is actually in the total, for the same reason. */
+  const showCoupon = couponPreview?.valid;
+  const showAuto = !showCoupon && autoDiscount?.applies;
+
   $('#totals').innerHTML = `
     <li><span>Subtotal (${cart.count()} item${cart.count() === 1 ? '' : 's'})</span><span>${money(subtotal)}</span></li>
-    ${autoOff ? `<li class="save"><span>${esc(autoDiscount.title || 'Discount')}</span><span>&minus;${money(autoOff)}</span></li>` : ''}
-    ${couponOff ? `<li class="save"><span>Coupon ${esc(couponPreview.code)}</span><span>&minus;${money(couponOff)}</span></li>` : ''}
+    ${showAuto ? `<li class="save"><span>${esc(autoDiscount.title || 'Discount')}</span><span>&minus;${money(autoOff)}</span></li>` : ''}
+    ${showCoupon ? `<li class="save"><span>Coupon ${esc(couponPreview.code)}</span><span>&minus;${money(couponOff)}</span></li>` : ''}
+    ${
+      showCoupon && autoDiscount?.applies
+        ? `<li class="muted"><span>${esc(autoDiscount.title || 'Automatic discount')}</span><span>may also apply</span></li>`
+        : ''
+    }
     <li class="muted">
       <span>Shipping</span>
       <span>${
@@ -115,7 +141,7 @@ function renderTotals() {
       }</span>
     </li>
     ${giftUse ? `<li class="save"><span>Gift card</span><span>&minus;${money(giftUse)}</span></li>` : ''}
-    <li class="grand"><span>Total</span><span>${money(due)}</span></li>`;
+    <li class="grand"><span>Estimated total</span><span>${money(due)}</span></li>`;
 }
 
 /* --- Store-computed previews ---------------------------------------------- */
@@ -148,6 +174,8 @@ async function recheckCoupon() {
     note('#coupon-note', res.valid
       ? { ok: `${res.code} applied — you save ${money(res.discountAmount)}.` }
       : { err: res.reason || 'That code no longer applies to this basket.' });
+    /* A basket edit can invalidate a coupon; the stored code must follow. */
+    savePending();
   } catch {
     /* Leave the last known answer alone rather than dropping a valid coupon
        because of one failed call. */
@@ -204,6 +232,7 @@ $('#apply-coupon').addEventListener('click', async () => {
     note('#coupon-note', res.valid
       ? { ok: `${res.code} applied — you save ${money(res.discountAmount)}.` }
       : { err: res.reason || 'That code is not valid for this basket.' });
+    savePending();
     renderTotals();
   } catch (err) {
     showError(err);
@@ -224,6 +253,7 @@ $('#apply-gift').addEventListener('click', async () => {
     note('#gift-note', res.valid
       ? { ok: `Balance ${money(res.balance)}. It will be applied at checkout.` }
       : { err: res.reason || 'That gift card could not be used.' });
+    savePending();
     renderTotals();
   } catch (err) {
     showError(err);
@@ -266,8 +296,16 @@ $('#check-ship').addEventListener('click', async () => {
           : shipping.etaDays
             ? ` — about ${shipping.etaDays} days`
             : '';
-      const price = cheapest.amount === 0 ? 'Free' : money(cheapest.amount);
-      note('#ship-note', { ok: `${cheapest.name || 'Delivery'}: ${price}${eta}` });
+      /* Do not print "Free delivery: Free". When the option is free and its
+         name already says so, the name is the whole message. */
+      const free = cheapest.amount === 0;
+      const label = cheapest.name || 'Delivery';
+      const text = free
+        ? /free/i.test(label)
+          ? label
+          : `${label}: Free`
+        : `${label}: ${money(cheapest.amount)}`;
+      note('#ship-note', { ok: `${text}${eta}` });
       /* Keep the figure the totals use in step with the option shown. */
       shipping = { ...shipping, shipping: cheapest.amount };
     }
@@ -283,14 +321,23 @@ $('#check-ship').addEventListener('click', async () => {
 
 /* Carry the coupon and gift card to checkout. Only the CODES travel — the
    amounts are recomputed there and again by the store when the order is
-   placed, so nothing here can inflate a discount. */
-$('#to-checkout').addEventListener('click', () => {
-  const pending = {
-    coupon: couponPreview?.valid ? couponPreview.code : '',
-    giftCard: giftCard?.valid ? $('#giftcard').value.trim() : '',
-  };
-  sessionStorage.setItem('merch.pending', JSON.stringify(pending));
-});
+   placed, so nothing here can inflate a discount.
+
+   Saved the moment a code is accepted, NOT when the Checkout button is
+   clicked. Hanging it off the click looks equivalent and is not: a shopper who
+   refreshes, uses the back button, or opens checkout from a bookmark then
+   arrives with no coupon and no idea it was dropped — they simply get charged
+   more than the cart quoted. (Found exactly that way: the cart said ₹1,624.15
+   and the order came to ₹2,374.05.) */
+function savePending() {
+  sessionStorage.setItem(
+    'merch.pending',
+    JSON.stringify({
+      coupon: couponPreview?.valid ? couponPreview.code : '',
+      giftCard: giftCard?.valid ? giftCard.code || $('#giftcard').value.trim() : '',
+    }),
+  );
+}
 
 /* --- Boot ----------------------------------------------------------------- */
 

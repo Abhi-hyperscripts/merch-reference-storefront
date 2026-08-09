@@ -31,8 +31,20 @@ function when(value) {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString();
 }
 
+/* The gift-card figures checkout stashed, if this IS the order just placed.
+   Guarded by the id so a stale entry cannot decorate a different order. */
+function justPaidFor(orderId) {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem('merch.lastOrder') || 'null');
+    return raw && raw.id === orderId ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
 function render({ order, events, access }) {
   const status = String(order.status || '').toLowerCase();
+  const justPaid = justPaidFor(order.id);
 
   host.innerHTML = `
     ${
@@ -55,7 +67,15 @@ function render({ order, events, access }) {
             <li><span>Placed</span><span>${esc(when(order.createdAt))}</span></li>
             <li><span>Status</span><span><span class="status status--${esc(status)}">${esc(order.status)}</span></span></li>
             <li><span>Delivery</span><span>${esc(FULFILMENT[order.fulfillmentStatus] || order.fulfillmentStatus || '—')}</span></li>
-            <li><span>Total</span><span>${money(order.total)}</span></li>
+            <li><span>Order total</span><span>${money(order.total)}</span></li>
+            ${
+              /* Only present just after checkout — see the note in checkout.js
+                 about why these two fields cannot be re-fetched. */
+              justPaid && justPaid.giftCardApplied > 0
+                ? `<li><span>Gift card</span><span>&minus;${money(justPaid.giftCardApplied)}</span></li>
+                   <li><span>You paid</span><span>${money(justPaid.amountDue)}</span></li>`
+                : ''
+            }
           </ul>
 
           ${

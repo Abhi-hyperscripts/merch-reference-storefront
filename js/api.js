@@ -120,7 +120,9 @@ async function request(path, { method = 'GET', body, auth = false } = {}) {
    on another domain must prefix them or every image 404s against itself. */
 export function mediaUrl(path) {
   if (!path) return '';
-  if (/^https?:\/\//i.test(path)) return path;
+  /* Already absolute, or self-contained (a data: or blob: URI). Prefixing
+     either would produce a broken URL. */
+  if (/^(https?:|data:|blob:)/i.test(path)) return path;
   return API_BASE + path;
 }
 

@@ -15,20 +15,30 @@ write your own now that you know what the API expects.
 ## Run it in two minutes
 
 ```bash
-# 1. Get the code
-git clone <this-repo-url> my-storefront
-cd my-storefront
+git clone https://github.com/Abhi-hyperscripts/merch-reference-storefront
+cd merch-reference-storefront
 
-# 2. Point it at your store — edit ONE line in config.js
-#    export const API_BASE = 'https://shop.mybrand.com';
-
-# 3. Serve it. Any static server will do; here are three.
+# Any static server will do; here are three.
 python3 -m http.server 5610
 #   npx serve -l 5610
 #   php -S localhost:5610
 ```
 
-Then open <http://localhost:5610>.
+Then open <http://localhost:5610>. **There is no step two** — it ships in demo
+mode and runs a pretend shop entirely in the browser, so you can click through
+the catalogue, cart, coupons, checkout and order tracking before you have a
+store to point it at. Try coupon `WELCOME10` and gift card `GIFT500`.
+
+When you are ready, edit one line in `config.js`:
+
+```js
+export const API_BASE = 'https://shop.mybrand.com';
+```
+
+The demo switches itself off the moment that is not `'demo'`. Once you are on
+a real store, delete `js/demo-store.js` and the two demo lines at the bottom of
+`config.js` — nothing else refers to either, deliberately, so the code you are
+learning from is the code that talks to a real shop.
 
 **It must be served over `http://`, not opened as a file.** The code uses ES
 modules (`import` / `export`), which browsers refuse to load from `file://`.
@@ -63,6 +73,7 @@ sharing a site.
 | `js/api.js` | Every network call. One error shape, handled once. |
 | `js/cart.js` | Basket state in `localStorage` |
 | `js/ui.js` | Money, escaping, header/footer, toasts, product card |
+| `js/demo-store.js` | **Scaffolding — delete it.** The pretend shop, so this runs with no backend |
 | `css/base.css` | Reset, design tokens, layout |
 | `css/components.css` | Cards, buttons, forms, everything else |
 
@@ -156,6 +167,20 @@ All of it is handled once, in `js/api.js`.
   right options rather than letting the shopper be turned away at the end.
 - **Rate limits** are per IP per minute: 15 sign-in, 25 checkout/payment, 90 cart
   previews, 120 product-by-id. Browsing is not limited.
+- **Do not stack a coupon on top of an automatic discount in your own maths.**
+  Whether they combine is decided by the merchant's books, not by the
+  storefront, so subtracting both quietly promises a discount that may never
+  arrive. Use the `newSubtotal` each preview returns — that is the store's own
+  figure. (Found the hard way: the cart said ₹1,624.15 and the order came to
+  ₹2,249.10.) `js/cart-page.js` shows the conservative version.
+- **`giftCardApplied` and `amountDue` exist only on the checkout response.**
+  `GET /api/orders/{id}` has `total` and no notion of what a gift card covered,
+  so a confirmation page that merely re-fetches shows the full total to someone
+  who paid less — and it reads as an overcharge. `js/checkout.js` stashes them.
+- **Whatever carries a coupon to checkout must survive a refresh.** Hanging it
+  off the Checkout button looks equivalent and is not: a bookmark, a reload or
+  the back button then arrives with no coupon and the shopper is charged more
+  than the cart quoted, silently.
 
 ---
 
@@ -193,7 +218,9 @@ placed and the totals shown matched the amount charged to the paisa.
 **Written against the documented shapes but not run:** the online-payment path
 (the store used for development had no gateway connected) and everything in
 `account.html` (sign-in was switched off, and a shopper token cannot be minted
-without real Google credentials).
+without real Google credentials). Demo mode refuses both rather than faking
+them — pretending someone is signed in would hide the one thing worth learning
+there, which is exactly which calls need a token.
 
 That code is a well-informed starting point, not proven code. Nothing in it is
 guesswork about shapes — every call and every field is documented — but expect
