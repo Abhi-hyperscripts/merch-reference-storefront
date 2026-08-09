@@ -1,0 +1,236 @@
+/* ---------------------------------------------------------------------------
+   base.css — reset, design tokens, layout.
+
+   Every colour is a custom property, and ui.js overwrites them at runtime with
+   whatever the merchant chose in the admin panel (GET /api/theme). So the
+   values here are only the defaults you see before the store answers — change
+   them freely, but keep the variable names if you want theming to keep working.
+--------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+:root {
+  --c-primary: #3538CD;
+  --c-primary-hover: #272AA8;
+  --c-accent: #06B6D4;
+  --c-bg: #F4F6FB;
+  --c-surface: #FFFFFF;
+  --c-text: #0B1020;
+  --c-muted: #5B6478;
+  --c-border: #E1E5EE;
+
+  --c-ok: #067647;
+  --c-warn: #B54708;
+  --c-err: #B42318;
+
+  --radius: 10px;
+  --wrap: 1140px;
+  --gap: 20px;
+
+  --shadow-sm: 0 1px 2px rgb(11 16 32 / 0.06);
+  --shadow-md: 0 4px 16px rgb(11 16 32 / 0.08);
+}
+
+html { -webkit-text-size-adjust: 100%; }
+
+/* The `hidden` attribute is only `display: none` in the UA stylesheet, so ANY
+   display rule of your own outranks it and the element stays visible. This bit
+   us on the cart badge, which is `display: inline-grid` and so sat there
+   showing "0". Restore the attribute's meaning once, globally. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font: 400 16px/1.55 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+img { max-width: 100%; height: auto; display: block; }
+
+a { color: var(--c-primary); }
+a:hover { color: var(--c-primary-hover); }
+
+h1, h2, h3 { line-height: 1.2; margin: 0 0 12px; }
+h1 { font-size: clamp(26px, 4vw, 36px); letter-spacing: -0.02em; }
+h2 { font-size: clamp(20px, 2.6vw, 26px); letter-spacing: -0.01em; }
+h3 { font-size: 17px; }
+
+p { margin: 0 0 12px; }
+
+/* A visible focus ring on everything interactive. Removing it is the single
+   most common accessibility regression in a storefront — it makes the whole
+   checkout unusable by keyboard. */
+:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+}
+.skip:focus {
+  left: 12px;
+  top: 12px;
+  z-index: 50;
+  background: var(--c-surface);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+
+.wrap {
+  width: min(var(--wrap), 100% - 32px);
+  margin-inline: auto;
+}
+
+/* --- Header / footer ------------------------------------------------------ */
+
+.header {
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.header__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 64px;
+}
+
+.brand { text-decoration: none; color: inherit; }
+.brand__name {
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: -0.02em;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.nav a {
+  text-decoration: none;
+  color: var(--c-text);
+  font-size: 14.5px;
+  font-weight: 500;
+  padding: 8px 11px;
+  border-radius: var(--radius);
+}
+.nav a:hover { background: var(--c-bg); }
+
+.nav__cart { display: inline-flex; align-items: center; gap: 7px; }
+
+/* On a narrow screen the brand and the four nav links do not fit on one line,
+   and letting them wrap mid-list drops the cart onto a row of its own. Stack
+   deliberately instead: brand above, nav below, centred. */
+@media (max-width: 560px) {
+  .header__bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    padding: 10px 0;
+  }
+  .brand { text-align: center; }
+  .nav { justify-content: center; gap: 2px; }
+  .nav a { padding: 7px 9px; font-size: 14px; }
+}
+
+.badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--c-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.footer {
+  margin-top: 56px;
+  border-top: 1px solid var(--c-border);
+  background: var(--c-surface);
+}
+.footer__bar {
+  padding: 24px 0;
+  color: var(--c-muted);
+  font-size: 14px;
+}
+.footer__bar p { margin: 0; }
+
+/* --- Page scaffolding ----------------------------------------------------- */
+
+.main { padding: 28px 0 8px; }
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.page-head p { color: var(--c-muted); margin: 0; }
+
+.crumb {
+  font-size: 14px;
+  color: var(--c-muted);
+  margin-bottom: 14px;
+}
+.crumb a { color: var(--c-muted); }
+
+/* --- Grids ---------------------------------------------------------------- */
+
+.grid {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.split {
+  display: grid;
+  gap: 28px;
+  grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr);
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .split { grid-template-columns: 1fr; }
+}
+
+/* --- States --------------------------------------------------------------- */
+
+.state {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--c-muted);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+}
+.state__title { color: var(--c-text); font-weight: 600; margin: 0 0 6px; }
+.state__detail { margin: 0 0 14px; }
+.state--error .state__title { color: var(--c-err); }
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
