@@ -42,7 +42,9 @@ export function money(amount) {
     minimumFractionDigits: hasPaise ? 2 : 0,
     maximumFractionDigits: 2,
   });
-  return `${currency.symbol}${formatted}`;
+  /* The symbol is merchant text landing in innerHTML wherever money() is
+     interpolated, so markup characters are dropped from it here, once. */
+  return `${String(currency.symbol).replace(/[<>&"']/g, '')}${formatted}`;
 }
 
 /* --- Small helpers -------------------------------------------------------- */
@@ -120,7 +122,11 @@ function maybeShowSetupBanner(err) {
 export function showError(err) {
   maybeShowSetupBanner(err);
   if (err instanceof ApiError) {
-    if (err.isStoreDown) {
+    if (err.sessionEnded) {
+      /* request() has already forgotten the dead token. Say what happened AND what the choice is —
+         the bare server sentence asked for a sign-in that was neither offered nor required. */
+      toast('You have been signed out because this account’s sign-in changed. Sign in again to keep your orders on your account, or carry on as a guest.', 'error');
+    } else if (err.isStoreDown) {
       toast('The store is briefly unavailable. Please try again in a moment.', 'error');
     } else if (err.isRateLimited) {
       toast('That was a bit quick — give it a few seconds and try again.', 'error');

@@ -101,9 +101,19 @@ export const cart = {
     const lines = read();
     if (!lines.length) return { removed: [] };
 
-    const results = await Promise.all(
-      lines.map((l) => api.product(l.itemId).catch(() => null)),
-    );
+    /* One call for every line (`ids=`), not one per line: a 12-line cart on a
+       120/min browse bucket spent a tenth of it here on every visit. */
+    let batch;
+    try { batch = await api.products(lines.map((l) => l.itemId)); }
+    catch {
+      /* The STORE could not be reached — that says nothing about the lines.
+         Leave the basket exactly as it was (the per-line version dropped a
+         line on a network blip; the batch version would have dropped them ALL). */
+      return { removed: [], stale: true };
+    }
+    /* Case-insensitive, like the store's `ids=` lookup: a stored id that differs only in case is the same product. */
+    const byId = new Map((batch || []).map((p) => [String(p.id).toLowerCase(), p]));
+    const results = lines.map((l) => byId.get(String(l.itemId).toLowerCase()) || null);
 
     const removed = [];
     const fresh = [];

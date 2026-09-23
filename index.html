@@ -50,7 +50,13 @@
         </div>
         <button class="btn" type="submit">Apply</button>
         <button class="btn btn--ghost" type="button" id="f-clear">Clear</button>
+        <span class="chip chip--inline" id="f-brand-note" hidden></span>
       </form>
+
+      <!-- The API-driven home: GET /api/homepage decides what shows here and in
+           what order (banners, categories, brands, product rails). Hidden until
+           it loads; the catalogue grid below always works without it. -->
+      <section id="home" aria-busy="true"></section>
 
       <section id="collections" hidden>
         <h2>Collections</h2>

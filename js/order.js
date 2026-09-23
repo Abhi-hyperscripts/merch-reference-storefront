@@ -3,7 +3,8 @@
 
    Careful here: THE SAME ORDER COMES BACK IN THREE DIFFERENT SHAPES.
 
-     GET  /api/orders/{id}      -> { order, events, access }   WRAPPED
+     GET  /api/orders/{id}      -> { order, events, access, items }   WRAPPED
+                                   (items: the lines with name/qty/price/imageUrl — rendered below)
      POST /api/orders/lookup    -> the order, bare
      GET  /api/shopper/orders   -> an array of orders
 
@@ -24,6 +25,13 @@ const FULFILMENT = {
   partially_fulfilled: 'Partly shipped',
   cancelled: 'Cancelled',
 };
+/* The timeline's `type` is a machine word (the store's allow-list); label it. */
+const EVENT_LABEL = {
+  placed: 'Order placed',
+  fulfilled: 'Shipped',
+  cancelled: 'Cancelled',
+  access_granted: 'Downloads unlocked',
+};
 
 function when(value) {
   if (!value) return '';
@@ -42,7 +50,7 @@ function justPaidFor(orderId) {
   }
 }
 
-function render({ order, events, access }) {
+function render({ order, events, access, items }) {
   const status = String(order.status || '').toLowerCase();
   const justPaid = justPaidFor(order.id);
 
@@ -64,16 +72,31 @@ function render({ order, events, access }) {
           <ul class="kv">
             <li><span>Reference</span><span>${esc(order.orderRef)}</span></li>
             <li><span>Invoice</span><span>${esc(order.invoiceId)}</span></li>
-            <li><span>Placed</span><span>${esc(when(order.createdAt))}</span></li>
-            <li><span>Status</span><span><span class="status status--${esc(status)}">${esc(order.status)}</span></span></li>
+            <li><span>Placed</span><span>${esc(when(order.placedAt ?? order.createdAt))}</span></li>   <!-- when the basket was placed; createdAt is when the money cleared -->
+            <li><span>Status</span><span><span class="status status--${order.amountUncollected ? 'pending' : esc(status)}">${order.amountUncollected ? 'Not collected' : esc(order.status)}</span></span></li>
+            ${status === 'failed' ? '<li><span></span><span>This order was never completed, so there is nothing to do here. Please contact us if you were charged.</span></li>' : ''}
             <li><span>Delivery</span><span>${esc(FULFILMENT[order.fulfillmentStatus] || order.fulfillmentStatus || '—')}</span></li>
             <li><span>Order total</span><span>${money(order.total)}</span></li>
             ${
-              /* Only present just after checkout — see the note in checkout.js
-                 about why these two fields cannot be re-fetched. */
-              justPaid && justPaid.giftCardApplied > 0
-                ? `<li><span>Gift card</span><span>&minus;${money(justPaid.giftCardApplied)}</span></li>
-                   <li><span>You paid</span><span>${money(justPaid.amountDue)}</span></li>`
+              /* giftCardApplied / amountDue are on the order itself (every order
+                 shape carries them); the checkout reply only fills the gap until
+                 the first re-fetch. */
+              /* The settlement row is NOT a gift-card detail: amountUncollected
+                 is reachable with no card at all (a drained card, a 100%-off
+                 coupon), and nested under the card test the shopper who owes
+                 the most was told nothing. */
+              order.amountUncollected || (order.giftCardApplied ?? justPaid?.giftCardApplied ?? 0) > 0
+                ? `${(order.giftCardApplied ?? justPaid?.giftCardApplied ?? 0) > 0
+                     ? `<li><span>Gift card</span><span>&minus;${money(order.giftCardApplied ?? justPaid?.giftCardApplied)}</span></li>`
+                     : ''}
+                   <li><span>${
+                     /* amountUncollected: the store says this balance has NOT been
+                        collected (a COD order the courier has not settled, an
+                        online order whose payment never landed) — never "You paid". */
+                     order.amountUncollected
+                       ? 'Not collected'                                                         /* the store says this money was never collected — a settled COD order is not this */
+                       : (order.paymentMethod || justPaid?.paymentMethod) === 'cod' ? 'To pay on delivery' : 'You paid'
+                   }</span><span>${money(order.amountDue ?? justPaid?.amountDue ?? ((Number(order.total) || 0) - (order.giftCardApplied ?? justPaid?.giftCardApplied ?? 0)))   /* amountDue is NULL on rows from before the column: derive, never fabricate ₹0 or a blank cell */}</span></li>`
                 : ''
             }
           </ul>
@@ -105,6 +128,26 @@ function render({ order, events, access }) {
         </div>
 
         ${
+          items && items.length
+            ? `<div class="panel">
+                 <h2>Items</h2>
+                 <ul class="lines">
+                   ${items
+                     .map(
+                       (l) => `
+                     <li class="line" style="grid-template-columns:1fr auto auto">
+                       <div><p class="line__name">${esc(l.name)}${l.isDigital ? ' <span class="crumb">(digital)</span>' : ''}</p></div>
+                       <span>${money(l.price)} &times; ${Number(l.qty) || 0}</span>
+                       <span>${money((Number(l.price) || 0) * (Number(l.qty) || 0))}</span>
+                     </li>`,
+                     )
+                     .join('')}
+                 </ul>
+               </div>`
+            : ''
+        }
+
+        ${
           access && access.length
             ? `<div class="panel">
                  <h2>Your downloads</h2>
@@ -113,8 +156,13 @@ function render({ order, events, access }) {
                      .map(
                        (a) => `
                      <li class="line" style="grid-template-columns:1fr auto">
-                       <div><p class="line__name">${esc(a.name)}</p></div>
-                       <a class="btn btn--sm" href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">Open</a>
+                       <div><p class="line__name">${esc(a.name)}</p>${
+                         /* Both nullable: a blank url is instructions-only delivery
+                            (manual enrolment) — the text IS the delivery, and an
+                            "Open" button with no href only reloads this page. */
+                         a.instructions ? `<p class="line__meta">${esc(a.instructions)}</p>` : ''
+                       }${!a.url && !a.instructions ? '<p class="line__meta">Access details will follow by email.</p>' : ''}</div>
+                       ${a.url ? `<a class="btn btn--sm" href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ''}
                      </li>`,
                      )
                      .join('')}
@@ -132,7 +180,7 @@ function render({ order, events, access }) {
               ? `<ul class="timeline">
                    ${events
                      .map(
-                       (e) => `<li>${esc(e.type)}<br><span class="when">${esc(when(e.at))}</span></li>`,
+                       (e) => `<li>${esc(EVENT_LABEL[e.type] || e.type)}<br><span class="when">${esc(when(e.at))}</span></li>`,
                      )
                      .join('')}
                  </ul>`

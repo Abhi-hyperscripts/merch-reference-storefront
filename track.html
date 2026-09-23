@@ -25,6 +25,11 @@
               <span class="hint">On your confirmation, something like SO-1A2B3C.</span></label>
             <input class="input" id="reference" required autocomplete="off">
           </div>
+          <div class="field" id="phone-field" hidden>
+            <label for="phone">Phone used at checkout
+              <span class="hint">Add it if you gave one at checkout — it helps us find an order the email alone cannot.</span></label>
+            <input class="input" id="phone" autocomplete="tel" inputmode="numeric">
+          </div>
           <button class="btn btn--block" type="submit" id="find">Find my order</button>
         </form>
         <div id="track-note"></div>

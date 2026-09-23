@@ -35,6 +35,7 @@
 .btn--ghost:hover { background: var(--c-bg); color: var(--c-text); }
 
 .btn--sm { padding: 8px 13px; font-size: 14px; }
+.stack { display: grid; gap: 12px; }   /* a vertical form: fields, then the button, evenly spaced */
 .btn--block { width: 100%; }
 .btn--danger { background: var(--c-err); }
 .btn--danger:hover { background: #8f1d15; }
@@ -95,6 +96,14 @@
   box-shadow: var(--shadow-sm);
 }
 .chip--out { color: var(--c-err); }
+/* In the filter row, not over a card: .chip is absolutely positioned for the
+   card-media overlay, and with no positioned ancestor here it landed at the
+   page's top-left corner. */
+.chip--inline { position: static; display: inline-flex; align-items: center; gap: .35rem; }
+.chip--inline a { text-decoration: underline; }
+/* Space is held for the home while it loads, so the grid does not paint first
+   and then jump several screens down when the home lands (two round trips). */
+#home[aria-busy="true"] { min-height: 40vh; }
 .chip--low { color: var(--c-warn); }
 
 /* --- Filters -------------------------------------------------------------- */
@@ -400,6 +409,7 @@
 .status--confirmed, .status--paid { background: rgb(6 118 71 / .1); color: var(--c-ok); }
 .status--cancelled { background: rgb(180 35 24 / .1); color: var(--c-err); }
 .status--pending { background: rgb(181 71 8 / .1); color: var(--c-warn); }
+.status--failed { background: rgb(180 35 24 / .1); color: var(--c-err); }
 
 .timeline { list-style: none; margin: 0; padding: 0 0 0 18px; border-left: 2px solid var(--c-border); }
 .timeline li { position: relative; padding: 0 0 16px 14px; font-size: 14.5px; }
@@ -446,3 +456,20 @@
   .toast { animation: none; }
   * { transition-duration: .01ms !important; }
 }
+
+
+/* --- The API-driven home (index.html #home, drawn by catalog.js loadHome) --- */
+.home-banners { display: grid; gap: 12px; margin: 0 0 24px; }
+.home-banner { display: block; border-radius: 12px; overflow: hidden; background: var(--c-surface, #f4f4f4); }
+.home-banner__img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 6; object-fit: cover; }
+@media (max-width: 640px) { .home-banner__img { aspect-ratio: 4 / 3; } }
+.home-section { margin: 0 0 32px; }
+.home-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+.home-head h2 { margin: 0; }
+.home-more { font-size: .9rem; color: var(--c-muted, #666); }
+.home-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 16px; }
+.home-tile { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; color: inherit; text-decoration: none; }
+.home-tile__img { width: 80px; height: 80px; border-radius: 50%; overflow: hidden; background: var(--c-surface, #f4f4f4); display: grid; place-items: center; font-weight: 700; color: var(--c-muted, #666); }
+.home-tile__img img { width: 100%; height: 100%; object-fit: cover; }
+.home-tile__name { font-weight: 600; }
+.home-tile__count { font-size: .8rem; color: var(--c-muted, #666); }

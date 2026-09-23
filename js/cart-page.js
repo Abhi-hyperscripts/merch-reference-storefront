@@ -10,7 +10,7 @@
    you display is a figure it has already agreed to.
 --------------------------------------------------------------------------- */
 
-import { api, mediaUrl } from './api.js';
+import { api, ApiError, mediaUrl } from './api.js';
 import { cart } from './cart.js';
 import {
   $, esc, money, mountChrome, toast, showError, renderEmpty,
@@ -22,8 +22,17 @@ const summary = $('#summary');
 /* What we have been told so far. Each is either null (not asked / not valid)
    or the store's own answer. */
 let couponPreview = null;
+/* The code the store last ACCEPTED for this basket — what checkout re-prices.
+   Kept apart from the preview: a failed re-check drops the FIGURE (its
+   newSubtotal was computed for the previous lines) but must not drop the code,
+   and savePending() used to derive the code from the preview, so the next
+   gift-card apply wrote an empty coupon and the order went out at full price. */
+let pendingCoupon = '';
 let autoDiscount = null;
 let giftCard = null;
+/* The gift-card code the store last ACCEPTED — kept apart from the balance
+   reply for the same reason as pendingCoupon (see above). */
+let pendingGift = '';
 let shipping = null;
 
 /* --- Rendering ------------------------------------------------------------ */
@@ -148,6 +157,7 @@ function renderTotals() {
 
 /* The automatic discount needs no input from the shopper, so ask on every
    cart change — it is how they find out about "5% off over ₹2,000" at all. */
+let autoRetry = null;
 async function refreshAuto() {
   const lines = cart.apiLines();
   if (!lines.length) {
@@ -156,9 +166,18 @@ async function refreshAuto() {
   }
   try {
     autoDiscount = await api.autoDiscount(lines);
-  } catch {
-    /* Never block the cart on a discount lookup. */
+    note('#auto-note');   /* clear (NOT null: a default parameter fires on undefined only — null threw, the catch swallowed it, and every SUCCESSFUL lookup was discarded) */
+  } catch (err) {
+    /* Never block the cart on a discount lookup — but say when it was the
+       rate limit, or the "5% off" line vanishes from the totals for no reason.
+       Its OWN note: the coupon re-check writes #coupon-note in the same tick. */
+    /* Whatever the failure, the previous basket's figure is NOT this basket's: a stale
+       newSubtotal drove "Estimated total" for lines the store never priced. */
     autoDiscount = null;
+    if (err instanceof ApiError && err.isRateLimited) {
+      note('#auto-note', { err: 'Too many changes at once — the discount will be re-checked in a moment.' });
+      clearTimeout(autoRetry); autoRetry = setTimeout(refreshAuto, 5000);   /* and actually re-check: the copy promised one */
+    }
   }
   renderTotals();
 }
@@ -167,18 +186,30 @@ async function refreshAuto() {
    being true when a line is removed, and a stale "applied" would promise a
    discount checkout then refuses. */
 async function recheckCoupon() {
-  if (!couponPreview?.valid) return;
+  if (!pendingCoupon) return;
+  /* An EMPTIED basket (last line removed): nothing to re-check against, and a
+     refusal on ₹0 cleared pendingCoupon and erased the stored code with
+     nothing shown (the summary is hidden for an empty cart). Drop the figure,
+     keep the code — the next added line re-checks it. */
+  if (!cart.apiLines().length) { couponPreview = null; return; }
   try {
-    const res = await api.validateCoupon(couponPreview.code, cart.apiLines());
+    const res = await api.validateCoupon(pendingCoupon, cart.apiLines());
     couponPreview = res;
+    pendingCoupon = res.valid ? res.code : '';
     note('#coupon-note', res.valid
       ? { ok: `${res.code} applied — you save ${money(res.discountAmount)}.` }
       : { err: res.reason || 'That code no longer applies to this basket.' });
     /* A basket edit can invalidate a coupon; the stored code must follow. */
     savePending();
   } catch {
-    /* Leave the last known answer alone rather than dropping a valid coupon
-       because of one failed call. */
+    /* The CODE stays (pendingCoupon → merch.pending; checkout re-prices it) — the
+       PREVIEW does not: its newSubtotal was computed for the previous lines and
+       outranks every other figure in renderTotals, so a failed re-check after an
+       edit quoted a total ₹2,000 above the basket's own subtotal. And the note
+       must follow the figure: a green "applied — you save ₹200" above totals that
+       carry no coupon row promised a discount this page could not show. */
+    couponPreview = null;
+    note('#coupon-note', { info: `We could not re-check ${pendingCoupon} just now — it will be applied at checkout if it still qualifies.` });
   }
   renderTotals();
 }
@@ -226,6 +257,7 @@ $('#apply-coupon').addEventListener('click', async () => {
   try {
     const res = await api.validateCoupon(code, cart.apiLines());
     couponPreview = res;
+    pendingCoupon = res.valid ? res.code : '';
     /* A refused coupon is a 200 with valid:false and a reason — not an error.
        Treating it as a failure would show the shopper a scary message for the
        ordinary case of a typo or an expired code. */
@@ -250,6 +282,7 @@ $('#apply-gift').addEventListener('click', async () => {
   try {
     const res = await api.checkGiftCard(code);
     giftCard = res;
+    pendingGift = res.valid ? res.code || code : '';
     note('#gift-note', res.valid
       ? { ok: `Balance ${money(res.balance)}. It will be applied at checkout.` }
       : { err: res.reason || 'That gift card could not be used.' });
@@ -265,6 +298,9 @@ $('#apply-gift').addEventListener('click', async () => {
 $('#check-ship').addEventListener('click', async () => {
   const pincode = $('#pincode').value.trim();
   if (!pincode) return note('#ship-note', { info: 'Enter a pincode first.' });
+  /* The store quotes a flat rate for ANY string (it only skips the courier for a
+     bad one); checkout refuses it later. Refuse it here, where it was typed. */
+  if (!/^\d{6}$/.test(pincode)) return note('#ship-note', { err: 'Enter a valid 6-digit pincode.' });
 
   const btn = $('#check-ship');
   btn.disabled = true;
@@ -288,6 +324,7 @@ $('#check-ship').addEventListener('click', async () => {
     const options = shipping.options || [];
     if (!options.length) {
       note('#ship-note', { err: 'We cannot deliver to that pincode.' });
+      shipping = null;   /* the reply's flat amount is not a charge for a delivery that cannot happen: no shipping row */
     } else {
       const cheapest = options.reduce((a, b) => (b.amount < a.amount ? b : a));
       const eta =
@@ -309,8 +346,10 @@ $('#check-ship').addEventListener('click', async () => {
       /* Keep the figure the totals use in step with the option shown. */
       shipping = { ...shipping, shipping: cheapest.amount };
     }
-    /* Remember it so checkout can start from the same answer. */
-    sessionStorage.setItem('merch.pincode', pincode);
+    /* Remember it so checkout can start from the same answer — guarded: a
+       private-mode/quota throw here landed in this catch and showed an ERROR
+       for a quote that had just succeeded. */
+    try { sessionStorage.setItem('merch.pincode', pincode); } catch { /* the quote is still in memory */ }
     renderTotals();
   } catch (err) {
     showError(err);
@@ -330,22 +369,68 @@ $('#check-ship').addEventListener('click', async () => {
    more than the cart quoted. (Found exactly that way: the cart said ₹1,624.15
    and the order came to ₹2,374.05.) */
 function savePending() {
-  sessionStorage.setItem(
-    'merch.pending',
-    JSON.stringify({
-      coupon: couponPreview?.valid ? couponPreview.code : '',
-      giftCard: giftCard?.valid ? giftCard.code || $('#giftcard').value.trim() : '',
-    }),
-  );
+  /* Guarded, like the order stash in checkout.js: a private-mode or quota
+     throw here used to escape into recheckCoupon's catch and turn a
+     SUCCESSFUL re-check into "could not re-check". */
+  try {
+    sessionStorage.setItem('merch.pending', JSON.stringify({ coupon: pendingCoupon, giftCard: pendingGift }));
+  } catch { /* the codes are still in memory for this page; checkout re-prices anyway */ }
+}
+
+/* A coupon or gift card accepted on an EARLIER visit lives in merch.pending
+   (checkout reads it). savePending() rewrites BOTH fields from memory, so
+   without restoring them here the first apply after a reload wrote the other
+   one back as "" — apply WELCOME10, reload, apply GIFT500: the order went out
+   at full price. The codes are re-checked against the current basket; a
+   failed re-check keeps the code (checkout re-prices it) and says so. */
+async function restorePending() {
+  /* An EMPTY basket: nothing to re-check against, and a refusal on a ₹0 basket
+     would clear pendingCoupon and erase the stored code with nothing shown
+     (the summary is hidden for an empty cart). The codes are still put into
+     memory; only the re-checks are skipped. */
+  let stored = {};
+  try { stored = JSON.parse(sessionStorage.getItem('merch.pending') || '{}') || {}; } catch { stored = {}; }
+  /* BOTH codes into memory before either re-check: the coupon's re-check calls
+     savePending(), which serialises pendingGift — still "" if the gift branch
+     had not run — so storage held no gift card for the whole gift round trip,
+     and a Checkout click in that window placed the order at full price. And
+     into memory even on an EMPTY basket (the return below): a second tab can
+     fill the basket, and the first apply here then re-saved the other code as
+     "" if memory never learned it. */
+  pendingCoupon = stored.coupon ? String(stored.coupon) : '';
+  pendingGift = stored.giftCard ? String(stored.giftCard) : '';
+  if (!cart.apiLines().length) return;
+  if (pendingCoupon) {
+    $('#coupon').value = pendingCoupon;
+    await recheckCoupon();
+  }
+  if (pendingGift) {
+    $('#giftcard').value = pendingGift;
+    try {
+      const res = await api.checkGiftCard(pendingGift);
+      giftCard = res;
+      pendingGift = res.valid ? res.code || pendingGift : '';
+      note('#gift-note', res.valid
+        ? { ok: `Balance ${money(res.balance)}. It will be applied at checkout.` }
+        : { err: res.reason || 'That gift card could not be used.' });
+    } catch {
+      note('#gift-note', { info: `We could not re-check gift card ${pendingGift} just now — it will be applied at checkout if it still has balance.` });
+    }
+    savePending();
+    renderTotals();
+  }
 }
 
 /* --- Boot ----------------------------------------------------------------- */
 
+/* Two preview calls per +/− click, against a 90/min bucket the cart shares
+   with the account pages: debounced, so a burst of clicks costs one round. */
+let previewTimer = null;
 cart.onChange(() => {
   renderLines();
   renderTotals();
-  refreshAuto();
-  recheckCoupon();
+  clearTimeout(previewTimer); clearTimeout(autoRetry);   /* an edit supersedes any pending re-check */
+  previewTimer = setTimeout(() => { refreshAuto(); recheckCoupon(); }, 350);
 });
 
 async function boot() {
@@ -356,10 +441,11 @@ async function boot() {
   /* Re-price against the store before the shopper commits to anything. A cart
      can sit in localStorage for weeks. */
   try {
-    const { removed } = await cart.refresh(api);
+    const { removed, stale } = await cart.refresh(api);
     if (removed.length) {
       toast(`No longer available: ${removed.join(', ')}`, 'error');
     }
+    if (stale) toast('Could not reach the store to re-check prices — showing your saved basket.', 'error');
   } catch {
     /* Show the cached cart rather than nothing. */
   }
@@ -368,8 +454,11 @@ async function boot() {
   await refreshAuto();
   renderTotals();
 
+  /* Before the (network-bound) pending restore: a pincode typed and checked
+     while that restore was in flight was overwritten by the saved one. */
   const saved = sessionStorage.getItem('merch.pincode');
   if (saved) $('#pincode').value = saved;
+  await restorePending();
 }
 
 boot();

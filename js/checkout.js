@@ -29,7 +29,7 @@
    ===========================================================================
 --------------------------------------------------------------------------- */
 
-import { api, mediaUrl } from './api.js';
+import { api, ApiError, mediaUrl } from './api.js';   // ApiError: the session-ended branch below tests it — without the import that `instanceof` threw inside the catch
 import { cart } from './cart.js';
 import { $, $$, esc, money, mountChrome, showError, toast } from './ui.js';
 
@@ -39,6 +39,7 @@ const placeBtn = $('#place');
 let payment = null;      // GET /api/payment/config
 let autoDiscount = null;
 let hasDigital = false;
+let codEnabled = true;
 
 /* Codes carried over from the cart. Only the CODES — the amounts are the
    store's to decide, every time. */
@@ -91,7 +92,9 @@ function renderSummary() {
        showing it and letting the shopper be refused would be worse. */
 function renderPaymentOptions() {
   const online = payment?.enabled === true;
-  const cod = !hasDigital;
+  /* COD is also a store setting (`theme.payment.codEnabled`); offering it when
+     the store refuses it means a 400 after the whole form is filled in. */
+  const cod = !hasDigital && codEnabled;
 
   const opts = [];
   if (cod) {
@@ -112,9 +115,12 @@ function renderPaymentOptions() {
   $('#pay-options').innerHTML = opts.join('') || '';
 
   if (!opts.length) {
-    $('#pay-note').innerHTML = `<p class="note note--err">
-      This basket cannot be paid for right now: it needs online payment, and
-      this store has not connected a payment gateway yet.</p>`;
+    /* Two reasons, two sentences: a digital basket with no gateway, or a store
+       with COD switched off and no gateway either. */
+    $('#pay-note').innerHTML = hasDigital
+      ? `<p class="note note--err">This basket cannot be paid for right now: it needs online payment, and
+         this store has not connected a payment gateway yet.</p>`
+      : `<p class="note note--err">This store has no payment method enabled yet. Please contact the store.</p>`;
     placeBtn.disabled = true;
     return;
   }
@@ -202,11 +208,14 @@ function orderPayload(method) {
     couponCode: pending.coupon || null,
     giftCardCode: pending.giftCard || null,
     /* An idempotency key makes a double-submit safe: the same key returns the
-       same order instead of creating a second one. Regenerated per attempt so
-       a genuine retry after a *failure* is not mistaken for a duplicate. */
-    idempotencyKey: newKey(),
+       same order instead of creating a second one. ONE key per checkout
+       attempt-series — a fresh key on every press (what the first version did)
+       made the guarantee impossible. It is replaced only after a REFUSAL the
+       store answered (a retry after a fix is a new order), and cleared by done(). */
+    idempotencyKey: (currentKey ??= newKey()),
   };
 }
+let currentKey = null;
 
 function newKey() {
   /* crypto.randomUUID needs a secure context (https, or localhost). Fall back
@@ -215,8 +224,9 @@ function newKey() {
   return 'k-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
+let moneyCaptured = false;   /* once a payment was captured and the order could not be confirmed, Place order never re-arms */
 function busy(on) {
-  placeBtn.disabled = on;
+  placeBtn.disabled = on || moneyCaptured;
   placeBtn.setAttribute('aria-busy', String(on));
   placeBtn.textContent = on ? 'Placing your order…' : 'Place order';
 }
@@ -225,7 +235,34 @@ function busy(on) {
 
 async function payLater() {
   const result = await api.checkout(orderPayload('cod'));
-  done(result);
+  /* The checkout reply (CheckoutResult) carries no paymentMethod: say which this was, or the
+     order page reads "You paid" for money the courier has yet to collect until its re-fetch lands. */
+  done({ ...result, paymentMethod: 'cod' });
+}
+
+/* create-order's 409s carry recovery data; each needs its own exit, not a toast.
+   Returns true when handled. */
+function handleRefusal(err) {
+  if (!(err instanceof ApiError) || err.status !== 409) return false;
+  const b = err.body || {};
+  if (b.orderId) {
+    /* An order ALREADY exists (and gift-card value was spent) — take them to it. */
+    toast(err.message, 'error');
+    currentKey = null;
+    done({ id: b.orderId, giftCardApplied: null, amountDue: b.amountDue, paymentMethod: 'online' });
+    return true;
+  }
+  if (typeof b.giftCardAvailable === 'number') {
+    toast(`${err.message} This card currently has ${money(b.giftCardAvailable)} left.`, 'error');
+    currentKey = null;
+    return true;
+  }
+  if (typeof b.availableQty === 'number') {
+    toast(`${err.message} Only ${b.availableQty} left — reduce the quantity in your cart.`, 'error');
+    currentKey = null;
+    return true;
+  }
+  return false;
 }
 
 /* --- Path B: pay now ------------------------------------------------------ */
@@ -233,6 +270,15 @@ async function payLater() {
 async function payNow() {
   /* Step 1. Nothing is ordered by this call. */
   const intent = await api.createPaymentOrder(orderPayload('online'));
+
+  /* …unless nothing is owed: a gift card (or a 100% coupon with waived
+     shipping) covering the total makes create-order PLACE the order and answer
+     `{ freeOrder: true, orderId, replayed }` — no gateway fields at all. The
+     first version fed those undefineds to the payment widget. */
+  if (intent.freeOrder) {
+    done({ id: intent.orderId, giftCardApplied: null, amountDue: 0, paymentMethod: 'online' });
+    return;
+  }
 
   await loadRazorpay();
 
@@ -260,20 +306,32 @@ async function payNow() {
           resolve();
         } catch (err) {
           /* Money may well have been taken. Never tell them the order failed
-             and invite them to pay again — say it is being sorted, and send
-             them somewhere they can check. */
-          reject(
-            new Error(
-              err?.message ||
-                'Your payment went through but we could not confirm the order. ' +
-                  'Please check "Track order" in a minute before paying again.',
-            ),
+             and invite them to pay again. The 502 says which kind this is:
+             `permanent: true` — the order will never be created and a refund
+             is owed, so the exit is "contact the store"; otherwise the
+             webhook finishes it and "check Track order in a minute" is true. */
+          const permanent = err instanceof ApiError && err.body?.permanent === true;
+          const captured = new Error(
+            permanent
+              ? (err.message || 'Your payment went through but the order could not be created.') +
+                  ' Please contact the store with your payment reference — do not pay again.'
+              : err?.message ||
+                  'Your payment went through but we could not confirm the order. ' +
+                    'Please check "Track order" in a minute before paying again.',
           );
+          /* Money WAS taken: this sentence must reach the shopper verbatim (showError toasts a generic line for a
+             plain Error), and Place order must stay disabled — re-arming it invites a second capture. */
+          captured.moneyCaptured = true;
+          reject(captured);
         }
       },
       modal: {
-        ondismiss: () =>
-          reject(new Error('Payment cancelled — your cart is still here.')),
+        ondismiss: () => {
+          /* Release the holds create-order took, or the shopper's own retry is
+             refused as "sold out" until they expire. */
+          api.abandonPayment(intent.razorpayOrderId).catch(() => {});
+          reject(new Error('Payment cancelled — your cart is still here.'));
+        },
       },
     });
     rz.open();
@@ -282,16 +340,17 @@ async function payNow() {
 
 /* The gateway's widget is the one external script in this project, and it is
    loaded only when someone actually chooses to pay online. */
+let razorpayOnce = null;
 function loadRazorpay() {
   if (window.Razorpay) return Promise.resolve();
-  return new Promise((resolve, reject) => {
+  return (razorpayOnce ??= new Promise((resolve, reject) => {   // one tag per page; a failed load is retried, a pending one is shared
     const s = document.createElement('script');
     s.src = 'https://checkout.razorpay.com/v1/checkout.js';
     s.onload = resolve;
     s.onerror = () =>
       reject(new Error('Could not load the payment window. Check your connection.'));
     document.head.appendChild(s);
-  });
+  }).catch((e) => { razorpayOnce = null; throw e; }));
 }
 
 /* --- After either path ---------------------------------------------------- */
@@ -299,18 +358,18 @@ function loadRazorpay() {
 function done(order) {
   /* Stash `giftCardApplied` and `amountDue` before navigating.
 
-     They exist ONLY on this checkout response. GET /api/orders/{id} returns
-     the order shape, which has `total` and no notion of what a gift card
-     covered — so a confirmation page that only re-fetches shows the full
-     total to someone who paid ₹500 less than that, and it looks like they
-     were overcharged. */
+     Every order shape carries them (GET /api/orders/{id} included); the
+     stash only fills the gap until the confirmation page's first re-fetch
+     lands, so the total never flashes as the full amount to someone who paid
+     ₹500 less than that. */
   try {
     sessionStorage.setItem(
       'merch.lastOrder',
       JSON.stringify({
         id: order.id,
-        giftCardApplied: order.giftCardApplied || 0,
+        giftCardApplied: order.giftCardApplied ?? null,   // unknown stays unknown: the order page's re-fetch has the real figure
         amountDue: order.amountDue,
+        paymentMethod: order.paymentMethod || null,   // the order page reads it for "to pay on delivery" vs "you paid" until its re-fetch lands
       }),
     );
   } catch {
@@ -318,6 +377,7 @@ function done(order) {
   }
 
   /* Clear only now — if anything above threw, the basket is still intact. */
+  currentKey = null;
   cart.clear();
   sessionStorage.removeItem('merch.pending');
   location.href = `order.html?id=${encodeURIComponent(order.id)}&new=1`;
@@ -341,7 +401,19 @@ form.addEventListener('submit', async (e) => {
     if (method === 'online') await payNow();
     else await payLater();
   } catch (err) {
-    showError(err);
+    if (err?.moneyCaptured) {
+      moneyCaptured = true;        /* latched through busy(): the finally below would otherwise re-arm the button */
+      toast(err.message, 'error');
+      return;
+    }
+    if (handleRefusal(err)) return;
+    if (err instanceof ApiError && err.status === 400) currentKey = null;   // a refusal the store answered: the next press is a new attempt
+    if (err instanceof ApiError && err.sessionEnded) {
+      /* The token was dead and is now gone: a second press places a GUEST order. Say so before it happens. */
+      toast('You have been signed out because this account’s sign-in changed. Press Place order again to check out as a guest, or sign in first to keep this order on your account.', 'error');
+    } else {
+      showError(err);
+    }
   } finally {
     busy(false);
   }
@@ -369,21 +441,24 @@ async function boot() {
 
   /* Re-price before showing anything: this is the last screen before money. */
   try {
-    const { removed } = await cart.refresh(api);
+    const { removed, stale } = await cart.refresh(api);
     if (removed.length) toast(`No longer available: ${removed.join(', ')}`, 'error');
+    if (stale) toast('Could not re-check prices with the store — the summary shows your saved basket.', 'error');   // the last screen before money must not hide a stale price silently
   } catch {
     /* Fall through with the cached basket. */
   }
 
-  const [cfg, auto, products] = await Promise.all([
+  const [cfg, auto, products, theme] = await Promise.all([
     api.paymentConfig().catch(() => null),
     api.autoDiscount(cart.apiLines()).catch(() => null),
-    Promise.all(cart.lines().map((l) => api.product(l.itemId).catch(() => null))),
+    api.products(cart.lines().map((l) => l.itemId)).catch(() => []),   // one call, not one per line
+    api.theme().catch(() => null),
   ]);
 
   payment = cfg;
   autoDiscount = auto;
   hasDigital = products.some((p) => p && p.isDigital);
+  codEnabled = theme?.payment?.codEnabled !== false;
 
   renderSummary();
   renderPaymentOptions();

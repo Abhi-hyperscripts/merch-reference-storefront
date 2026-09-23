@@ -120,7 +120,10 @@ function render(p) {
     });
   }
 
-  api.events(sessionId(), [{ type: 'view_item', itemId: p.id }]).catch(() => {});
+  /* `product_view` — the type the store counts (`view_item` was silently
+     dropped as unknown). The same view also feeds "Recently viewed". */
+  api.events(sessionId(), [{ type: 'product_view', itemId: p.id }]).catch(() => {});
+  api.recordView(p.id, sessionId()).catch(() => {});
 }
 
 /* --- Variants --------------------------------------------------------------
