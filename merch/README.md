@@ -11,24 +11,41 @@ badges and animations, including the ones nobody documented.
 
 ---
 
-## Already wired
+## One line turns the shop on
 
-The four bundled themes are wired: every page carries the include and the
-theme's own script tags are marked (184 pages, 1,998 script tags). **Point it
-at your own shop** — one line per page, so change it with one command:
+Open `merch/merch.js`. The first thing in it is:
 
-```bash
-cd merch-reference-storefront
-grep -rl 'merch/merch.js' electronic fashion grocery jewellery \
-  | xargs sed -i '' 's|data-api="[^"]*"|data-api="https://shop.mybrand.com"|'
+```js
+export const STOREFRONT_URL = '';
 ```
 
-Out of the box it points at a demo store so the themes run the moment you serve
-them. Drop `data-api` entirely and it uses the page's own origin, which is what
-you want once the storefront is deployed on the shop's domain.
+**Leave it empty** and nothing is fetched and nothing on the page is touched.
+Every theme keeps its own demo products, prices, images and blog posts, exactly
+as its designer shipped them — a storefront with no store behind it should look
+like the template, not like a broken shop.
 
-Grocery is wired on 14 of its 38 pages — the other 24 are **0 bytes** in the
-download (see the end of this file).
+**Put your shop's address in it** and the same pages show your real catalogue:
+products, prices, images, categories, banners and posts, all from the API.
+
+```js
+export const STOREFRONT_URL = 'https://shop.mybrand.com';
+```
+
+It is the same address your admin panel is on, and pasting the admin URL itself
+works — only the host is kept, so all of these mean the same thing:
+
+```
+shop.mybrand.com
+https://shop.mybrand.com
+https://shop.mybrand.com/admin
+https://shop.mybrand.com/admin/products?page=2
+```
+
+Nothing else to edit. The four bundled themes are already wired: 184 pages
+carry the include and their own 1,998 script tags are marked (grocery on 14 of
+its 38 — the other 24 are **0 bytes** in the download; see the end of this
+file). A page may still override the address for itself with `data-api`, which
+is how one build can serve two shops.
 
 ## Wiring it up yourself
 

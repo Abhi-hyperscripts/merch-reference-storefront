@@ -29,9 +29,32 @@
      order for the same basket. Nothing in the shapes warns you.
    =========================================================================== */
 
+/* ===========================================================================
+   YOUR STORE — THE ONE LINE TO EDIT
+
+   Paste the address of your shop here. It is the same address your admin
+   panel is on, and pasting the admin URL itself works: only the host is kept,
+   so all of these mean the same thing —
+
+       https://shop.mybrand.com
+       https://shop.mybrand.com/admin
+       https://shop.mybrand.com/admin/products?page=2
+
+   LEAVE IT EMPTY and nothing is fetched and nothing on the page is touched:
+   every theme keeps its own demo products, prices, images and blog posts,
+   exactly as its designer shipped them. That is the point — a storefront with
+   no store behind it should look like the template, not like a broken shop.
+
+   Fill it in and the same pages show your real catalogue instead.
+   =========================================================================== */
+
+export const STOREFRONT_URL = '';
+
 /* ---------------------------------------------------------------------------
    1. CONFIG
-   Set it on the script tag, or as window.MERCH_CONFIG before this file loads:
+
+   Everything below has a sensible default. A page may override any of it on
+   the script tag, which is how one build can serve two shops:
 
      <script type="module" src="../merch/merch.js"
              data-api="https://shop.mybrand.com"
@@ -60,7 +83,30 @@ const RAW = Object.assign(
     : {},
 );
 const CONFIG = RAW;
-const API_BASE = String(CONFIG.api || '').replace(/\/+$/, '');
+
+/* The store's ORIGIN. Whatever was pasted — a bare host, an admin URL, a deep
+   link with a query string — only the scheme and host survive, because that is
+   what `/api/...` hangs off. A host with no scheme is assumed https. */
+function storeOrigin(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : 'https://' + raw).origin;
+  } catch {
+    /* console.warn, not our own warn(): this runs while the module is still
+       being evaluated, and `warn` is a const a few lines below — reaching for
+       it here throws a ReferenceError that takes the whole file down, and on a
+       page whose theme scripts we are holding, a dead merch.js is a dead page. */
+    console.warn('[merch] could not read the store address: ' + raw);
+    return '';
+  }
+}
+
+const API_BASE = storeOrigin(STOREFRONT_URL || CONFIG.api);
+
+/* No store address: the shop is not live yet. Nothing is fetched and nothing
+   is rewritten — see boot(). */
+const LIVE = API_BASE !== '';
 
 const log = (...a) => { if (CONFIG.debug) console.log('[merch]', ...a); };
 const warn = (...a) => console.warn('[merch]', ...a);
@@ -3125,6 +3171,19 @@ async function runDeferredThemeScripts() {
 }
 
 async function boot() {
+  /* No store address at the top of this file: the shop is not live yet. Touch
+     nothing — every theme keeps its own demo products, prices, images and
+     posts — but STILL run the theme's own scripts, because this page handed
+     them to us and a page whose scripts never run is a dead page, not a demo. */
+  if (!LIVE) {
+    console.info(
+      '[merch] No store address set, so the page is showing the theme\u2019s own demo content. ' +
+      'Put your shop\u2019s URL in STOREFRONT_URL at the top of merch/merch.js to show your real catalogue.',
+    );
+    await runDeferredThemeScripts();
+    return;
+  }
+
   THEME = detectTheme();
   if (!THEME) {
     warn('no theme recognised for ' + location.pathname + ' — set data-theme on the script tag');
