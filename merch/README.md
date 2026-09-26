@@ -403,6 +403,17 @@ wrong first:
 
 ## Bugs in the templates themselves
 
+- **grocery** — the promo countdown in `assets/js/main.js` targets a date that
+  has passed, so the topbar reads "Sorry, your session has expired." on every
+  page. It is the theme's own timer, nothing to do with sign-in.
+- **grocery** — `.single-input` is styled only under `.rts-billing-details-area
+  form`. A form using it anywhere else gets input boxes with no border at all,
+  which is why the pages added here wrap their forms in that div.
+- **fashion** — the header, topbar and footer live INSIDE `<main id="wrapper">`,
+  unlike every other theme, so a page grown by replacing main's contents loses
+  all three.
+
+
 Found while testing, present in the **pristine** theme files with no merch.js
 anywhere near them. Left alone — they are the vendor's to fix:
 
