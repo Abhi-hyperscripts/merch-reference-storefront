@@ -8,7 +8,7 @@
     <meta name="description" content="Ekomart-Grocery-Store(e-Commerce) HTML Template: A sleek, responsive, and user-friendly HTML template designed for online grocery stores.">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="keywords" content="Grocery, Store, stores">
-    <title>Blog - Ekomart</title>
+    <title>Order confirmed - Ekomart</title>
     <link rel="shortcut icon" type="image/x-icon" href="assets/images/fav.png">
     <!-- plugins css -->
     <link rel="stylesheet preload" href="assets/css/plugins.css" as="style">
@@ -910,22 +910,50 @@
     <div class="rts-navigation-area-breadcrumb bg_light-1">
         <div class="container"><div class="row"><div class="col-lg-12">
             <div class="navigator-breadcrumb-wrapper">
-                <a href="index.html">Home</a><i class="fa-regular fa-chevron-right"></i><a class="center" href="#">Blog</a>
+                <a href="index.html">Home</a><i class="fa-regular fa-chevron-right"></i><a class="center" href="#">Order</a>
             </div>
         </div></div></div>
     </div>
     <div class="section-seperator bg_light-1"><div class="container"><hr class="section-seperator"></div></div>
-    <div class="rts-blog-area rts-section-gap bg_light-1">
+    <div class="rts-cart-area rts-section-gap bg_light-1">
         <div class="container">
-            <div class="row g-4">
-                <div class="col-lg-4 col-md-6 col-12">
-                    <div class="single-blog-area-start">
-                        <a href="blog-details.html" class="thumbnail"><img src="assets/images/blog/01.jpg" alt="blog"></a>
-                        <div class="blog-body">
-                            <span class="date">&mdash;</span>
-                            <a href="blog-details.html"><h5 class="title">Post title</h5></a>
-                            <p class="disc">Excerpt</p>
-                            <a href="blog-details.html" class="rts-btn btn-primary">Read More</a>
+            <div class="row g-5">
+                <div class="col-xl-8 col-lg-12">
+                    <h3 class="title">Thank you — your order is confirmed</h3>
+                    <div class="rts-cart-list-area order-items">
+                        <div class="single-cart-area-list head">
+                            <div class="product-main"><p>Products</p></div>
+                            <div class="price"><p>Price</p></div>
+                            <div class="quantity"><p>Quantity</p></div>
+                            <div class="subtotal"><p>Subtotal</p></div>
+                        </div>
+                        <div class="single-cart-area-list main item-parent">
+                            <div class="product-main-cart">
+                                <div class="thumbnail"><img src="assets/images/grocery/01.jpg" alt="product"></div>
+                                <div class="information"><h6 class="title">Product</h6><span></span></div>
+                            </div>
+                            <div class="price"><p>&mdash;</p></div>
+                            <div class="quantity"><p>1</p></div>
+                            <div class="subtotal"><p>&mdash;</p></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-xl-4 col-lg-12">
+                    <div class="cart-total-area-start-right">
+                        <h5 class="title">Order details</h5>
+                        <div class="subtotal"><span>Order number</span><h6 class="price order-number">&mdash;</h6></div>
+                        <div class="subtotal"><span>Placed</span><h6 class="price order-date">&mdash;</h6></div>
+                        <div class="subtotal"><span>Status</span><h6 class="price order-status">&mdash;</h6></div>
+                        <div class="subtotal"><span>Payment</span><h6 class="price order-payment">&mdash;</h6></div>
+                        <div class="subtotal"><span>Courier</span><h6 class="price order-carrier">&mdash;</h6></div>
+                        <div class="subtotal"><span>Tracking</span><h6 class="price order-tracking">&mdash;</h6></div>
+                        <div class="bottom">
+                            <div class="wrapper"><span>Total</span><h6 class="price order-total total-amount">&mdash;</h6></div>
+                            <div class="button-area">
+                                <a href="#" class="rts-btn btn-primary download-invoice">Download invoice</a>
+                                <a href="#" class="rts-btn btn-primary mt--10 cancel-order">Cancel this order</a>
+                                <a href="shop-grid-sidebar.html" class="rts-btn btn-primary mt--10">Continue shopping</a>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -686,14 +686,30 @@ function realCards(spec, container) {
    `.col-lg-12` outside a carousel track and rebuilt a whole rail inside one
    slide. Climbing all the way to the named container then grabbed a column
    holding FIVE cards in a list layout, so every product rendered as five. */
-function unitOf(card, spec) {
+/* `boundary`, when given, is the container the unit must stay INSIDE. Without
+   it the climb only stopped at <body>, so a template with a single card —
+   every one of the returns / subscriptions / collections pages — climbed past
+   its own list and out to the page section. `repeat` then replaced the whole
+   section with one copy per record, and `renderEmpty` deleted it outright,
+   taking the "request a return" FORM with it. A grid of twelve products never
+   showed this because the second card stops the climb. */
+function unitOf(card, spec, boundary = null) {
   let node = card;
   while (
     node.parentElement &&
     node.parentElement !== document.body &&
-    realCards(spec, node.parentElement).length === 1
+    node.parentElement !== boundary &&
+    node !== boundary &&
+    realCards(spec, node.parentElement).length === 1 &&
+    !swallowsAForm(card, node.parentElement)
   ) node = node.parentElement;
   return node;
+}
+
+/* A repeatable unit is one record. If growing it would take in a form the card
+   is not part of, we have climbed out of the list and into the page. */
+function swallowsAForm(card, candidate) {
+  return pickAll('form', candidate).some((f) => !f.contains(card));
 }
 
 /* The node to clone is not always the card: in a carousel it is the slide that
@@ -708,12 +724,27 @@ function takeTemplate(spec, root = document) {
   const container = spec.el || pick(spec.container, root) || productContainers(spec, root)[0];
   if (!container) return null;
   const card = realCards(spec, container)[0];
-  if (!card) return null;
+  if (!card) {
+    /* The theme's card is gone because we already emptied this list. Without
+       a remembered copy the page could never fill again without a reload —
+       a shopper who set up their FIRST repeat delivery was told they had
+       none. */
+    const kept = TEMPLATES.get(container)?.get(spec.card);
+    if (!kept) return null;
+    return { container, template: kept.cloneNode(true), sample: kept, card: spec.card };
+  }
 
-  const node = unitOf(card, spec);
+  const node = unitOf(card, spec, container);
   const template = node.cloneNode(true);
-  return { container: node.parentElement || container, template, sample: node, card: spec.card };
+  const parent = node.parentElement || container;
+  if (!TEMPLATES.has(parent)) TEMPLATES.set(parent, new Map());
+  if (!TEMPLATES.get(parent).has(spec.card)) TEMPLATES.get(parent).set(spec.card, node.cloneNode(true));
+  return { container: parent, template, sample: node, card: spec.card };
 }
+
+/* The theme's own markup for one row, kept per container so an emptied list
+   can be filled again later in the same page view. */
+const TEMPLATES = new WeakMap();
 
 /* Replace every existing instance of the template in its container with one
    clone per record. Anything in the container that is NOT one of those
@@ -732,9 +763,15 @@ function repeat({ container, template, sample, card }, items, fill) {
   const first = (sample.className || '').trim().split(/\s+/)[0];
   const isRow = (el) => (card ? (matchesAny(el, card) || !!pick(card, el)) : matchesAny(el, sample.tagName + (first ? '.' + first : '')));
   const siblings = [...container.children].filter(isRow);
-  const existing = siblings.length ? siblings : [sample];
-  existing[0].parentNode.insertBefore(marker, existing[0]);
-  existing.forEach(remove);
+  const existing = siblings.length ? siblings : (sample.parentNode ? [sample] : []);
+  /* Whatever we are about to render replaces the "nothing here yet" line. */
+  pickAll('.merch-empty', container).forEach(remove);
+  if (existing.length) {
+    existing[0].parentNode.insertBefore(marker, existing[0]);
+    existing.forEach(remove);
+  } else {
+    container.appendChild(marker);          // filling a list we emptied earlier
+  }
 
   const frag = document.createDocumentFragment();
   items.forEach((item, i) => {
@@ -744,6 +781,11 @@ function repeat({ container, template, sample, card }, items, fill) {
   });
   marker.parentNode.insertBefore(frag, marker);
   remove(marker);
+  /* renderEmpty may have hidden this list and shown the theme's own "nothing
+     here" block. We have rows now, so put it back the other way round. */
+  show(container, true);
+  const own = pick('.no-results|.empty-state|.wrap-empty_text|.cart-empty', container.parentElement || document);
+  if (own) show(own, false);
   return container;
 }
 
@@ -838,9 +880,19 @@ function wireAction(el, action, data, ctx) {
      later pass — the fashion PDP's Add to cart is both `fields.add` and a
      price-carrying button. Two handlers on one button put TWO of the item in
      the basket for one press, and the shopper sees no reason why. */
+  /* The guard lives on a PROPERTY, not on the attribute. Several themes
+     re-render their product actions from their own scripts, and cloneNode
+     copies `data-merch-action` but NOT the click listener — so an attribute
+     guard saw the clone as already wired and left a dead button. A property
+     is not cloned, so a clone is recognised as new and wired again. */
+  if (el._merchWired?.has(action)) return;
+  (el._merchWired ||= new Set()).add(action);
+
   const wired = el.dataset.merchAction ? el.dataset.merchAction.split(' ') : [];
-  if (wired.includes(action)) return;
-  el.dataset.merchAction = [...wired, action].join(' ');
+  el.dataset.merchAction = [...new Set([...wired, action])].join(' ');
+  /* Survives cloning, so a clone can be matched back to its record below. */
+  if (data?.id) el.dataset.merchItem = data.id;
+  ACTION_RECORDS.set(data?.id || '', { data, ctx });
 
   const stop = (e) => { if (el.tagName === 'A' || el.tagName === 'BUTTON') e.preventDefault(); };
   switch (action) {
@@ -928,7 +980,7 @@ function productContainers(spec = THEME.listing, root = document) {
   const out = [];
   for (const card of pickAll(spec.card, root)) {
     if (card.closest('.swiper-slide-duplicate, .slick-cloned')) continue;
-    const container = unitOf(card, spec).parentElement;
+    const container = unitOf(card, spec, root === document ? null : root).parentElement;
     if (!container || seen.has(container)) continue;
     seen.add(container);
     out.push(container);
@@ -974,8 +1026,11 @@ const THEMES = {
     name: 'grocery',
     pages: {
       home: 'index.html', listing: 'shop-grid-sidebar.html', product: 'shop-details.html',
-      cart: 'cart.html', checkout: 'checkout.html', order: 'trackorder.html',
+      cart: 'cart.html', checkout: 'checkout.html', order: 'order-received.html',
       track: 'trackorder.html', account: 'account.html', wishlist: 'wishlist.html',
+      login: 'login.html', register: 'register.html', forgot: 'forgot-password.html',
+      addresses: 'addresses.html', returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
+      blog: 'blog.html', post: 'blog-details.html',
     },
     qtyInput: '.quantity-edit .input|.cart-edits .input',
     header: {
@@ -1117,6 +1172,8 @@ const THEMES = {
       home: 'index.html', listing: 'shop.html', product: 'product-details.html',
       cart: 'cart.html', checkout: 'checkout.html', account: 'my-account.html',
       login: 'login-register.html', register: 'login-register.html', wishlist: 'wishlist.html',
+      order: 'order-received.html', track: 'track-order.html',
+      addresses: 'addresses.html', returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
     },
     qtyInput: '.pro-qty input|.quantity input',
     header: { cartCount: '.cart-item-count|.item-count|.cart-item_count', cartTotal: '.cart-total-price' },
@@ -1261,10 +1318,15 @@ THEMES.electronic = {
   name: 'electronic',
   pages: {
     home: 'index.html', listing: 'shop-default-grid.html', product: 'product-detail.html',
-    cart: 'shopping-cart.html', checkout: 'checkout.html', order: 'payment-confirmation.html',
+    cart: 'shopping-cart.html', checkout: 'checkout.html', order: 'order-received.html',
+    /* `payment-confirmation.html` is this theme's PRE-payment screen — demo
+       card digits and a "Confirm Payment" button. Landing a paid shopper on
+       it showed them someone else's card and no reference, so the receipt
+       lives on a page written in this theme's own markup. */
     track: 'order-tracking.html', account: 'my-account.html', orders: 'my-account-orders.html',
     addresses: 'my-account-address.html', login: 'login.html', register: 'register.html',
     wishlist: 'wish-list.html', forgot: 'forget-password.html',
+    returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
   qtyInput: '.wg-quantity .quantity-product|.quantity-product',
   header: { cartCount: '.nav-cart .count-box|.count-box', cartTotal: '.sub-total-price|.tf-totals-total-value' },
@@ -1422,6 +1484,7 @@ THEMES.fashion = {
     track: 'track-order.html', account: 'account-page.html', orders: 'account-orders.html',
     addresses: 'account-addresses.html', login: 'login.html', register: 'register.html',
     wishlist: 'wishlist.html', forgot: 'forget-password.html', invoice: 'invoice.html',
+    returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
 
   banners: {
@@ -1459,8 +1522,11 @@ THEMES.fashion = {
       marquee: { sel: '.product-marquee_sale', hideWhen: hasNoMrp },
       badges: { sel: '.product-badge_list .product-badge_item', text: (p) => (p.featured ? 'FEATURED' : discountText(p)), hideWhen: (p) => hasNoMrp(p) && !p.featured },
       add:   { sel: '.btn-add-to-cart|.box-icon.bg_white.quick-add', action: 'add' },
-      wish:  { sel: '.box-icon.wishlist', action: 'wishlist' },
-      compare: { sel: '.box-icon.compare', action: 'compare' },
+      /* This theme puts the class on the <li>, not on the icon: neither
+         `.box-icon.wishlist` nor `.box-icon.compare` exists anywhere in it,
+         so both controls were dead on every card. */
+      wish:  { sel: '.product-action_list .wishlist a|.box-icon.wishlist', action: 'wishlist' },
+      compare: { sel: '.product-action_list .compare a|.box-icon.compare', action: 'compare' },
     },
   },
 
@@ -1565,6 +1631,25 @@ function runAfterTheme() {
   for (const fn of afterTheme.splice(0)) {
     try { fn(); } catch (e) { warn('after-theme step failed', e); }
   }
+  rewireClones();
+}
+
+/* What each wired control was wired FOR, kept by product id so a clone the
+   theme made can be given its handler back. */
+const ACTION_RECORDS = new Map();
+
+/* A theme script that re-renders its product actions leaves behind elements
+   that look wired and do nothing. Give every such orphan its listener back.
+   This is why the wishlist button did nothing on two of the templates. */
+function rewireClones() {
+  for (const el of $$('[data-merch-action]')) {
+    const actions = (el.dataset.merchAction || '').split(' ').filter(Boolean);
+    const missing = actions.filter((a) => !el._merchWired?.has(a));
+    if (!missing.length) continue;
+    const rec = ACTION_RECORDS.get(el.dataset.merchItem || '');
+    if (!rec) continue;
+    for (const a of missing) wireAction(el, a, rec.data, rec.ctx);
+  }
 }
 
 function refreshSwipers() {
@@ -1620,6 +1705,10 @@ const ROLE_PATTERNS = [
   [/view-cart|shopping-cart|^cart/, 'cart'],
   [/^checkout/, 'checkout'],
   [/wish-?list/, 'wishlist'],
+  [/^returns?$|order-returns/, 'returns'],
+  [/^subscriptions?$/, 'subscriptions'],
+  [/^collections?$/, 'collections'],
+  [/^addresses$/, 'addresses'],
   [/compare/, 'compare'],
   [/forget|forgot|reset-password/, 'forgot'],
   [/login|register|sign-?in|sign-?up|login-register/, 'auth'],
@@ -1836,7 +1925,7 @@ function renderEmpty(container, message, spec) {
      container destroyed whatever else lived there — on the account page that
      was the "add an address" FORM, so a shopper with no addresses yet was
      shown "No saved addresses" and given no way to add one. */
-  if (spec?.card) pickAll(spec.card, container).forEach((el) => remove(unitOf(el, spec)));
+  if (spec?.card) pickAll(spec.card, container).forEach((el) => remove(unitOf(el, spec, container)));
   else if (!pick('form', container)) container.replaceChildren();
 
   if (pick('.merch-empty', container)) return;
@@ -1872,7 +1961,7 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
      container its own share, in order, so the designer's balance survives. */
   const groups = new Map();
   for (const card of cards) {
-    const unit = unitOf(card, spec);
+    const unit = unitOf(card, spec, region === document ? null : region);
     const parent = unit.parentElement;
     if (!parent) continue;
     if (!groups.has(parent)) groups.set(parent, 0);
@@ -3057,30 +3146,39 @@ async function prefillCustomer(spec) {
    Rather than change the design, we clone the theme's OWN city field: same
    markup, same classes, same spacing, so it looks like the designer put it
    there — which, in every respect that matters, they did. */
+/* Some templates simply have no box for something the store requires. Rather
+   than refuse the shopper for a question they were never asked, copy one of
+   the form's OWN fields and relabel it: same wrapper, same classes, same
+   spacing, so the design is untouched and the field belongs to the theme. */
+function cloneFieldAfter(source, { id, name, placeholder, label }) {
+  if (!source) return null;
+  const wrapper = source.closest('[class*="col-"], .form-group, .field, .tf-field, p') || source;
+  const clone = wrapper.cloneNode(true);
+  const input = clone.matches('input') ? clone : clone.querySelector('input');
+  if (!input || !wrapper.parentElement) return null;
+
+  input.id = id;
+  input.name = name;
+  input.value = '';
+  input.setAttribute('placeholder', placeholder);
+  input.required = true;
+  input.removeAttribute('readonly');
+  /* A cloned label would still say "Town / City". */
+  const lbl = clone.querySelector('label');
+  if (lbl) { setText(lbl, label); lbl.setAttribute('for', id); }
+
+  wrapper.parentElement.insertBefore(clone, wrapper.nextSibling);
+  return input;
+}
+
 function ensureCustomerFields(spec) {
   const form = spec.form || {};
   if (pick(form.state)) return;                     // the template has one
 
   const source = pick(form.city) || pick(form.pincode);
   if (!source) { warn('this checkout has no city field to model a state field on'); return; }
-
-  /* Clone the whole field, not just the input: these templates wrap each one
-     in a column that carries the spacing. */
-  const wrapper = source.closest('[class*="col-"], .form-group, .field, .tf-field, p') || source;
-  const clone = wrapper.cloneNode(true);
-  const input = clone.matches('input') ? clone : clone.querySelector('input');
+  const input = cloneFieldAfter(source, { id: 'merch-state', name: 'state', placeholder: 'State*', label: 'State' });
   if (!input) return;
-
-  input.id = 'merch-state';
-  input.name = 'state';
-  input.value = '';
-  input.setAttribute('placeholder', 'State*');
-  input.required = true;
-  /* A cloned label would still say "Town / City". */
-  const label = clone.querySelector('label');
-  if (label) setText(label, 'State');
-
-  wrapper.parentElement.insertBefore(clone, wrapper.nextSibling);
   form.state = '#merch-state';
   log('added a state field: this template has none and the store requires one');
 }
@@ -3468,7 +3566,7 @@ function paintOrder(order) {
   /* `orderRef` is the human reference. `orderStatus` is the one to show: the
      bare `status` is the INVOICE's, so a cancelled order still reads
      "confirmed" if you print that one. */
-  put('.order-number|.order-id|[data-order-number]', o.orderRef || o.id);
+  put('.order-number|.order-code .code|.order-id|[data-order-number]', o.orderRef || o.id);
   /* These templates label the reference in prose ("Order number: #12345")
      rather than giving it a class. */
   for (const el of $$('p, span, li, div')) {
@@ -3478,12 +3576,14 @@ function paintOrder(order) {
       setText(el, text.replace(/[:#].*$/, ': ') + (o.orderRef || o.id));
     }
   }
-  put('.order-date|[data-order-date]', o.createdAt ? new Date(o.createdAt).toLocaleDateString() : '');
-  put('.order-total|.total-amount|[data-order-total]|.tf-totals-total-value|.total-value|.list-total .total', money(o.total));
+  put('.order-date .date|.order-date|[data-order-date]', o.createdAt ? new Date(o.createdAt).toLocaleDateString() : '');
+  /* The value node FIRST: on one theme `.order-total` is the wrapper that also
+     holds the "Order total" caption, and writing to it deleted the caption. */
+  put('.order-total .total|.order-total|.total-amount|[data-order-total]|.tf-totals-total-value|.total-value|.list-total .total', money(o.total));
   put('.order-status|[data-order-status]', o.orderStatus || o.status);
   put('.order-tracking|[data-order-tracking]', o.trackingNumber || o.awb || '');
   put('.order-carrier|[data-order-carrier]', o.carrier || '');
-  put('.order-payment|[data-order-payment]',
+  put('.payment-method .metod|.order-payment|[data-order-payment]',
     o.paymentMethod === 'cod'
       ? (o.amountUncollected > 0 ? 'Cash on delivery — ' + money(o.amountUncollected) + ' due' : 'Cash on delivery')
       : 'Paid online');
@@ -3507,11 +3607,30 @@ function paintOrder(order) {
   /* The tax invoice is the owner's own download; the route answers 401 to
      anyone else, so the link is only offered when we hold their token. */
   pickAll('a[href*="invoice"]|.download-invoice').forEach((a) => {
-    if (o.invoicePdfUrl || o.invoiceId) {
-      a.setAttribute('href', o.invoicePdfUrl || api.invoicePdfUrl(o.id));
-      a.setAttribute('target', '_blank');
-      show(a, true);
-    } else show(a, false);
+    if (!(o.invoicePdfUrl || o.invoiceId)) { show(a, false); return; }
+    show(a, true);
+    a.setAttribute('href', o.invoicePdfUrl || api.invoicePdfUrl(o.id));
+    /* The invoice route is the OWNER's: it answers 401 without an
+       Authorization header, and a plain link cannot send one. Following the
+       href would hand the shopper a 401 page. Fetch it with the token and
+       give them the file. */
+    if (a.dataset.merchInvoice) return;
+    a.dataset.merchInvoice = '1';
+    a.addEventListener('click', async (e) => {
+      if (!token.get()) return;                    // a guest order: let the plain link try
+      e.preventDefault();
+      try {
+        const blob = await api.invoicePdf(o.id);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'invoice-' + (o.orderRef || o.id) + '.pdf';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+      } catch (err) { showError(err); }
+    });
   });
 
   /* Cancelling is the shopper's own, and only while the store still allows it. */
@@ -3596,6 +3715,8 @@ pages.account = async () => {
   catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { showSignedOut(); return; } showError(e); return; }
 
   showSignedIn(me);
+  STORE_ME = me;
+  api.addresses().then((list) => { STORE_ADDRESS = (list || []).find((a) => a.isDefault) || (list || [])[0] || null; }).catch(() => {});
   await Promise.all([paintOrders(), paintAddresses(), wishlist.sync()]);
   wireAddressForm();
   wireSignOut();
@@ -3617,6 +3738,42 @@ function showSignedIn(me) {
   pickAll('.signed-in-only|[data-signed-in]').forEach((el) => show(el, true));
   pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, me.name || me.email));
   pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, me.email));
+  fillAccountDetails(me);
+}
+
+/* None of these themes ships a "you are signed in" element, so the classes
+   above match nothing and the account page said nothing about who was on it.
+   Every theme does ship an account-details form, and one of them ships it
+   filled in with the demo person — a signed-in shopper was shown "Tony
+   Nguyen / themesflat@gmail.com" as their own details. Put the real account
+   into the theme's own boxes; nothing is added and nothing moves. */
+function fillAccountDetails(me) {
+  const parts = String(me.name || '').trim().split(/\s+/).filter(Boolean);
+  const first = parts[0] || '';
+  const last = parts.slice(1).join(' ');
+  for (const form of $$('form')) {
+    /* Never the sign-in, search, newsletter or contact forms — they ask for
+       an email too, and filling them would put the shopper's address into a
+       box they did not choose to complete. */
+    if (form.closest('footer, .offcanvas, .modal, .tf-topbar')) continue;
+    if (/newsletter|search|log|contact|subscribe/i.test(form.className || '')) continue;
+    if (pick('input[name="remember"]|input[type="checkbox"][name*="remember" i]', form)) continue;
+
+    const fn = pick('input[placeholder*="first" i]|input[name*="first" i]', form);
+    const ln = pick('input[placeholder*="last" i]|input[name*="last" i]', form);
+    const dn = pick('input[placeholder*="display" i]|input[name*="display" i]', form);
+    const em = pick('input[type="email"]|input[placeholder*="email address" i]', form);
+    if (!em || !(fn || ln || dn)) continue;        // not an account-details form
+
+    if (fn && fn.type === 'text') fn.value = first;
+    if (ln && ln.type === 'text') ln.value = last;
+    if (dn && dn.type === 'text') dn.value = me.name || me.email;
+    em.value = me.email;
+    /* The demo phone is presented as the shopper's own and would be SAVED as
+       theirs. An empty box is honest; a stranger's number is not. */
+    const ph = pick('input[type="tel"]|input[placeholder*="phone" i]|input[name*="phone" i]', form);
+    if (ph) ph.value = me.phone || '';
+  }
 }
 
 async function paintOrders() {
@@ -3694,6 +3851,20 @@ function wireAddressForm() {
     if (!fields.line || !(fields.city || fields.pincode)) continue;
     form.dataset.merchAddress = '1';
 
+    /* The store will not save an address without a postcode, and one of these
+       templates asks only for Address and City. Give the form the boxes the
+       store needs, built from its own, or a shopper adding their FIRST
+       address is refused with nowhere to put the missing detail. */
+    if (!fields.pincode) {
+      fields.pincode = cloneFieldAfter(fields.city || fields.line,
+        { id: 'merch-address-pincode', name: 'pincode', placeholder: 'ZIP / Postal code*', label: 'ZIP / Postal code' });
+      if (fields.pincode) log('added a postal-code field to the address form; this template has none');
+    }
+    if (!fields.state) {
+      fields.state = cloneFieldAfter(fields.city || fields.line,
+        { id: 'merch-address-state', name: 'state', placeholder: 'State*', label: 'State' });
+    }
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!token.get()) return notify('Please sign in first.', 'error');
@@ -3703,7 +3874,7 @@ function wireAddressForm() {
         line: fields.line.value.trim(),
         city: fields.city?.value.trim() || '',
         state: fields.state?.value.trim() || '',
-        pincode: fields.pincode.value.trim(),
+        pincode: fields.pincode?.value.trim() || '',
       };
       /* The store requires a postcode. Where the template has no field for
          one, borrow it from an address the shopper already has rather than
@@ -4130,6 +4301,150 @@ function markdown(src) {
   closeList();
   return out.join('\n');
 }
+
+/* --- RETURNS ------------------------------------------------------------- */
+pages.returns = async () => {
+  wireReturnForm();
+  if (!token.get()) return showSignedOut();
+  let list = [];
+  try { list = (await api.returns()) || []; } catch (e) { return showError(e); }
+
+  const spec = { container: '.returns-list', card: '.return-item' };
+  const t = takeTemplate(spec);
+  if (!t) return;
+  if (!list.length) return renderEmpty(t.container, 'You have not requested a return yet.', spec);
+  repeat(t, list, (node, r) => {
+    setText(pick('.return-order', node), r.orderRef || r.orderId);
+    setText(pick('.return-reason', node), r.reason || '');
+    setText(pick('.return-status', node), r.status || '');
+    setText(pick('.return-refund', node), r.refundAmount ? money(r.refundAmount) : '');
+  });
+};
+
+function wireReturnForm() {
+  const form = pick('.merch-return-form');
+  if (!form || form.dataset.merchWired) return;
+  form.dataset.merchWired = '1';
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!token.get()) return notify('Please sign in to request a return.', 'error');
+    const orderRef = pick('input', form)?.value.trim();
+    const reason = pick('textarea', form)?.value.trim();
+    if (!orderRef || !reason) return notify('Tell us the order and why you are returning it.', 'error');
+    try {
+      /* The store wants the order's id. A shopper has the reference, so look
+         it up first rather than making them find a uuid. */
+      let orderId = orderRef;
+      if (!/^[0-9a-f-]{36}$/i.test(orderRef)) {
+        const me = await api.me().catch(() => null);
+        const found = await api.lookupOrder(me?.email || '', orderRef).catch(() => null);
+        orderId = found?.id || found?.order?.id || orderRef;
+      }
+      await api.requestReturn({ orderId, reason });
+      notify('Return requested. We will email you about it.', 'success');
+      form.reset();
+      await pages.returns();
+    } catch (err) { showError(err); }
+  });
+}
+
+/* --- SUBSCRIPTIONS -------------------------------------------------------- */
+pages.subscriptions = async () => {
+  wireSubscribeForm();
+  if (!token.get()) return showSignedOut();
+  if (!STORE_ME) {
+    STORE_ME = await api.me().catch(() => null);
+    STORE_ADDRESS = ((await api.addresses().catch(() => [])) || []).find((a) => a.isDefault) || null;
+  }
+  let list = [];
+  try { list = (await api.subscriptions()) || []; } catch (e) { return showError(e); }
+
+  const spec = { container: '.subscriptions-list', card: '.subscription-item' };
+  const t = takeTemplate(spec);
+  if (!t) return;
+  if (!list.length) return renderEmpty(t.container, 'You have no repeat deliveries set up.', spec);
+  repeat(t, list, (node, sub) => {
+    setText(pick('.subscription-title', node), sub.title || 'Repeat delivery');
+    setText(pick('.subscription-frequency', node), sub.frequency || '');
+    setText(pick('.subscription-status', node), sub.status || '');
+    setText(pick('.subscription-next', node), sub.nextRunAt ? new Date(sub.nextRunAt).toLocaleDateString() : '');
+
+    /* Only offer the operations that make sense for the state it is in. */
+    const status = String(sub.status || '').toLowerCase();
+    for (const [sel, op, when] of [
+      ['.subscription-pause', 'pause', status === 'active'],
+      ['.subscription-resume', 'resume', status === 'paused'],
+      ['.subscription-cancel', 'cancel', status !== 'cancelled'],
+    ]) {
+      const btn = pick(sel, node);
+      if (!btn) continue;
+      show(btn, when);
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        try {
+          await api.subscriptionOp(sub.id, op);
+          notify('Subscription ' + op + 'd.', 'success');
+          await pages.subscriptions();
+        } catch (err) { showError(err); }
+      });
+    }
+  });
+};
+
+function wireSubscribeForm() {
+  const form = pick('.merch-subscribe-form');
+  if (!form || form.dataset.merchWired) return;
+  form.dataset.merchWired = '1';
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!token.get()) return notify('Please sign in to set up a repeat delivery.', 'error');
+    if (!cart.count()) return notify('Put what you want delivered in your basket first.', 'error');
+    const title = pick('input', form)?.value.trim();
+    const frequency = pick('select', form)?.value || 'monthly';
+    try {
+      await api.subscribe({ lines: cart.apiLines(), customer: readSubscriber(), frequency, title: title || null });
+      notify('Repeat delivery set up.', 'success');
+      form.reset();
+      await pages.subscriptions();
+    } catch (err) { showError(err); }
+  });
+}
+
+/* A subscription needs somewhere to send the goods. Reuse the account's
+   default address rather than asking again for what the shopper has told us. */
+function readSubscriber() {
+  const me = STORE_ME || {};
+  const a = STORE_ADDRESS || {};
+  return {
+    name: me.name || a.name || '',
+    email: me.email || '',
+    phone: me.phone || a.phone || '',
+    address: a.line || '',
+    city: a.city || '',
+    state: a.state || '',
+    pincode: a.pincode || '',
+  };
+}
+let STORE_ME = null;
+let STORE_ADDRESS = null;
+
+/* --- COLLECTIONS ---------------------------------------------------------- */
+pages.collections = async () => {
+  let list = [];
+  try { list = (await api.collections()) || []; } catch (e) { return showError(e); }
+
+  const spec = { container: '.collections-list', card: '.collection-title' };
+  const t = takeTemplate({ container: '.collections-list', card: '.collection-title' });
+  if (!t) return;
+  if (!list.length) return renderEmpty(t.container, 'No collections yet.', spec);
+  repeat(t, list, (node, c) => {
+    setText(pick('.collection-title', node), c.title);
+    setText(pick('.collection-description', node), c.description || '');
+    pickAll('.collection-link', node).forEach((a) => a.setAttribute('href', pageUrl('listing', { collection: c.handle })));
+    const img = pick('.collection-image', node) || pick('img', node);
+    if (img && c.imageUrl) setAttr(img, 'src', mediaUrl(c.imageUrl));
+  });
+};
 
 /* Roles a theme has a page for but the API has no concept of. Saying so out
    loud is better than a page that quietly shows demo data forever. */

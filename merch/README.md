@@ -201,10 +201,29 @@ products remain visible** and every price on screen is the store's.
 The filename picks one. `index` → `home`, `shop-*` → `listing`,
 `*-detail(s)` → `product`, `cart` / `view-cart` / `shopping-cart` → `cart`, and
 so on through `checkout`, `order`, `track`, `account`, `orders`, `addresses`,
-`auth`, `forgot`, `wishlist`, `compare`, `blog`, `post`.
+`auth`, `forgot`, `wishlist`, `compare`, `blog`, `post`, `collections`,
+`returns`, `subscriptions`.
 
 A role that finds nothing to fill does nothing at all. That is what lets the
 one product binder serve this theme's 39 product-page layouts.
+
+### Pages added to the templates
+
+Some endpoints had no page to live on. Those pages are grown from a donor page
+in the SAME theme, so they inherit its head, header, footer and script tags,
+and their content is written in that theme's own classes — nothing is styled
+here and no palette, font or radius is touched.
+
+| Theme | Added |
+|---|---|
+| grocery | `login`, `register`, `forgot-password`, `order-received`, `blog`, `blog-details`, `addresses`, `returns`, `subscriptions`, `collections` |
+| jewellery | `order-received`, `track-order`, `addresses`, `returns`, `subscriptions`, `collections` |
+| electronic | `order-received`, `returns`, `subscriptions`, `collections` |
+| fashion | `returns`, `subscriptions`, `collections` |
+
+`electronic/payment-confirmation.html` is NOT the order page: it is that
+theme's *pre*-payment screen, with demo card digits and a "Confirm Payment"
+button. A paid shopper is sent to `order-received.html` instead.
 
 ---
 

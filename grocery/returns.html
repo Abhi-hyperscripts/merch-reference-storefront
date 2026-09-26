@@ -8,7 +8,7 @@
     <meta name="description" content="Ekomart-Grocery-Store(e-Commerce) HTML Template: A sleek, responsive, and user-friendly HTML template designed for online grocery stores.">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="keywords" content="Grocery, Store, stores">
-    <title>Blog - Ekomart</title>
+    <title>Returns - storefront</title>
     <link rel="shortcut icon" type="image/x-icon" href="assets/images/fav.png">
     <!-- plugins css -->
     <link rel="stylesheet preload" href="assets/css/plugins.css" as="style">
@@ -906,32 +906,38 @@
     <!-- header style two End -->
     <!-- rts header area end -->
     <!-- rts header area end -->
-
-    <div class="rts-navigation-area-breadcrumb bg_light-1">
-        <div class="container"><div class="row"><div class="col-lg-12">
-            <div class="navigator-breadcrumb-wrapper">
-                <a href="index.html">Home</a><i class="fa-regular fa-chevron-right"></i><a class="center" href="#">Blog</a>
-            </div>
-        </div></div></div>
-    </div>
+<div class="rts-navigation-area-breadcrumb bg_light-1"><div class="container"><div class="row"><div class="col-lg-12">
+      <div class="navigator-breadcrumb-wrapper"><a href="index.html">Home</a><i class="fa-regular fa-chevron-right"></i><a class="center" href="#">Returns</a></div>
+    </div></div></div></div>
     <div class="section-seperator bg_light-1"><div class="container"><hr class="section-seperator"></div></div>
-    <div class="rts-blog-area rts-section-gap bg_light-1">
-        <div class="container">
-            <div class="row g-4">
-                <div class="col-lg-4 col-md-6 col-12">
-                    <div class="single-blog-area-start">
-                        <a href="blog-details.html" class="thumbnail"><img src="assets/images/blog/01.jpg" alt="blog"></a>
-                        <div class="blog-body">
-                            <span class="date">&mdash;</span>
-                            <a href="blog-details.html"><h5 class="title">Post title</h5></a>
-                            <p class="disc">Excerpt</p>
-                            <a href="blog-details.html" class="rts-btn btn-primary">Read More</a>
-                        </div>
-                    </div>
-                </div>
+<div class="rts-section-gap bg_light-1"><div class="container">
+
+      <div class="row">
+        <div class="col-lg-7">
+          <h3 class="title">Request a return</h3>
+          <p>Tell us which order you would like to return and why.</p>
+          <form class="merch-return-form">
+            <div class="single-input"><label for="return-order">Order number*</label><input id="return-order" type="text" placeholder="Your order reference"></div>
+            <div class="single-input single-input-item tf-field mb_16">
+              <label for="return-reason">Reason*</label>
+              <textarea id="return-reason" name="reason" rows="4" placeholder="What is wrong with it?"></textarea>
             </div>
+            <button type="submit" class="rts-btn btn-primary">Request return</button>
+          </form>
         </div>
-    </div>
+        <div class="col-lg-5">
+          <h3 class="title">Your returns</h3>
+          <div class="returns-list">
+            <div class="return-item">
+              <h6 class="return-order">&mdash;</h6>
+              <p class="return-reason">&mdash;</p>
+              <span class="return-status">&mdash;</span>
+              <span class="return-refund">&mdash;</span>
+            </div>
+          </div>
+        </div>
+      </div>
+</div></div>
 <!-- rts footer one area start -->
     <div class="rts-footer-area pt--80 bg_light-1">
         <div class="container">

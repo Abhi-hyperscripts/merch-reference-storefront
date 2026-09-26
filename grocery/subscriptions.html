@@ -8,7 +8,7 @@
     <meta name="description" content="Ekomart-Grocery-Store(e-Commerce) HTML Template: A sleek, responsive, and user-friendly HTML template designed for online grocery stores.">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="keywords" content="Grocery, Store, stores">
-    <title>Blog - Ekomart</title>
+    <title>Subscriptions - storefront</title>
     <link rel="shortcut icon" type="image/x-icon" href="assets/images/fav.png">
     <!-- plugins css -->
     <link rel="stylesheet preload" href="assets/css/plugins.css" as="style">
@@ -906,32 +906,49 @@
     <!-- header style two End -->
     <!-- rts header area end -->
     <!-- rts header area end -->
-
-    <div class="rts-navigation-area-breadcrumb bg_light-1">
-        <div class="container"><div class="row"><div class="col-lg-12">
-            <div class="navigator-breadcrumb-wrapper">
-                <a href="index.html">Home</a><i class="fa-regular fa-chevron-right"></i><a class="center" href="#">Blog</a>
-            </div>
-        </div></div></div>
-    </div>
+<div class="rts-navigation-area-breadcrumb bg_light-1"><div class="container"><div class="row"><div class="col-lg-12">
+      <div class="navigator-breadcrumb-wrapper"><a href="index.html">Home</a><i class="fa-regular fa-chevron-right"></i><a class="center" href="#">Subscriptions</a></div>
+    </div></div></div></div>
     <div class="section-seperator bg_light-1"><div class="container"><hr class="section-seperator"></div></div>
-    <div class="rts-blog-area rts-section-gap bg_light-1">
-        <div class="container">
-            <div class="row g-4">
-                <div class="col-lg-4 col-md-6 col-12">
-                    <div class="single-blog-area-start">
-                        <a href="blog-details.html" class="thumbnail"><img src="assets/images/blog/01.jpg" alt="blog"></a>
-                        <div class="blog-body">
-                            <span class="date">&mdash;</span>
-                            <a href="blog-details.html"><h5 class="title">Post title</h5></a>
-                            <p class="disc">Excerpt</p>
-                            <a href="blog-details.html" class="rts-btn btn-primary">Read More</a>
-                        </div>
-                    </div>
-                </div>
+<div class="rts-section-gap bg_light-1"><div class="container">
+
+      <div class="row">
+        <div class="col-12">
+          <h3 class="title">Your subscriptions</h3>
+          <p>Repeat deliveries you have set up. Pause one at any time.</p>
+          <div class="subscriptions-list">
+            <div class="subscription-item">
+              <h6 class="subscription-title">&mdash;</h6>
+              <span class="subscription-frequency">&mdash;</span>
+              <span class="subscription-status">&mdash;</span>
+              <span class="subscription-next">&mdash;</span>
+              <a href="#" class="rts-btn btn-primary subscription-pause">Pause</a>
+              <a href="#" class="rts-btn btn-primary subscription-resume">Resume</a>
+              <a href="#" class="rts-btn btn-primary subscription-cancel">Cancel</a>
             </div>
+          </div>
         </div>
-    </div>
+      </div>
+
+      <div class="row mt--40">
+        <div class="col-lg-7">
+          <h3 class="title">Set up a repeat delivery</h3>
+          <p>We will reorder what is in your basket on the schedule you choose.</p>
+          <form class="merch-subscribe-form">
+            <div class="single-input"><label for="sub-title">Name it</label><input id="sub-title" type="text" placeholder="e.g. Weekly groceries"></div>
+            <div class="single-input single-input-item tf-field mb_16">
+              <label for="sub-frequency">How often*</label>
+              <select id="sub-frequency" name="frequency">
+                <option value="weekly">Every week</option>
+                <option value="fortnightly">Every two weeks</option>
+                <option value="monthly">Every month</option>
+              </select>
+            </div>
+            <button type="submit" class="rts-btn btn-primary">Start repeat delivery</button>
+          </form>
+        </div>
+      </div>
+</div></div>
 <!-- rts footer one area start -->
     <div class="rts-footer-area pt--80 bg_light-1">
         <div class="container">

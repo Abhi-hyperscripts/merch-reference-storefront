@@ -8,7 +8,7 @@
     <meta name="description" content="Ekomart-Grocery-Store(e-Commerce) HTML Template: A sleek, responsive, and user-friendly HTML template designed for online grocery stores.">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="keywords" content="Grocery, Store, stores">
-    <title>Blog - Ekomart</title>
+    <title>Addresses - storefront</title>
     <link rel="shortcut icon" type="image/x-icon" href="assets/images/fav.png">
     <!-- plugins css -->
     <link rel="stylesheet preload" href="assets/css/plugins.css" as="style">
@@ -906,32 +906,39 @@
     <!-- header style two End -->
     <!-- rts header area end -->
     <!-- rts header area end -->
-
-    <div class="rts-navigation-area-breadcrumb bg_light-1">
-        <div class="container"><div class="row"><div class="col-lg-12">
-            <div class="navigator-breadcrumb-wrapper">
-                <a href="index.html">Home</a><i class="fa-regular fa-chevron-right"></i><a class="center" href="#">Blog</a>
-            </div>
-        </div></div></div>
-    </div>
+<div class="rts-navigation-area-breadcrumb bg_light-1"><div class="container"><div class="row"><div class="col-lg-12">
+      <div class="navigator-breadcrumb-wrapper"><a href="index.html">Home</a><i class="fa-regular fa-chevron-right"></i><a class="center" href="#">Addresses</a></div>
+    </div></div></div></div>
     <div class="section-seperator bg_light-1"><div class="container"><hr class="section-seperator"></div></div>
-    <div class="rts-blog-area rts-section-gap bg_light-1">
-        <div class="container">
-            <div class="row g-4">
-                <div class="col-lg-4 col-md-6 col-12">
-                    <div class="single-blog-area-start">
-                        <a href="blog-details.html" class="thumbnail"><img src="assets/images/blog/01.jpg" alt="blog"></a>
-                        <div class="blog-body">
-                            <span class="date">&mdash;</span>
-                            <a href="blog-details.html"><h5 class="title">Post title</h5></a>
-                            <p class="disc">Excerpt</p>
-                            <a href="blog-details.html" class="rts-btn btn-primary">Read More</a>
-                        </div>
-                    </div>
-                </div>
-            </div>
+<div class="rts-section-gap bg_light-1"><div class="container">
+
+      <div class="row">
+        <div class="col-lg-6">
+          <h3 class="title">Add an address</h3>
+          <form class="merch-address-form">
+            <div class="single-input"><label for="addr-name">Full name*</label><input id="addr-name" type="text" placeholder="Recipient name"></div>
+            <div class="single-input"><label for="addr-phone">Phone</label><input id="addr-phone" type="tel" placeholder="Mobile number"></div>
+            <div class="single-input"><label for="addr-street">Street address*</label><input id="addr-street" type="text" placeholder="House, street"></div>
+            <div class="single-input"><label for="addr-city">Town / City*</label><input id="addr-city" type="text" placeholder="City"></div>
+            <div class="single-input"><label for="addr-state">State*</label><input id="addr-state" type="text" placeholder="State"></div>
+            <div class="single-input"><label for="addr-zip">Postal code*</label><input id="addr-zip" type="text" placeholder="ZIP"></div>
+            <button type="submit" class="rts-btn btn-primary">Save address</button>
+          </form>
         </div>
-    </div>
+        <div class="col-lg-6">
+          <h3 class="title">Saved addresses</h3>
+          <div class="address-list">
+            <div class="address-item">
+              <h6 class="address-name">&mdash;</h6>
+              <p class="address-body">&mdash;</p>
+              <a href="#" class="address-edit">Edit</a>
+              <a href="#" class="address-default">Make default</a>
+              <a href="#" class="address-delete">Remove</a>
+            </div>
+          </div>
+        </div>
+      </div>
+</div></div>
 <!-- rts footer one area start -->
     <div class="rts-footer-area pt--80 bg_light-1">
         <div class="container">
