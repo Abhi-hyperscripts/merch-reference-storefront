@@ -185,6 +185,17 @@ function pick(sel, root = document) {
   }
   return null;
 }
+/* `el.matches()` knows nothing about our '|' lists — handed one it throws a
+   SyntaxError, and on the product page that took the WHOLE page's hydration
+   down with it (reviews, related products, the lot) from inside a helper that
+   looked like a detail. */
+function matchesAny(el, sel) {
+  if (!el || !sel) return false;
+  return String(sel).split('|').some((one) => {
+    try { return el.matches(one.trim()); } catch { return false; }
+  });
+}
+
 function pickAll(sel, root = document) {
   if (!sel) return [];
   for (const s of String(sel).split('|')) {
@@ -719,7 +730,7 @@ function repeat({ container, template, sample, card }, items, fill) {
      taken from. The class check only decides ties, and matches on the first
      class because a looped Swiper stamps `swiper-slide-duplicate` onto clones. */
   const first = (sample.className || '').trim().split(/\s+/)[0];
-  const isRow = (el) => (card ? (el.matches(card) || !!pick(card, el)) : el.matches(sample.tagName + (first ? '.' + first : '')));
+  const isRow = (el) => (card ? (matchesAny(el, card) || !!pick(card, el)) : matchesAny(el, sample.tagName + (first ? '.' + first : '')));
   const siblings = [...container.children].filter(isRow);
   const existing = siblings.length ? siblings : [sample];
   existing[0].parentNode.insertBefore(marker, existing[0]);
@@ -928,6 +939,15 @@ function productContainers(spec = THEME.listing, root = document) {
 /* Shared shapes. Themes from the same vendor differ by a handful of names, so
    the second one is written as a diff of the first rather than a copy. */
 
+
+/* Blog fields, shared. A post is { slug, title, excerpt, coverUrl, createdAt }
+   in the list and gains `body` on its own page. */
+function postHref(post) { return pageUrl('post', { slug: post.slug }); }
+function postImage(post) { return mediaUrl(post.coverUrl || ''); }
+function postDate(post) {
+  return post.createdAt ? new Date(post.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+}
+
 /* Shared banner fields. Every theme's hero is the same four things — a picture,
    a line above, a headline and a button — under four different class names. */
 function bannerLink(b) { return storeLink(b.link); }
@@ -1017,7 +1037,15 @@ const THEMES = {
         title:    { sel: '.contents .product-title', text: (p) => p.name },
         category: { sel: '.product-catagory', text: (p) => p.category || '' },
         desc:     { sel: '.contents > p', text: (p) => p.description || '' },
-        price:    { sel: '.product-price', each: (el, p) => { el.childNodes[0].nodeValue = money(p.price) + ' '; } },
+        /* The price sits as a bare text node next to the struck-through one,
+           so we rewrite that node rather than the element — but only when it
+           really is text, because the quick-view modal shapes it differently
+           and `childNodes[0].nodeValue` throws there. */
+        price:    { sel: '.product-price', each: (el, p) => {
+          const first = el.firstChild;
+          if (first && first.nodeType === 3) first.nodeValue = money(p.price) + ' ';
+          else el.insertBefore(document.createTextNode(money(p.price) + ' '), el.firstChild);
+        } },
         mrp:      { sel: '.product-price .old-price', text: mrpText, hideWhen: hasNoMrp },
         sku:      { sel: '.product-uniques .sku', text: (p) => p.unit ? 'Unit: ' + p.unit : '' },
         add:      { sel: '.product-bottom-action .rts-btn:not(.ml--20)', action: 'add' },
@@ -1044,6 +1072,18 @@ const THEMES = {
       coupon: { input: '.bottom-cupon-code-cart-area input', button: '.bottom-cupon-code-cart-area button' },
       checkoutBtn: '.button-area .rts-btn|a[href*="checkout"]',
       empty: '.cart-top-area-note',
+    },
+
+    blog: {
+      container: null,
+      card: '.single-blog-area-start|.blog-single-one',
+      fields: {
+        link:  { sel: 'a', attr: 'href', all: true, value: postHref },
+        image: { sel: 'img', attr: 'src', value: postImage },
+        title: { sel: '.title|h4|h5', text: (b) => b.title },
+        date:  { sel: '.date|.blog-date', text: postDate },
+        excerpt: { sel: '.disc|p', text: (b) => b.excerpt || '' },
+      },
     },
 
     checkout: {
@@ -1101,7 +1141,12 @@ const THEMES = {
       card: '.product-item',
       slot: SLOT,
       fields: {
-        link:   { sel: '.product-thumb a', attr: 'href', all: true, value: (p) => productHref(p) },
+        /* The IMAGE link only. `.product-thumb a` with `all` also caught the
+           Quick View / wishlist / compare anchors that sit inside the same
+           figure, so pressing Quick View NAVIGATED to the product page
+           instead of opening the modal — and the modal went on showing the
+           template's necklace. */
+        link:   { sel: 'figure.product-thumb > a', attr: 'href', value: (p) => productHref(p) },
         nameLink: { sel: '.product-name a', attr: 'href', all: true, value: (p) => productHref(p) },
         image:  { sel: 'img.pri-img', attr: 'src', all: true, value: (p) => mediaUrl((p.imageUrls || [])[0] || '') },
         hover:  { sel: 'img.sec-img', attr: 'src', all: true, value: (p) => mediaUrl((p.imageUrls || [])[1] || (p.imageUrls || [])[0] || '') },
@@ -1123,12 +1168,16 @@ const THEMES = {
 
     product: {
       fields: {
-        title:   { sel: '.product-details-des .product-name', text: (p) => p.name },
-        brand:   { sel: '.product-details-des .manufacturer-name a', text: (p) => p.brandName || '' },
+        /* Each of these carries a bare fallback because the quick-view modal
+           reuses the same class names WITHOUT the `.product-details-des`
+           wrapper — scoped-only selectors matched nothing there, and the modal
+           went on showing "Handmade Golden Necklace, $70.00". */
+        title:   { sel: '.product-details-des .product-name|.product-name', text: (p) => p.name },
+        brand:   { sel: '.product-details-des .manufacturer-name a|.manufacturer-name a', text: (p) => p.brandName || '' },
         desc:    { sel: '.pro-desc', text: (p) => p.description || '' },
-        price:   { sel: '.product-details-des .price-regular', text: priceText },
-        mrp:     { sel: '.product-details-des .price-old del', text: mrpText },
-        mrpBox:  { sel: '.product-details-des .price-old', hideWhen: hasNoMrp },
+        price:   { sel: '.product-details-des .price-regular|.price-regular', text: priceText },
+        mrp:     { sel: '.product-details-des .price-old del|.price-old del', text: mrpText },
+        mrpBox:  { sel: '.product-details-des .price-old|.price-old', hideWhen: hasNoMrp },
         stock:   { sel: '.availability span', text: (p) => stockLabel(p) },
         reviews: { sel: '.pro-review span', each: (el) => el.classList.add('review-count') },
         add:     { sel: '.action_link .btn-cart2', action: 'add' },
@@ -1182,6 +1231,20 @@ const THEMES = {
       placeBtn: '.summary-footer-area button',
       terms: '#terms',
     },
+
+    blog: {
+      container: null,
+      card: '.blog-post-item',
+      fields: {
+        link:  { sel: '.blog-thumb a', attr: 'href', value: postHref },
+        titleLink: { sel: '.blog-title a', attr: 'href', value: postHref },
+        image: { sel: '.blog-thumb img', attr: 'src', value: postImage },
+        title: { sel: '.blog-title a', text: (b) => b.title },
+        date:  { sel: '.blog-meta p', html: (b) => escapeHtml(postDate(b)) },
+        excerpt: { sel: '.blog-content > p:not(.blog-meta p)', text: (b) => b.excerpt || '' },
+      },
+    },
+    post: { title: '.blog-content .blog-title|.blog-title|h2.title', date: '.blog-meta p|.date', cover: '.blog-single-slide img|.blog-thumb img', body: '.entry-summary|.blog-details-content' },
 
     reinit() {
       /* Slick caches its slide list and its clones. `refresh` is the one call
@@ -1323,6 +1386,21 @@ THEMES.electronic = {
     placeBtn: '.btn-checkout|button[type="submit"].tf-btn',
   },
 
+  blog: {
+    container: null,
+    card: '.wg-blog',
+    fields: {
+      link:  { sel: '.image a|a.link', attr: 'href', value: postHref },
+      titleLink: { sel: '.title a', attr: 'href', value: postHref },
+      image: { sel: '.image img', attr: 'src', value: postImage },
+      title: { sel: '.title a', text: (b) => b.title },
+      date:  { sel: '.meta-item p', text: postDate },
+      author:{ sel: '.meta-item:nth-child(2)', dropWhen: () => true },
+      excerpt: { sel: '.body-text', text: (b) => b.excerpt || '' },
+    },
+  },
+  post: { title: '.title-display|h1|h2.title', date: '.meta-item p', cover: '.image img|article img', body: '.blog-content|.content-inner' },
+
   reinit() { refreshSwipers(); },
 };
 
@@ -1401,6 +1479,20 @@ THEMES.fashion = {
     variants: { container: '.tf-product-variant', group: '.variant-picker-item' },
     gallery: { images: '.tf-product-media-main .item img', thumbs: '.tf-product-media-thumbs .item img' },
   },
+
+  blog: {
+    container: null,
+    card: 'article.article-blog',
+    fields: {
+      link:  { sel: 'a.blog-image', attr: 'href', value: postHref },
+      titleLink: { sel: '.entry-title a', attr: 'href', value: postHref },
+      image: { sel: '.blog-image img', attr: 'src', value: postImage },
+      title: { sel: '.entry-title a', text: (b) => b.title },
+      date:  { sel: '.entry-date', text: postDate },
+      excerpt: { sel: '.entry-desc', text: (b) => b.excerpt || '' },
+    },
+  },
+  post: { title: '.entry-title|h1|h2.title', date: '.entry-date', cover: '.blog-image img|article img', body: '.blog-content|.entry-content' },
 
   cart: {
     container: 'table.tf-table-page-cart tbody',
@@ -1676,10 +1768,26 @@ function paintStoreChrome(theme) {
 
   /* How to reach them. A shop that publishes the template's phone number is
      publishing someone else's phone number. */
-  const f = useStore('footerContact') ? (theme.footer || {}) : {};
-  if (f.phone) $$('a[href^="tel:"]').forEach((a) => { a.href = 'tel:' + f.phone.replace(/\s+/g, ''); setText(a, f.phone); });
-  if (f.email) $$('a[href^="mailto:"]').forEach((a) => { a.href = 'mailto:' + f.email; setText(a, f.email); });
-  if (f.address) pickAll('.footer address|address|[data-store-address]').forEach((el) => setText(el, f.address));
+  if (!useStore('footerContact')) return;
+  const f = theme.footer || {};
+
+  /* A contact detail the merchant has NOT set must not fall back to the
+     template's. These read as facts about the shop — this jewellery template
+     ships "4710-4890 Breckinridge USA" and "demo@yourdomain.com", and an
+     Indian grocer publishing those is telling customers where to write and
+     where to turn up. Unset means the line comes off the page. */
+  const contact = (selector, value, apply) => {
+    for (const el of $$(selector)) {
+      if (value) apply(el, value);
+      else show(el.closest('li, .single-contact, .footer-contact-item, p') || el, false);
+    }
+  };
+  contact('a[href^="tel:"]', f.phone, (a, v) => { a.href = 'tel:' + v.replace(/\s+/g, ''); setText(a, v); });
+  contact('a[href^="mailto:"]', f.email, (a, v) => { a.href = 'mailto:' + v; setText(a, v); });
+  contact('address, [data-store-address]', f.address, (el, v) => setText(el, v));
+
+  /* The "about us" blurb is marketing copy rather than a fact a customer acts
+     on, so an unset one keeps the template's. */
   if (f.about) pickAll('[data-store-about]').forEach((el) => setText(el, f.about));
 }
 
@@ -1758,6 +1866,70 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
   return containers[0];
 }
 
+/* --- QUICK VIEW ----------------------------------------------------------
+   Every one of these templates puts a "Quick view" eye on each card, and every
+   one of them opens the SAME hard-coded modal: "Handmade Golden Necklace,
+   $70.00" on a shop that sells groceries. It is a click away from every
+   product on every listing page, and nothing else on the page would tell the
+   shopper the price they just saw is fiction.
+
+   The modal is a small product page, so it takes the theme's own product
+   field map — scoped to the modal instead of the document. */
+let quickViewProduct = null;
+
+function wireQuickView() {
+  /* A theme can ship more than one of these — fashion has a Quick View
+     offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
+     the shopper opens has to be the product they clicked. */
+  const panels = [];
+  for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper', '.modal-quick-view']) {
+    $$(sel).forEach((el) => { if (!panels.includes(el)) panels.push(el); });
+  }
+  if (!panels.length || panels[0].dataset.merchQuickView) return;
+  panels.forEach((el) => { el.dataset.merchQuickView = '1'; });
+
+  /* The text fields only. Anything carrying an `action` is wired once, below,
+     against whichever product is currently showing — re-running wireAction per
+     open would either be ignored (it guards against double-wiring) or stack a
+     handler per open. */
+  const fields = Object.fromEntries(
+    Object.entries(THEME.product?.fields || {}).filter(([, f]) => f && !f.action),
+  );
+
+  document.addEventListener('click', async (e) => {
+    const trigger = e.target.closest(
+      '.quickview, .cta-quickview, .product-details-popup-btn, [data-quickview], ' +
+      'a[href="#quickView"], a[href="#quick_view"], a[href="#quickAdd"], ' +
+      '[data-bs-target="#quick_view"], [data-bs-target="#quickAdd"]',
+    );
+    if (!trigger) return;
+    const id = trigger.closest('[data-merch-id]')?.dataset.merchId;
+    if (!id) return;                       // a trigger on markup we never filled
+
+    try {
+      const p = await api.product(id);
+      quickViewProduct = p;
+      for (const panel of panels) {
+        fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
+        paintGalleryIn(panel, THEME.product?.gallery, p);
+      }
+    } catch (err) { showError(err); }
+  }, true);                                 // capture, so we fill BEFORE the theme opens it
+
+  /* One handler for the panels' own buttons, reading whatever is showing. */
+  for (const modal of panels) modal.addEventListener('click', (e) => {
+    const add = e.target.closest('.btn-add-to-cart, .btn-action-price, .btn-cart2, .btn-cart, .rts-btn.btn-primary, .tf-btn');
+    if (!add || !quickViewProduct) return;
+    if (/wish/i.test(add.className)) return;
+    e.preventDefault();
+    const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
+    if (quickViewProduct.availability === 'out') return notify('That one is sold out.', 'error');
+    cart.add(quickViewProduct, qty);
+    notify(quickViewProduct.name + ' added to your cart.', 'success');
+    track('add_to_cart', { itemId: quickViewProduct.id, qty, via: 'quickview' });
+  });
+}
+
 const pages = {};
 
 /* --- HOME ----------------------------------------------------------------
@@ -1825,6 +1997,7 @@ pages.home = async () => {
 
   paintBanners(data);
   paintCategoryTiles(data);
+  wireQuickView();
 };
 
 /* The strip's own heading, which lives OUTSIDE the container. Searching from a
@@ -1854,7 +2027,22 @@ function paintBanners(data) {
   /* The hero is the loudest thing on the page, so it follows the flag: with
      the template owning the look, its own artwork stays. */
   if (!useStore('banners')) return;
-  const banners = (data?.sections || []).filter((x) => x.type === 'banner').flatMap((x) => x.banners || []);
+  let banners = (data?.sections || []).filter((x) => x.type === 'banner').flatMap((x) => x.banners || []);
+
+  /* No banner sections, but the merchant filled in the Hero block in
+     Appearance. It is the same thing wearing different field names, so it gets
+     the same slot rather than being ignored while the template's artwork
+     claims to be theirs. */
+  const hero = STORE?.hero;
+  if (!banners.length && hero && (hero.headline || hero.imageUrl)) {
+    banners = [{
+      title: hero.headline || '',
+      alt: hero.subtext || '',
+      imageUrl: hero.imageUrl || '',
+      link: hero.ctaHref || '/shop',
+    }];
+  }
+
   const spec = THEME.banners;
   if (!spec) return;
   const t = takeTemplate(spec);
@@ -1974,6 +2162,7 @@ pages.listing = async () => {
     } catch (e) { showError(e); return; }
     const items = Array.isArray(res) ? res : (res.products || res.items || []);
     for (const grid of pickAll(THEME.listing.container)) renderProducts(items, THEME.listing, grid);
+    wireQuickView();
     paintResultCount(items, state, pageSize);
     THEME.reinit?.();
   };
@@ -2171,12 +2360,21 @@ function paintPriceButtons(p) {
 /* Galleries are the one place where the number of nodes matters: a theme's
    slider was built around N images. We rewrite the first N and drop the rest,
    which keeps the slider's own arrows and counters honest. */
-function paintGallery(gallery, p) {
+function paintGalleryIn(root, gallery, p) {
+  if (!gallery) return;
+  const scoped = {
+    images: gallery.images, thumbs: gallery.thumbs,
+  };
+  const within = (sel) => pickAll(sel, root);
+  paintGallery(scoped, p, within);
+}
+
+function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
   if (!gallery) return;
   const urls = (p.imageUrls || []).map(mediaUrl);
   if (!urls.length) return;
   for (const sel of [gallery.images, gallery.thumbs]) {
-    const nodes = pickAll(sel);
+    const nodes = within(sel);
     if (!nodes.length) continue;
     nodes.forEach((node, i) => {
       if (i >= urls.length) {
@@ -2322,6 +2520,7 @@ pages.cart = async () => {
     if (!current.length) {
       renderEmpty(t.container, 'Your cart is empty.');
       paintCartTotals(spec, current);
+      try { paintFreeShippingBar(current); } catch (e) { warn('free-shipping bar', e); }
       return;
     }
     repeat(t, current, (node, l) => {
@@ -2330,6 +2529,7 @@ pages.cart = async () => {
     });
     wireQuantityWidgets(t.container, draw);
     paintCartTotals(spec, current);
+    try { paintFreeShippingBar(current); } catch (e) { warn('free-shipping bar', e); }
     paintHeader();
     THEME.reinit?.();
   };
@@ -2406,6 +2606,34 @@ function wireQuantityWidgets(container, rerender) {
       if (next !== before) { cart.setQty(id, next); rerender(); }
     }, 0);
   });
+}
+
+/* "Add $59.69 to cart and get free shipping" — every one of these templates
+   ships a line like it, with a progress bar, quoting a figure the template's
+   designer made up. The store knows the real threshold. */
+function paintFreeShippingBar(lines) {
+  const free = Number(STORE?.shipping?.freeAbove) || 0;
+  const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
+
+  const notes = $$('p, span, div').filter(
+    (el) => el.children.length === 0 && /free (shipping|delivery)/i.test(el.textContent || ''),
+  );
+  const bars = $$('.progress-bar, .progress .bar, .tf-progress-bar > div');
+
+  /* The merchant has not set a threshold: the promise is not theirs to make. */
+  if (!free) {
+    notes.forEach((el) => show(el.closest('.cart-top-area-note, .free-shipping, .tf-progress-msg') || el, false));
+    bars.forEach((el) => show(el.closest('.progress, .tf-progress-bar') || el, false));
+    return;
+  }
+
+  const left = Math.max(0, free - subtotal);
+  notes.forEach((el) => {
+    setText(el, left > 0
+      ? 'Add ' + money(left) + ' more to your cart and get free delivery'
+      : 'Your order qualifies for free delivery');
+  });
+  bars.forEach((el) => { el.style.width = Math.min(100, Math.round((subtotal / free) * 100)) + '%'; });
 }
 
 async function paintCartTotals(spec, lines) {
@@ -3226,33 +3454,75 @@ pages.compare = async () => {
 
 pages.blog = async () => {
   let posts = [];
-  try { posts = await api.blog(); } catch { return; }
-  const spec = { container: '.blog-list|.blog-grid|.row', card: '.blog-item|.single-blog|.blog-post|[class*="col-"]' };
-  const t = takeTemplate(spec);
-  if (!t || !posts.length) return;
-  repeat(t, posts, (node, post) => {
-    setText(pick('.blog-title|h3 a|h4 a|h5 a|h3|h4|h5', node), post.title);
-    setText(pick('.blog-excerpt|p', node), post.excerpt || '');
-    setText(pick('.blog-date|.date', node), post.createdAt ? new Date(post.createdAt).toLocaleDateString() : '');
-    pickAll('a', node).forEach((a) => a.setAttribute('href', pageUrl('post', { slug: post.slug })));
-    const img = pick('img', node);
-    if (img && post.coverUrl) setAttr(img, 'src', mediaUrl(post.coverUrl));
-  });
+  try { posts = (await api.blog()) || []; } catch (e) { return warn('blog', e); }
+
+  const spec = THEME.blog || {
+    container: null,
+    card: '.blog-item|.single-blog|.blog-post|article',
+    fields: {
+      link:  { sel: 'a', attr: 'href', all: true, value: postHref },
+      image: { sel: 'img', attr: 'src', value: postImage },
+      title: { sel: 'h3 a|h4 a|h5 a|h3|h4|h5', text: (b) => b.title },
+      excerpt: { sel: 'p', text: (b) => b.excerpt || '' },
+    },
+  };
+
+  const containers = productContainers(spec);
+  if (!containers.length) { log('no blog template on this page'); return; }
+
+  if (!posts.length) {
+    /* A shop with no posts should not publish the template's invented ones
+       under its own name. Hide the strip and say so once. */
+    containers.forEach((el) => show(el.closest('section, .section, .rts-section') || el, false));
+    log('the store has no blog posts, so the blog strip is hidden');
+    return;
+  }
+
+  for (const el of containers) {
+    const t = takeTemplate({ ...spec, el });
+    if (!t) continue;
+    const room = Math.max(1, templateCount({ ...spec, el }));
+    repeat(t, posts.slice(0, Math.max(room, Math.min(posts.length, room * 2))), (node, post) => {
+      node.dataset.merchSlug = post.slug;
+      fillFields(node, spec.fields, post, { node });
+    });
+  }
 };
 
 pages.post = async () => {
   const slug = param('slug');
-  if (!slug) return;
-  let post;
-  try { post = await api.post(slug); } catch (e) { return showError(e); }
-  setText(pick('.blog-details .title|article h1|h2.title|h1'), post.title);
-  setText(pick('.blog-date|.date'), post.createdAt ? new Date(post.createdAt).toLocaleDateString() : '');
-  const body = pick('.blog-content|.entry-content|article .content');
-  /* `body` is the merchant's own HTML, from their own admin. It is the one
-     value on the page we do not escape, and the only one. */
-  if (body && post.body) body.innerHTML = post.body;
-  const img = pick('.blog-details img|article img');
-  if (img && post.coverUrl) setAttr(img, 'src', mediaUrl(post.coverUrl));
+  let post = null;
+  try {
+    post = slug ? await api.post(slug) : ((await api.blog()) || [])[0];
+  } catch (e) { return showError(e); }
+  if (!post) return;
+
+  const spec = THEME.post || {};
+  setText(pick(spec.title || 'h1|h2.title|.blog-title'), post.title);
+  setText(pick(spec.date || '.blog-date|.date|.entry-date'), postDate(post));
+  document.title = post.title + document.title.replace(/^[^|\u2013-]*/, '');
+
+  const cover = pick(spec.cover || 'article img|.blog-details img');
+  if (cover && post.coverUrl) {
+    setAttr(cover, 'src', postImage(post));
+    if (cover.hasAttribute('data-src')) setAttr(cover, 'data-src', postImage(post));
+    cover.removeAttribute('srcset');
+  }
+
+  /* The post body is the merchant's own Markdown, escaped before it is
+     interpreted — the same renderer the policy pages use.
+
+     The theme's OWN body selector comes first here. Unlike a policy page,
+     where we cannot know the container, a blog template names it — and
+     measuring instead picks whichever block happens to be longest, which on
+     one of these themes was a sidebar of recent posts. */
+  const html = markdown(String(post.body || post.excerpt || ''));
+  const named = pick(spec.body);
+  if (named) { named.innerHTML = html; return; }
+
+  const blocks = proseBlocks();
+  if (blocks.length) { blocks[0].innerHTML = html; blocks.slice(1).forEach(remove); }
+  else warn('no body container found for the post on ' + location.pathname);
 };
 
 /* --- THE MERCHANT'S OWN WRITTEN PAGES -----------------------------------
@@ -3267,11 +3537,10 @@ pages.policy = async (key) => {
   /* With the template owning the look, its own copy stands. We do NOT
      overwrite it and we do not replace it with "not published" either. */
   if (!useStore('writtenPages')) return;
+  if (key === 'about' && !useStore('aboutPage')) return;
 
   const written = STORE?.pages || {};
   let body = written[key];
-  if (key === 'about' && !useStore('aboutPage')) return;
-
   let title = { privacy: 'Privacy Policy', terms: 'Terms & Conditions', refund: 'Returns & Refunds', shipping: 'Shipping', about: 'About Us' }[key];
 
   /* A custom page can also claim this slug. */
@@ -3332,13 +3601,12 @@ function proseBlocks() {
     if ((host.textContent || '').trim().length < 80) continue;
     hosts.push(host);
   }
-  /* Keep only the outermost of any nested pair. */
   return hosts.filter((h) => !hosts.some((other) => other !== h && other.contains(h)));
 }
 
-/* Just enough Markdown for a policy page, and every scrap of merchant text is
-   escaped BEFORE any of it is interpreted — so a stray `<script>` in the
-   admin's editor renders as the characters they typed. */
+/* Just enough Markdown for a policy page or a blog post, and every scrap of
+   merchant text is escaped BEFORE any of it is interpreted — so a stray
+   `<script>` in the admin's editor renders as the characters they typed. */
 function markdown(src) {
   const inline = (t) => escapeHtml(t)
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/g, (m, text, href) => '<a href="' + escapeHtml(href) + '">' + text + '</a>')
@@ -3408,15 +3676,37 @@ function deferredThemeScripts() {
   return $$('script[type="text/merch-deferred"]');
 }
 
+/* A site served with `require-trusted-types-for 'script'` refuses a plain
+   string assigned to script.src — and we assign one for every theme script we
+   are holding, so on such a site NONE of them would run and the page would be
+   dead. Mint a policy when the browser asks for one. */
+let scriptUrlPolicy;
+function trustedScriptUrl(url) {
+  try {
+    if (!window.trustedTypes?.createPolicy) return url;
+    scriptUrlPolicy ??= window.trustedTypes.createPolicy('merch-theme-scripts', { createScriptURL: (u) => u });
+    return scriptUrlPolicy.createScriptURL(url);
+  } catch {
+    return url;   // a policy this page will not allow: try the plain string
+  }
+}
+
 async function runDeferredThemeScripts() {
   const tags = deferredThemeScripts();
   for (const old of tags) {
     await new Promise((resolve) => {
       const s = document.createElement('script');
       for (const { name, value } of old.attributes) {
-        if (name === 'type') continue;
+        if (name === 'type' || name === 'src' || name === 'data-merch-type') continue;
         s.setAttribute(name, value);
       }
+      /* Put back the type the tag had BEFORE it was marked. `type="module"` is
+         not decoration: re-running such a file as a classic script throws on
+         its first `import`/`export`, and whatever it powered dies quietly —
+         which is how 35 of these pages lost their product zoom and lightbox. */
+      const originalType = old.getAttribute('data-merch-type');
+      if (originalType) s.type = originalType;
+      if (old.src) s.src = trustedScriptUrl(old.getAttribute('src'));
       if (!old.src) { s.textContent = old.textContent; }
       s.onload = resolve;
       s.onerror = () => { warn('theme script failed: ' + old.src); resolve(); };
@@ -3471,6 +3761,7 @@ async function boot() {
 
   /* Whatever the role did not reach. */
   try { await fillStrayStrips(); } catch (e) { warn('stray strips', e); }
+  try { wireQuickView(); } catch (e) { warn('quick view', e); }
 
   await runDeferredThemeScripts();
   /* Only needed on path A; on path B the theme has just initialised over the

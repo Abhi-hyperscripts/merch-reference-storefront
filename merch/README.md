@@ -124,16 +124,51 @@ hundred rules and changing exactly the look the template was chosen for. Those
 settings are for the merchant's own storefront; here the template is the
 design.
 
-Also not wired: `shipping.flatRate` / `freeAbove` (the "add ₹X more for free
-delivery" bars still show the template's figures), `hero` (the hero comes from
-the merchant's banner sections instead), `hiddenItemIds` and `featuredItemIds`
-(the catalogue endpoint already honours them server-side), and `priceListId`.
+`shipping.freeAbove` now drives the "add ₹X more and get free delivery" line
+and its progress bar, which every template ships quoting a figure its designer
+invented. A merchant who has set no threshold gets the line hidden — the
+promise is not theirs to make.
+
+`theme.hero` is used for the hero when the merchant has configured no banner
+sections: it is the same thing wearing different field names, and ignoring it
+left the template's artwork claiming to be theirs.
+
+Still not wired: `shipping.flatRate` and `shipping.zones` (checkout quotes live
+from `/api/shipping/quote` instead), `hiddenItemIds` and `featuredItemIds` (the
+catalogue endpoint already honours them server-side), and `priceListId`.
 
 ### Blog
 
-`/api/blog` and `/api/blog/{slug}` are wired but **have never been seen
-working**: the demo store has zero posts, so there was nothing to render. Treat
-the blog as untested until a store with posts is pointed at it.
+`/api/blog` and `/api/blog/{slug}` are wired per theme (electronic, fashion and
+jewellery ship blog pages; grocery's are 0 bytes). The post body is the
+merchant's Markdown, through the same escape-then-render path as the policy
+pages.
+
+The demo store has **zero posts**, so this was verified against an intercepted
+payload of the documented shape rather than against live content — titles,
+dates, cover images and `?slug=` links all land, and the post page renders
+headings, bold, lists and links. A store with no posts **hides** the blog strip
+rather than leaving the template's invented articles under the shop's name.
+
+### Quick view
+
+Every template puts a "Quick view" eye on each card, and every one of them
+opened the SAME hard-coded modal — "Handmade Golden Necklace, $70.00" on a shop
+that sells groceries, one click from every product on every listing page. It is
+now filled from the product whose card was clicked, using the theme's own
+product field map scoped to the panel, and its Add to cart adds that product.
+Fashion has two of these (a Quick View offcanvas and a Quick Add modal); both
+are filled, because either can be the one that opens.
+
+### Contact details
+
+A phone, email or address the merchant has **not** set is removed from the
+footer rather than falling back to the template's. These read as facts about
+the shop — the jewellery template ships `4710-4890 Breckinridge USA` and
+`demo@yourdomain.com`, and an Indian grocer publishing those is telling
+customers where to write and where to turn up. The "about us" blurb is
+marketing copy rather than something a customer acts on, so an unset one keeps
+the template's.
 
 ## What gets hydrated
 
@@ -344,3 +379,22 @@ wrong first:
   pages ever were.
 - **Returns and subscriptions** exist in the API and have no screen in any of
   the four themes. The client methods are there for when one is built.
+
+---
+
+## Bugs in the templates themselves
+
+Found while testing, present in the **pristine** theme files with no merch.js
+anywhere near them. Left alone — they are the vendor's to fix:
+
+- `fashion/product-detail.html` (and its variants): `ReferenceError:
+  PhotoSwipeLightbox is not defined` — `zoom.js` runs before the lightbox
+  finishes loading.
+- `fashion/index.html`: `$(...).modal is not a function` — the theme calls the
+  jQuery Bootstrap plugin, which Bootstrap 5 removed.
+- `jewellery/blog-*`: a SoundCloud embed that throws `writeEmbed is not
+  defined` and trips a Trusted Types policy.
+- `grocery/`: 24 of its 38 pages are **0 bytes**, and ~90 of its images were
+  saved as 0-byte `.html` files. The theme was scraped rather than extracted —
+  `jewellery`'s own footer still carries the `HTTrack Website Copier` banner.
+  It needs re-downloading.
