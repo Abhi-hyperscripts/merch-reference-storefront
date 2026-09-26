@@ -11,7 +11,26 @@ badges and animations, including the ones nobody documented.
 
 ---
 
-## Wiring it up
+## Already wired
+
+The four bundled themes are wired: every page carries the include and the
+theme's own script tags are marked (184 pages, 1,998 script tags). **Point it
+at your own shop** — one line per page, so change it with one command:
+
+```bash
+cd merch-reference-storefront
+grep -rl 'merch/merch.js' electronic fashion grocery jewellery \
+  | xargs sed -i '' 's|data-api="[^"]*"|data-api="https://shop.mybrand.com"|'
+```
+
+Out of the box it points at a demo store so the themes run the moment you serve
+them. Drop `data-api` entirely and it uses the page's own origin, which is what
+you want once the storefront is deployed on the shop's domain.
+
+Grocery is wired on 14 of its 38 pages — the other 24 are **0 bytes** in the
+download (see the end of this file).
+
+## Wiring it up yourself
 
 One line per page, anywhere before `</body>`:
 
@@ -77,6 +96,8 @@ one product binder serve this theme's 39 product-page layouts.
 ---
 
 ## Theme JS: mark the theme's own scripts — this part is not optional
+
+*(Already done for the four bundled themes; this is what it is and why.)*
 
 The themes initialise Swiper, Slick, tooltips and lazy images against whatever
 DOM exists when their `main.js` runs, and anything added afterwards is
