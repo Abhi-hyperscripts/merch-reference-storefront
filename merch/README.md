@@ -74,6 +74,67 @@ module and browsers refuse those from the filesystem.
 
 ---
 
+## Who owns the look
+
+The second thing in `merch.js` is a switch per Appearance setting, so a client
+can take the shop's catalogue while keeping the template's identity, hand over
+everything, or anything in between.
+
+```js
+export const USE_STORE_APPEARANCE = {
+  brandName: true,      // the shop's name, in the page title and any name slot
+  logo: true,           // the shop's logo, wherever the template shows one
+  favicon: true,        // the tab icon
+  tagline: true,        // the one-liner under the name
+  menuLinks: true,      // where the header and footer menu items point
+  footerContact: true,  // the phone, email and address in the footer
+  banners: true,        // the hero — artwork, headline and button
+  writtenPages: true,   // Privacy, Terms, Refunds and Shipping
+  aboutPage: false,     // About — off by default
+};
+```
+
+Write `true` or `false` in place of the whole object to turn all of them on or
+off at once. A key you leave out is treated as on.
+
+Whatever you choose, **the shop still works**: products, prices, images,
+categories, the cart, the coupon and the checkout always come from the store.
+This decides who owns the *look*, never whether the shop is real.
+
+**`aboutPage` is off** because in all four templates About is a *designed*
+page — hero image, vision panel, counters, team strip — and the merchant's
+About is a couple of hundred words. Measured across the four: prose is 35–70%
+of a policy page's text and only 4–21% of an About page's. Dropping paragraphs
+into that layout doesn't replace the page, it dents it. There is a guard for
+this in general: any written page whose text is under 30% prose is left whole,
+with the reason in the console.
+
+**Two settings are deliberately not in the list**, because they are not
+appearance: whether cash on delivery is offered (the merchant's money — a shop
+that switched COD off must never be shown taking COD orders), and the currency
+(or every price on the page would be wrong). Both always follow the store.
+
+### What is deliberately ignored
+
+`colors`, `fontHeading`, `fontBody`, `radius` and `customCss` are read from the
+store and **not applied**. Each of these templates hardcodes its palette in CSS
+rules rather than in variables — only grocery exposes a usable
+`--color-primary` — so forcing a brand colour over one means guessing at a
+hundred rules and changing exactly the look the template was chosen for. Those
+settings are for the merchant's own storefront; here the template is the
+design.
+
+Also not wired: `shipping.flatRate` / `freeAbove` (the "add ₹X more for free
+delivery" bars still show the template's figures), `hero` (the hero comes from
+the merchant's banner sections instead), `hiddenItemIds` and `featuredItemIds`
+(the catalogue endpoint already honours them server-side), and `priceListId`.
+
+### Blog
+
+`/api/blog` and `/api/blog/{slug}` are wired but **have never been seen
+working**: the demo store has zero posts, so there was nothing to render. Treat
+the blog as untested until a store with posts is pointed at it.
+
 ## What gets hydrated
 
 Not just the product grids:

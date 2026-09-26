@@ -51,6 +51,54 @@
 export const STOREFRONT_URL = '';
 
 /* ---------------------------------------------------------------------------
+   WHO OWNS THE LOOK — the admin panel, or this template?
+
+   One switch per setting, so a client can take the shop's catalogue while
+   keeping the template's identity, or hand over everything, or anything in
+   between. `true` means the admin panel wins; `false` means the template keeps
+   what it shipped with.
+
+   Shorthand: write `true` or `false` in place of the whole object to turn all
+   of them on or off at once. A key you leave out is treated as on.
+
+   Whatever you choose, the SHOP still works: products, prices, images,
+   categories, the cart, the coupon and the checkout always come from the
+   store. This decides who owns the LOOK, never whether the shop is real.
+
+   Two settings are deliberately absent, because they are not appearance:
+   whether cash on delivery is offered (the merchant's money — a shop that
+   switched COD off must never be shown taking COD orders), and the currency
+   (or every price on the page would be wrong).
+--------------------------------------------------------------------------- */
+
+export const USE_STORE_APPEARANCE = {
+  brandName: true,      // the shop's name, in the page title and any name slot
+  logo: true,           // the shop's logo, wherever the template shows one
+  favicon: true,        // the tab icon
+  tagline: true,        // the one-liner under the name
+  menuLinks: true,      // where the header and footer menu items point
+  footerContact: true,  // the phone, email and address in the footer
+  banners: true,        // the hero — the merchant's artwork, headline and button
+  writtenPages: true,   // Privacy, Terms, Refunds and Shipping
+  aboutPage: false,     // About — OFF by default, see below
+};
+
+/* Why `aboutPage` is off while the other written pages are on: in all four of
+   these templates About is a DESIGNED page — a hero image, a vision panel,
+   counters, a team strip — and the merchant's About is a couple of hundred
+   words. Measured across the four themes, prose is 35-70% of a policy page's
+   text and only 4-21% of an About page's. Dropping the merchant's paragraphs
+   into that layout does not replace the page, it dents it. Turn this on if
+   your client's About really is just text. */
+
+/* True when the admin panel owns this particular setting. */
+function useStore(key) {
+  const a = USE_STORE_APPEARANCE;
+  if (a === true || a === false) return a;
+  return a?.[key] !== false;
+}
+
+/* ---------------------------------------------------------------------------
    1. CONFIG
 
    Everything below has a sensible default. A page may override any of it on
@@ -1480,6 +1528,11 @@ const ROLE_PATTERNS = [
   [/my-account-orders|account-orders/, 'orders'],
   [/my-account-address|account-addresses/, 'addresses'],
   [/account|my-account|dashboard|account-setting/, 'account'],
+  [/privacy/, 'policy:privacy'],
+  [/term/, 'policy:terms'],
+  [/(refund|return)/, 'policy:refund'],
+  [/^shipping|delivery-information/, 'policy:shipping'],
+  [/^about/, 'policy:about'],
   [/blog-(detail|details|single)/, 'post'],
   [/^blog/, 'blog'],
   /* Anything with "details" or "detail" in a product context is the PDP, and
@@ -1536,9 +1589,13 @@ function escapeHtml(v) {
    The header basket count, the currency, and the theme's own "empty" state.
 --------------------------------------------------------------------------- */
 
+/* The merchant's settings, kept for the whole page life. */
+let STORE = null;
+
 async function loadStoreSettings() {
   try {
     const theme = await api.theme();
+    STORE = theme;
     /* `currency` is the ISO CODE as a string and the symbol travels beside it.
        Reading it as an object (the obvious guess) leaves every price unformatted. */
     if (theme?.currency) CURRENCY = { code: theme.currency, symbol: theme.currencySymbol || CURRENCY.symbol };
@@ -1558,6 +1615,72 @@ function paintHeader() {
   pickAll(h.cartCount).forEach((el) => setText(el, count));
   pickAll(h.wishCount).forEach((el) => setText(el, wishlist.ids().length));
   pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
+}
+
+/* --- The shop's own identity -------------------------------------------------
+   Everything the merchant sets in Appearance that is CONTENT rather than
+   design: the name, the logo, the tagline, where the menu points, how to
+   contact them. Applied on every page, because every page shows a header.
+
+   Deliberately NOT applied: colours, fonts, radius and customCss. Each of
+   these themes has its own designed palette that it hardcodes in CSS rules
+   rather than in variables (only grocery exposes a usable `--color-primary`),
+   so forcing a brand colour over it means guessing at a hundred rules and
+   would change exactly the look the theme was chosen for. Those settings are
+   for the merchant's OWN storefront; here the template is the design. */
+function paintStoreChrome(theme) {
+  if (!theme) return;
+
+  /* The logo. Themes ship several — header, sticky header, mobile drawer,
+     footer — and they are the clearest sign of whose shop this is. */
+  if (theme.logoUrl && useStore('logo')) {
+    const url = mediaUrl(theme.logoUrl);
+    for (const img of $$('img')) {
+      const src = (img.getAttribute('src') || img.getAttribute('data-src') || '').toLowerCase();
+      const alt = (img.getAttribute('alt') || '').toLowerCase();
+      const cls = ((img.className || '') + ' ' + (img.parentElement?.className || '')).toLowerCase();
+      if (!/logo/.test(src + ' ' + alt + ' ' + cls)) continue;
+      if (/payment|card|visa|master|paypal|app-store|google-play/.test(src + cls)) continue;   // footer payment marks are not logos
+      setAttr(img, 'src', url);
+      if (img.hasAttribute('data-src')) setAttr(img, 'data-src', url);
+      img.removeAttribute('srcset');
+      if (theme.brandName) setAttr(img, 'alt', theme.brandName);
+    }
+  }
+
+  if (theme.brandName && useStore('brandName')) {
+    document.title = document.title.replace(/^[^|\u2013-]+/, theme.brandName + ' ');
+    pickAll('.site-title|.brand-name|[data-brand-name]').forEach((el) => setText(el, theme.brandName));
+  }
+  if (theme.tagline && useStore('tagline')) pickAll('.site-tagline|[data-tagline]').forEach((el) => setText(el, theme.tagline));
+
+  if (theme.faviconUrl && useStore('favicon')) {
+    let link = $('link[rel~="icon"]');
+    if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+    link.href = mediaUrl(theme.faviconUrl);
+  }
+
+  /* The menu. We repoint the theme's OWN items rather than replacing them —
+     these navs carry mega-menus and columns that a wholesale rewrite would
+     flatten. An item whose label the merchant also uses gets their target. */
+  const links = useStore('menuLinks')
+    ? [...(theme.navLinks || []), ...(theme.footerLinks || [])].filter((l) => l && l.label)
+    : [];
+  if (links.length) {
+    const byLabel = new Map(links.map((l) => [String(l.label).trim().toLowerCase(), l]));
+    for (const a of $$('a')) {
+      const l = byLabel.get((a.textContent || '').trim().toLowerCase());
+      if (l && l.href) a.setAttribute('href', storeLink(l.href));
+    }
+  }
+
+  /* How to reach them. A shop that publishes the template's phone number is
+     publishing someone else's phone number. */
+  const f = useStore('footerContact') ? (theme.footer || {}) : {};
+  if (f.phone) $$('a[href^="tel:"]').forEach((a) => { a.href = 'tel:' + f.phone.replace(/\s+/g, ''); setText(a, f.phone); });
+  if (f.email) $$('a[href^="mailto:"]').forEach((a) => { a.href = 'mailto:' + f.email; setText(a, f.email); });
+  if (f.address) pickAll('.footer address|address|[data-store-address]').forEach((el) => setText(el, f.address));
+  if (f.about) pickAll('[data-store-about]').forEach((el) => setText(el, f.about));
 }
 
 /* A list that came back empty. Rather than invent a message in our own styling,
@@ -1728,6 +1851,9 @@ function setSectionHeading(container, title) {
    Left alone, a hero is the loudest lie on the page: full-width demo artwork
    reading "Get up to 30% off on your first $150 purchase". */
 function paintBanners(data) {
+  /* The hero is the loudest thing on the page, so it follows the flag: with
+     the template owning the look, its own artwork stays. */
+  if (!useStore('banners')) return;
   const banners = (data?.sections || []).filter((x) => x.type === 'banner').flatMap((x) => x.banners || []);
   const spec = THEME.banners;
   if (!spec) return;
@@ -2488,6 +2614,12 @@ async function paintPaymentOptions(spec) {
   let cfg = null;
   try { cfg = await api.paymentConfig(); } catch { /* a store with no gateway is COD-only */ }
   const online = !!cfg?.enabled;
+
+  /* Cash on delivery is a MERCHANT setting, and it lives in Appearance, not in
+     the payment config. Leaving it on for a shop that switched it off takes
+     orders nobody is going to deliver. */
+  const cod = STORE?.payment?.codEnabled !== false;
+
   const radios = pickAll(spec.paymentRadios);
   let firstVisible = null;
   let onlineTaken = false;
@@ -2499,7 +2631,7 @@ async function paintPaymentOptions(spec) {
     /* Only ONE online option survives. A theme lists PayPal, Stripe and card
        separately; this store has exactly one gateway, and leaving three
        choices that all do the same thing is a lie about what happens next. */
-    const keep = isCod || (isOnline && online && !onlineTaken);
+    const keep = (isCod && cod) || (isOnline && online && !onlineTaken);
     show(row, keep);
     if (!keep) { if (radio.checked) radio.checked = false; continue; }
 
@@ -2515,12 +2647,22 @@ async function paintPaymentOptions(spec) {
     }
     if (!firstVisible) { firstVisible = radio; radio.checked = true; }
   }
+
+  /* Neither method available. Saying so beats a Place order button that can
+     only ever be refused. */
+  if (!firstVisible && radios.length) {
+    notify('This shop is not taking orders right now.', 'error');
+    pickAll(spec.placeBtn).forEach((b) => { b.disabled = true; show(b, false); });
+  }
   return cfg;
 }
 
 function chosenPaymentMethod(spec, cfg) {
   const chosen = pickAll(spec.paymentRadios).find((r) => r.checked);
   if (chosen?.dataset.merchMethod) return chosen.dataset.merchMethod;
+  /* No radio to read: fall back to whichever the merchant actually allows,
+     preferring COD only when they have it switched on. */
+  if (STORE?.payment?.codEnabled === false) return 'online';
   return cfg?.enabled ? 'online' : 'cod';
 }
 
@@ -3113,6 +3255,121 @@ pages.post = async () => {
   if (img && post.coverUrl) setAttr(img, 'src', mediaUrl(post.coverUrl));
 };
 
+/* --- THE MERCHANT'S OWN WRITTEN PAGES -----------------------------------
+   Privacy, terms, refunds, shipping, about. The store keeps them as MARKDOWN
+   under `theme.pages`, plus anything else the merchant added in
+   `theme.customPages`.
+
+   Left alone, these pages publish the template's filler as the shop's legal
+   terms — which is worse than an empty page, because it reads like a policy
+   and is not one. */
+pages.policy = async (key) => {
+  /* With the template owning the look, its own copy stands. We do NOT
+     overwrite it and we do not replace it with "not published" either. */
+  if (!useStore('writtenPages')) return;
+
+  const written = STORE?.pages || {};
+  let body = written[key];
+  if (key === 'about' && !useStore('aboutPage')) return;
+
+  let title = { privacy: 'Privacy Policy', terms: 'Terms & Conditions', refund: 'Returns & Refunds', shipping: 'Shipping', about: 'About Us' }[key];
+
+  /* A custom page can also claim this slug. */
+  const custom = (STORE?.customPages || []).find((pg) => (pg.slug || '').toLowerCase() === key || (pg.slug || '').toLowerCase() === param('page'));
+  if (custom) { body = custom.body ?? custom.content ?? body; title = custom.title || title; }
+
+  const blocks = proseBlocks();
+  if (!blocks.length) { warn('no prose block found on ' + location.pathname); return; }
+
+  /* A safety net for any page that turns out to be design rather than text:
+     if what we would replace is only a small share of what the page says, we
+     would leave a page half in the merchant's words and half in the
+     template's — which reads as the shop's policy and is not one. Leave it
+     whole instead, and say why. */
+  const share = proseShare(blocks);
+  if (share < 0.3) {
+    warn('leaving ' + location.pathname + ' alone: its text is only ' +
+      Math.round(share * 100) + '% prose, so it is a designed page, not a written one');
+    return;
+  }
+
+  /* EVERY block, not the biggest one. These themes split a policy across
+     several sibling panels, so replacing only the largest leaves the rest of
+     the template's filler on the page — still reading like the shop's terms,
+     and now contradicting the half that is real. */
+  const html = (body && String(body).trim())
+    ? markdown(String(body))
+    : '<p>This page has not been published yet.</p>';
+  blocks[0].innerHTML = html;
+  blocks.slice(1).forEach(remove);
+
+  if (title) pickAll('.breadcrumb .current|.page-title|h1.title').forEach((el) => setText(el, title));
+};
+
+/* How much of what this page SAYS lives in the blocks we would replace. */
+function proseShare(blocks) {
+  const inMain = (el) => !el.closest('header, footer, nav, .modal, .offcanvas');
+  const total = $$('h1,h2,h3,h4,h5,p,li').filter(inMain)
+    .reduce((n, el) => n + (el.textContent || '').trim().length, 0);
+  if (!total) return 0;
+  const mine = blocks.reduce((n, el) => n + (el.textContent || '').trim().length, 0);
+  return mine / total;
+}
+
+/* Every block of prose this page is FOR, in document order. A policy page is
+   a long run of text, so the honest way to find it is to measure — the
+   elements that directly hold paragraphs, minus the furniture every page
+   carries. Blocks nested inside another block are dropped, so we replace a
+   region once rather than once per level. */
+function proseBlocks() {
+  const FURNITURE = /header|footer|nav|menu|modal|offcanvas|drawer|cart|sidebar|breadcrumb|widget|newsletter|copyright|comment/i;
+  const hosts = [];
+  for (const el of $$('p')) {
+    const host = el.parentElement;
+    if (!host || host === document.body || hosts.includes(host)) continue;
+    if (host.closest('header, footer, nav, .modal, .offcanvas')) continue;
+    if (FURNITURE.test(host.className + ' ' + (host.id || ''))) continue;
+    if ((host.textContent || '').trim().length < 80) continue;
+    hosts.push(host);
+  }
+  /* Keep only the outermost of any nested pair. */
+  return hosts.filter((h) => !hosts.some((other) => other !== h && other.contains(h)));
+}
+
+/* Just enough Markdown for a policy page, and every scrap of merchant text is
+   escaped BEFORE any of it is interpreted — so a stray `<script>` in the
+   admin's editor renders as the characters they typed. */
+function markdown(src) {
+  const inline = (t) => escapeHtml(t)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/g, (m, text, href) => '<a href="' + escapeHtml(href) + '">' + text + '</a>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  const out = [];
+  let list = null;
+  const closeList = () => { if (list) { out.push('</' + list + '>'); list = null; } };
+
+  for (const raw of String(src).replace(/\r\n?/g, '\n').split('\n')) {
+    const line = raw.trim();
+    if (!line) { closeList(); continue; }
+
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { closeList(); const n = Math.min(6, h[1].length + 1); out.push('<h' + n + '>' + inline(h[2]) + '</h' + n + '>'); continue; }
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) { closeList(); out.push('<hr>'); continue; }
+
+    const ul = line.match(/^[-*+]\s+(.*)$/);
+    if (ul) { if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; } out.push('<li>' + inline(ul[1]) + '</li>'); continue; }
+    const ol = line.match(/^\d+[.)]\s+(.*)$/);
+    if (ol) { if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; } out.push('<li>' + inline(ol[1]) + '</li>'); continue; }
+
+    closeList();
+    out.push('<p>' + inline(line) + '</p>');
+  }
+  closeList();
+  return out.join('\n');
+}
+
 /* Roles a theme has a page for but the API has no concept of. Saying so out
    loud is better than a page that quietly shows demo data forever. */
 pages.vendor = async () => warn('This store has no vendors; the vendor pages stay as the theme shipped them.');
@@ -3201,9 +3458,10 @@ async function boot() {
      and a category menu pointing at real categories. */
   paintHeader();
   cart.onChange(paintHeader);
+  try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   if (PAGE !== 'listing') { wireSearchInputs(null); wireCategoryLinks(); }
 
-  const run = pages[PAGE] || pages.unknown;
+  const run = PAGE.startsWith('policy:') ? () => pages.policy(PAGE.slice(7)) : (pages[PAGE] || pages.unknown);
   try { await run(); }
   catch (e) {
     /* A hydration bug must not take the shop down with it: the page stays as
