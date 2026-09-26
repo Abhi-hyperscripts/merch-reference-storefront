@@ -1382,8 +1382,15 @@ THEMES.electronic = {
       pincode: 'input[placeholder="Postal Code*"]',
     },
     coupon: { input: 'input[placeholder="Add voucher discount"]', button: '.ip-discount-code button' },
-    paymentRadios: '#payment-box input[type="radio"]|input[name="payment"]',
-    placeBtn: '.btn-checkout|button[type="submit"].tf-btn',
+    /* One of this vendor's two templates has no `#payment-box` at all and
+       names its radios `payment-method`, so NOTHING was matched there: no
+       method was labelled, and the checkout silently took the online path
+       whatever the shopper picked. */
+    paymentRadios: 'input[name="payment-method"]|#payment-box input[type="radio"]|input[name="payment"]',
+    /* `.btn-checkout` exists in neither of this vendor's templates — the
+       control is an <a> reading "Check Out" or "Pay Now". Matched by class
+       where we can and by its WORDS where we cannot; see findPlaceButton. */
+    placeBtn: '.tf-btn.btn-fill|.sidebar-checkout-content .tf-btn',
   },
 
   blog: {
@@ -1791,18 +1798,53 @@ function paintStoreChrome(theme) {
   if (f.about) pickAll('[data-store-about]').forEach((el) => setText(el, f.about));
 }
 
+/* The currency switcher in the header. Every one of these templates ships one
+   reading "USD" next to prices the store quotes in its own currency. The store
+   says which currencies it actually offers — usually none, in which case the
+   control is a lie and comes off. */
+async function paintCurrencySwitcher() {
+  const holders = pickAll('.currency-switcher|li:has(> a[href="#"]) .currency|.header-currency|[data-currency-switcher]');
+  const labels = $$('a, span, button').filter((el) => el.children.length === 0 && /^(USD|EUR|GBP|\$ ?Currency|INR)$/i.test((el.textContent || '').trim()));
+  if (!labels.length && !holders.length) return;
+
+  let list = null;
+  try { list = await api.currencies(); } catch { return; }
+  const base = list?.base;
+  const others = list?.currencies || [];
+
+  /* Nothing to switch to: show the store's own currency, and drop the menu. */
+  for (const el of labels) {
+    setText(el, base?.code || CURRENCY.code || '');
+    if (!others.length) {
+      const menu = el.closest('li, .dropdown, .currency-switcher');
+      const sub = menu?.querySelector('ul, .dropdown-menu, .submenu');
+      if (sub) remove(sub);
+      if (menu) menu.style.pointerEvents = 'none';
+    }
+  }
+}
+
 /* A list that came back empty. Rather than invent a message in our own styling,
    hide the grid and reveal whatever the theme already ships for this — and if
    it ships nothing, put the sentence where the grid was, unstyled. */
-function renderEmpty(container, message) {
+function renderEmpty(container, message, spec) {
   if (!container) return;
   const own = pick('.no-results|.empty-state|.wrap-empty_text|.cart-empty', container.parentElement || document);
   if (own) { show(own, true); show(container, false); return; }
+
+  /* Take out the ITEMS and nothing else. Replacing everything in the
+     container destroyed whatever else lived there — on the account page that
+     was the "add an address" FORM, so a shopper with no addresses yet was
+     shown "No saved addresses" and given no way to add one. */
+  if (spec?.card) pickAll(spec.card, container).forEach((el) => remove(unitOf(el, spec)));
+  else if (!pick('form', container)) container.replaceChildren();
+
+  if (pick('.merch-empty', container)) return;
   const p = document.createElement('p');
   p.className = 'merch-empty';
   p.style.cssText = 'padding:24px 0;';
   p.textContent = message;
-  container.replaceChildren(p);
+  container.insertBefore(p, container.firstChild);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1839,7 +1881,7 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
   const containers = [...groups.keys()];
   if (!containers.length) return null;
 
-  if (!items.length) { renderEmpty(containers[0], 'No products found.'); containers.slice(1).forEach((c) => show(c, false)); return containers[0]; }
+  if (!items.length) { renderEmpty(containers[0], 'No products found.', spec); containers.slice(1).forEach((c) => show(c, false)); return containers[0]; }
 
   const capacity = containers.reduce((n, c) => n + groups.get(c), 0);
   let offset = 0;
@@ -1997,6 +2039,7 @@ pages.home = async () => {
 
   paintBanners(data);
   paintCategoryTiles(data);
+  await renderRecentlyViewed(rails[rails.length - 1]);
   wireQuickView();
 };
 
@@ -2107,7 +2150,9 @@ async function renderRecentlyViewed(container) {
   if (!container) return;
   try {
     const seen = (await api.recentlyViewed(sessionId(), 8))?.products || [];
-    if (seen.length) renderProducts(seen, THEME.listing, container);
+    /* Worth a rail only once there is something in it. On a first visit a
+       strip of "recently viewed" products the shopper has never seen is a lie. */
+    if (seen.length >= 2) renderProducts(seen, THEME.listing, container);
   } catch { /* a rail that will not load simply stays as the theme shipped it */ }
 }
 
@@ -2132,6 +2177,8 @@ pages.listing = async () => {
     q: param('q') || '',
     category: param('category') || '',
     brand: param('brand') || '',
+    color: param('color') || '',
+    size: param('size') || '',
     collection: param('collection') || '',
     sort: param('sort') || '',
     minPrice: param('minPrice') || '',
@@ -2157,6 +2204,8 @@ pages.listing = async () => {
             minPrice: state.minPrice || undefined,
             maxPrice: state.maxPrice || undefined,
             inStock: state.inStock || undefined,
+            color: state.color || undefined,
+            size: state.size || undefined,
             page: state.page > 1 ? state.page : undefined,
           });
     } catch (e) { showError(e); return; }
@@ -2172,6 +2221,8 @@ pages.listing = async () => {
   wireCategoryLinks();
   wirePagination(state, run, pageSize);
   wirePriceFilter(state, run);
+  wireStockFilter(state, run);
+  await paintFilters(state, run);
   await run();
 };
 
@@ -2334,6 +2385,7 @@ pages.product = async () => {
 
   /* Tell the store it was seen, so the shopper's own recently-viewed rail
      fills as they browse. Best-effort: a failure here must never break a PDP. */
+  try { wireReviewForm(p); } catch (e) { warn('review form', e); }
   api.recordView(p.id, sessionId()).catch(() => {});
   track('product_view', { itemId: p.id });
   THEME.reinit?.();
@@ -2473,12 +2525,44 @@ async function paintReviews(p) {
   const spec = { container: '.review-list|.product-reviews|.comment-list|.tab-reviews', card: '.review-item|.single-review|li' };
   const t = takeTemplate(spec);
   if (!t) return;
-  if (!reviews.length) return renderEmpty(t.container, 'No reviews yet.');
+  if (!reviews.length) return renderEmpty(t.container, 'No reviews yet.', spec);
   repeat(t, reviews, (node, r) => {
     setText(pick('.review-author|.author|h5|h6', node), r.author || r.name || 'Verified buyer');
     setText(pick('.review-body|.comment-text|p', node), r.body || r.comment || '');
     setText(pick('.review-date|.date', node), r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '');
   });
+}
+
+/* The review form every product template ships. Without this it looks like a
+   shopper can leave a review and nothing happens when they press send. */
+function wireReviewForm(product) {
+  for (const form of $$('form')) {
+    const body = pick('textarea', form);
+    if (!body) continue;
+    if (!/review|comment|rating/i.test(form.className + ' ' + (form.id || '') + ' ' + (body.placeholder || '') + ' ' + (form.closest('[class*="review"], [id*="review"]') ? 'review' : ''))) continue;
+    if (form.dataset.merchReview) continue;
+    form.dataset.merchReview = '1';
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = pick('input[type="text"]', form)?.value.trim();
+      const email = pick('input[type="email"]', form)?.value.trim();
+      /* Themes draw the stars as radios, or as a row of links with an index. */
+      const checked = pickAll('input[type="radio"]', form).find((r) => r.checked);
+      const rating = Number(checked?.value) || Number(form.dataset.merchRating) || 5;
+      if (!body.value.trim()) return notify('Please write your review first.', 'error');
+      try {
+        await api.postReview(product.id, { rating, title: '', body: body.value.trim(), author: name || '', email: email || '' });
+        notify('Thank you — your review has been sent.', 'success');
+        form.reset();
+      } catch (err) { showError(err); }
+    });
+
+    /* Star widgets that are not radios: remember which one was pressed. */
+    pickAll('.rating a, .rating-stars a, .stars a, .rate a', form).forEach((a, i) => {
+      a.addEventListener('click', (e) => { e.preventDefault(); form.dataset.merchRating = String(i + 1); });
+    });
+  }
 }
 
 async function paintRelated(p) {
@@ -2553,6 +2637,134 @@ pages.cart = async () => {
 
   cart.onChange(() => paintHeader());
 };
+
+/* --- THE FILTER SIDEBAR ---------------------------------------------------
+   Every template ships one, listing brands and categories its designer made
+   up — "Bags (112)", "Clothing (42)" — and clicking them did nothing at all.
+   `/api/catalog/facets` has the real ones with real counts; it was already
+   being called for the result count and otherwise thrown away.
+
+   The themes structure these sidebars completely differently, so the group is
+   found by its HEADING — the one thing they agree on, because the words are
+   the designer's statement of intent — and each option row is cloned from the
+   theme's own. */
+const FILTER_GROUPS = [
+  { key: 'category', rx: /categor/i,            values: (f) => (f.categories || []).map((c) => ({ value: c.name, label: c.name, count: c.count })) },
+  { key: 'brand',    rx: /brand|manufacturer/i, values: (f) => (f.brands || []).map((b) => ({ value: b.slug || b.name, label: b.name, count: b.count })) },
+  { key: 'size',     rx: /size|weight/i,        values: (f) => attrValues(f, 'size') },
+  { key: 'color',    rx: /colou?r/i,            values: (f) => attrValues(f, 'color') },
+];
+
+function attrValues(facets, key) {
+  const group = (facets.attributes || []).find((a) => (a.key || '').toLowerCase() === key);
+  return (group?.values || []).map((v) => ({ value: v.value, label: v.value, count: v.count }));
+}
+
+async function paintFilters(state, run) {
+  let facets = null;
+  try { facets = await api.facets({ search: state.q || undefined, category: state.category || undefined }); }
+  catch { return; }
+  if (!facets) return;
+
+  for (const group of FILTER_GROUPS) {
+    const values = group.values(facets);
+    if (!values.length) continue;
+    const scope = filterGroupScope(group.rx);
+    if (!scope) continue;
+    paintFilterGroup(scope, group, values, state, run);
+  }
+
+  /* The price slider's ends should be the shop's real range, not $10-$90. */
+  const price = facets.price;
+  if (price && Number.isFinite(price.min) && Number.isFinite(price.max)) {
+    pickAll('.filter-value-min-max span|.price-range|.widget-price .title-price').forEach((el) => {
+      if (/\d/.test(el.textContent || '')) setText(el, 'Price: ' + money(price.min) + ' — ' + money(price.max));
+    });
+    $$('input[type="range"]').forEach((r) => { r.min = String(Math.floor(price.min)); r.max = String(Math.ceil(price.max)); });
+  }
+}
+
+/* The block that holds one group's options, found from its heading. */
+function filterGroupScope(rx) {
+  const heads = $$('h1,h2,h3,h4,h5,h6,.facet-title,.sidebar-title,.widget-title,legend,button')
+    .filter((el) => el.children.length <= 2 && rx.test((el.textContent || '').trim()));
+  for (const head of heads) {
+    if (head.closest('header, footer, nav')) continue;
+    const box = head.closest('.single-filter-box, .facet, .sidebar-single, .widget, .filter-group, .collapse-item, .tf-filter-group')
+      || head.parentElement;
+    if (!box) continue;
+    /* The list is whichever descendant holds more than one option row. */
+    const list = [...box.querySelectorAll('*')].find(
+      (el) => el.children.length > 1
+        && [...el.children].filter((c) => c.querySelector('input[type="checkbox"], input[type="radio"], a, label')).length > 1,
+    );
+    if (list) return list;
+  }
+  return null;
+}
+
+function paintFilterGroup(list, group, values, state, run) {
+  if (list.dataset.merchFilter === group.key) return;
+  list.dataset.merchFilter = group.key;
+
+  const sample = [...list.children].find((c) => c.querySelector('input, a, label')) || list.firstElementChild;
+  if (!sample) return;
+  const template = sample.cloneNode(true);
+
+  /* Never more rows than the designer laid out room for — these sidebars are
+     a fixed column, and 100 brands is a scroll, not a filter. */
+  const room = Math.max(6, [...list.children].length);
+  const shown = values.slice(0, Math.min(values.length, Math.max(room, 12)));
+
+  list.replaceChildren();
+  for (const v of shown) {
+    const node = template.cloneNode(true);
+    const input = node.querySelector('input[type="checkbox"], input[type="radio"]');
+    const label = node.querySelector('label') || node.querySelector('a') || node;
+
+    if (input) {
+      const id = 'merch-' + group.key + '-' + v.value.replace(/[^\w-]+/g, '-').toLowerCase();
+      input.id = id;
+      input.checked = String(state[group.key] || '') === String(v.value);
+      if (label.tagName === 'LABEL') label.setAttribute('for', id);
+    }
+    setText(label, v.count ? `${v.label} (${v.count})` : v.label);
+    if (label.tagName === 'A') label.setAttribute('href', pageUrl('listing', { [group.key]: v.value }));
+
+    const choose = (e) => {
+      e.preventDefault();
+      /* The store takes ONE value per filter, so picking another replaces it
+         and picking the current one clears it. */
+      const already = String(state[group.key] || '') === String(v.value);
+      state[group.key] = already ? '' : v.value;
+      state.page = 1;
+      pushState(state);
+      run();
+      pickAll('input', list).forEach((i) => { i.checked = false; });
+      if (input && !already) input.checked = true;
+    };
+    (input || label).addEventListener('click', choose);
+    if (input) input.addEventListener('change', choose);
+    list.appendChild(node);
+  }
+}
+
+/* "In stock only" — a checkbox every theme has somewhere near the filters. */
+function wireStockFilter(state, run) {
+  const boxes = $$('input[type="checkbox"]').filter((el) => {
+    const row = el.closest('li, .single-category, .facet, label, div');
+    return /in stock|availability|stock only/i.test(row?.textContent || '');
+  });
+  for (const box of boxes) {
+    box.checked = state.inStock;
+    box.addEventListener('change', () => {
+      state.inStock = box.checked;
+      state.page = 1;
+      pushState(state);
+      run();
+    });
+  }
+}
 
 /* Every theme builds its quantity stepper differently, and every one of them
    already updates its own <input>. Rather than re-implement four steppers, we
@@ -2660,6 +2872,19 @@ async function paintCartTotals(spec, lines) {
     }
   }
   pending.set({ discount });
+  /* Discounts the MERCHANT set up, which apply with no code typed: a
+     percentage off a category, a buy-two-get-one. The shopper never asks for
+     these, so a cart that ignores them quietly overcharges. */
+  if (lines.length) {
+    const apiLines = cart.apiLines();
+    const [auto, bxgy] = await Promise.all([
+      api.autoDiscount(apiLines).catch(() => null),
+      api.bxgy(apiLines).catch(() => null),
+    ]);
+    discount += Number(auto?.discountAmount ?? auto?.discount ?? 0) || 0;
+    discount += Number(bxgy?.discountAmount ?? bxgy?.discount ?? 0) || 0;
+  }
+
   pickAll(t.discount).forEach((el) => setText(el, discount ? '-' + money(discount) : money(0)));
   pickAll(t.shipping).forEach((el) => setText(el, p.shipping == null ? 'Calculated at checkout' : (p.shipping ? money(p.shipping) : 'Free')));
   pickAll(t.total).forEach((el) => setText(el, money(Math.max(0, subtotal - discount + (p.shipping || 0)))));
@@ -2680,7 +2905,13 @@ function wireCoupon(spec, rerender) {
     if (!cart.count()) return notify('Add something to your cart first.', 'error');
     try {
       const res = await api.validateCoupon(code, cart.apiLines());
-      if (!res.valid) { pending.set({ coupon: null, discount: 0 }); return notify(res.reason || 'That coupon cannot be used.', 'error'); }
+      if (!res.valid) {
+        pending.set({ coupon: null, discount: 0 });
+        /* One box, two kinds of code: the shopper does not know or care which
+           of the two the merchant issued them. Try the other before refusing. */
+        if (await applyGiftCard(code, rerender)) return;
+        return notify(res.reason || 'That code cannot be used.', 'error');
+      }
       pending.set({ coupon: code, discount: res.discountAmount || 0 });
       notify('Coupon applied — ' + money(res.discountAmount) + ' off.', 'success');
       rerender();
@@ -2688,6 +2919,10 @@ function wireCoupon(spec, rerender) {
   });
 }
 
+/* A dedicated gift-card box where a theme has one. NONE of the four templates
+   does — they all ship a single "coupon code" field — so a code typed there is
+   tried as a coupon first and then as a gift card, which is what one box has
+   to mean if gift cards are to work at all. */
 function wireGiftCard(spec, rerender) {
   const input = pick('input[placeholder*="gift" i]|input[name="giftcard"]');
   if (!input) return;
@@ -2695,15 +2930,19 @@ function wireGiftCard(spec, rerender) {
   button?.addEventListener('click', async (e) => {
     e.preventDefault();
     const code = input.value.trim();
-    if (!code) return;
-    try {
-      const res = await api.checkGiftCard(code);
-      if (!res.valid) { pending.set({ giftCard: null }); return notify(res.reason || 'That gift card cannot be used.', 'error'); }
-      pending.set({ giftCard: code });
-      notify('Gift card accepted — ' + money(res.balance) + ' available.', 'success');
-      rerender();
-    } catch (err) { pending.set({ giftCard: null }); showError(err); }
+    if (code) await applyGiftCard(code, rerender);
   });
+}
+
+async function applyGiftCard(code, rerender) {
+  try {
+    const res = await api.checkGiftCard(code);
+    if (!res.valid) { pending.set({ giftCard: null }); notify(res.reason || 'That code is not valid.', 'error'); return false; }
+    pending.set({ giftCard: code });
+    notify('Gift card accepted — ' + money(res.balance) + ' available.', 'success');
+    rerender();
+    return true;
+  } catch (err) { pending.set({ giftCard: null }); showError(err); return false; }
 }
 
 /* --- CHECKOUT ------------------------------------------------------------
@@ -2726,12 +2965,14 @@ pages.checkout = async () => {
     return;
   }
 
+  ensureCustomerFields(spec);
   paintCheckoutSummary(spec, lines);
   await prefillCustomer(spec);
   const paymentCfg = await paintPaymentOptions(spec);
   wireShippingQuote(spec, lines);
+  wireCartSave(spec);
 
-  const placeBtn = pick(spec.placeBtn);
+  const placeBtn = findPlaceButton(spec);
   if (!placeBtn) return warn('no place-order button found on this checkout');
 
   placeBtn.addEventListener('click', async (e) => {
@@ -2809,6 +3050,41 @@ async function prefillCustomer(spec) {
    The street is ONE field called `address`. A line1/line2 pair — which is the
    shape most of these themes' forms are in, and the obvious thing to send — is
    dropped in full, and the order is placed with no street on it at all. */
+/* The store requires a state on every order. Two of these four checkout forms
+   do not HAVE a state field — so every order placed on them came back
+   `400 Your state is required.` and the shop could not take money at all.
+
+   Rather than change the design, we clone the theme's OWN city field: same
+   markup, same classes, same spacing, so it looks like the designer put it
+   there — which, in every respect that matters, they did. */
+function ensureCustomerFields(spec) {
+  const form = spec.form || {};
+  if (pick(form.state)) return;                     // the template has one
+
+  const source = pick(form.city) || pick(form.pincode);
+  if (!source) { warn('this checkout has no city field to model a state field on'); return; }
+
+  /* Clone the whole field, not just the input: these templates wrap each one
+     in a column that carries the spacing. */
+  const wrapper = source.closest('[class*="col-"], .form-group, .field, .tf-field, p') || source;
+  const clone = wrapper.cloneNode(true);
+  const input = clone.matches('input') ? clone : clone.querySelector('input');
+  if (!input) return;
+
+  input.id = 'merch-state';
+  input.name = 'state';
+  input.value = '';
+  input.setAttribute('placeholder', 'State*');
+  input.required = true;
+  /* A cloned label would still say "Town / City". */
+  const label = clone.querySelector('label');
+  if (label) setText(label, 'State');
+
+  wrapper.parentElement.insertBefore(clone, wrapper.nextSibling);
+  form.state = '#merch-state';
+  log('added a state field: this template has none and the store requires one');
+}
+
 function readCustomer(spec) {
   const f = spec.form || {};
   const v = (key) => (pick(f[key])?.value || '').trim();
@@ -2831,6 +3107,7 @@ function validateCustomer(spec) {
   if (!c.phone || c.phone.replace(/\D/g, '').length < 7) return 'Please enter a phone number we can reach you on.';
   if (!c.address) return 'Please enter your address.';
   if (!c.city) return 'Please enter your town or city.';
+  if (!c.state) return 'Please enter your state.';
   if (!c.pincode) return 'Please enter your postal code.';
   return null;
 }
@@ -2876,6 +3153,12 @@ async function paintPaymentOptions(spec) {
     if (!firstVisible) { firstVisible = radio; radio.checked = true; }
   }
 
+  /* The theme's own scripts run AFTER we hydrate, and they reset their radio
+     groups — so the method we selected here is unselected a moment later, and
+     the checkout falls back to whatever `chosenPaymentMethod` guesses. Assert
+     it again once they have finished. */
+  if (firstVisible) onThemeReady(() => { if (!pickAll(spec.paymentRadios).some((r) => r.checked)) firstVisible.checked = true; });
+
   /* Neither method available. Saying so beats a Place order button that can
      only ever be refused. */
   if (!firstVisible && radios.length) {
@@ -2886,10 +3169,17 @@ async function paintPaymentOptions(spec) {
 }
 
 function chosenPaymentMethod(spec, cfg) {
-  const chosen = pickAll(spec.paymentRadios).find((r) => r.checked);
+  const radios = pickAll(spec.paymentRadios);
+  const chosen = radios.find((r) => r.checked);
   if (chosen?.dataset.merchMethod) return chosen.dataset.merchMethod;
-  /* No radio to read: fall back to whichever the merchant actually allows,
-     preferring COD only when they have it switched on. */
+
+  /* Something is checked but it is not one of ours, or nothing is: use the
+     first method we actually kept rather than guessing. Guessing sent an
+     order down the ONLINE path on a template where the shopper had picked
+     cash on delivery. */
+  const firstKept = radios.find((r) => r.dataset.merchMethod);
+  if (firstKept) return firstKept.dataset.merchMethod;
+
   if (STORE?.payment?.codEnabled === false) return 'online';
   return cfg?.enabled ? 'online' : 'cod';
 }
@@ -2932,6 +3222,23 @@ function wireShippingQuote(spec, lines) {
   pin.addEventListener('blur', quote);
 }
 
+/* Hand the basket to the store once we know who is carrying it, so the
+   merchant's abandoned-cart list has something in it when the shopper leaves
+   without paying. Best-effort and never in the way. */
+function wireCartSave(spec) {
+  const email = pick(spec.form?.email);
+  if (!email) return;
+  let lastSaved = '';
+  const save = () => {
+    const value = email.value.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value) || value === lastSaved || !cart.count()) return;
+    lastSaved = value;
+    api.saveCart(value, cart.apiLines()).catch(() => {});
+  };
+  email.addEventListener('blur', save);
+  email.addEventListener('change', save);
+}
+
 /* When the store quotes more than one rate, relabel the theme's own shipping
    radios with what it actually offered rather than leaving "Flat Rate: $70.00"
    on screen next to a different number in the total. */
@@ -2954,6 +3261,24 @@ function paintShippingOptions(spec, quote) {
     });
     if (i === 0) radio.checked = true;
   });
+}
+
+/* The control that places the order. Named by class where the theme gives us
+   one, and otherwise by the WORDS on it — every template writes "Place Order",
+   "Check Out" or "Pay Now", and two of the four give that control no class we
+   could have guessed. */
+function findPlaceButton(spec) {
+  const named = pick(spec.placeBtn);
+  if (named) return named;
+
+  const WORDS = /^(place order|check ?out|pay now|complete order|confirm order|order now)$/i;
+  const candidates = $$('a, button').filter((el) => {
+    if (el.closest('header, footer, nav, .modal, .offcanvas')) return false;
+    return WORDS.test((el.textContent || '').replace(/\s+/g, ' ').trim());
+  });
+  /* The order summary sits last on these pages, so the final match is the one
+     that submits rather than a "checkout" link higher up. */
+  return candidates[candidates.length - 1] || null;
 }
 
 function busy(btn, on) {
@@ -3100,6 +3425,16 @@ function done(order) {
   cart.clear();
   pending.clear();
   currentKey = null;
+
+  /* Not every template HAS an order page — one of these four ships none, and
+     sending the shopper to `order.html` after they have paid lands them on a
+     404 holding a real order. Confirm it where they are instead. */
+  if (!THEME.pages?.order) {
+    notify('Order placed. Your reference is ' + (order.orderRef || order.id) + '.', 'success');
+    paintOrder({ order, items: order.items || [] });
+    return;
+  }
+
   location.href = pageUrl('order', { id: order.id });
 }
 
@@ -3107,10 +3442,18 @@ function done(order) {
    The confirmation page, and the same page reached later from an email. */
 pages.order = async () => {
   const id = param('id') || readJustPaid()?.id;
-  if (!id) return;
+
+  /* One template serves BOTH roles from one file (`trackorder.html` is its
+     order page and its lookup page), and the page table returns whichever
+     role it listed first. With no `?id=` there is no order to show, so the
+     page is the lookup form — and binding it as an order page left that form
+     dead. */
+  if (!id) return pages.track();
   let order;
   try { order = await api.order(id); } catch (e) { return showError(e); }
   paintOrder(order);
+  /* The same page may also carry a lookup form for a different order. */
+  await pages.track();
 };
 
 function readJustPaid() {
@@ -3126,8 +3469,17 @@ function paintOrder(order) {
      bare `status` is the INVOICE's, so a cancelled order still reads
      "confirmed" if you print that one. */
   put('.order-number|.order-id|[data-order-number]', o.orderRef || o.id);
+  /* These templates label the reference in prose ("Order number: #12345")
+     rather than giving it a class. */
+  for (const el of $$('p, span, li, div')) {
+    if (el.children.length) continue;
+    const text = (el.textContent || '').trim();
+    if (/^(order (number|id|ref[a-z]*)|reference)\s*[:#]/i.test(text)) {
+      setText(el, text.replace(/[:#].*$/, ': ') + (o.orderRef || o.id));
+    }
+  }
   put('.order-date|[data-order-date]', o.createdAt ? new Date(o.createdAt).toLocaleDateString() : '');
-  put('.order-total|.total-amount|[data-order-total]', money(o.total));
+  put('.order-total|.total-amount|[data-order-total]|.tf-totals-total-value|.total-value|.list-total .total', money(o.total));
   put('.order-status|[data-order-status]', o.orderStatus || o.status);
   put('.order-tracking|[data-order-tracking]', o.trackingNumber || o.awb || '');
   put('.order-carrier|[data-order-carrier]', o.carrier || '');
@@ -3186,15 +3538,45 @@ function paintOrder(order) {
 /* --- TRACK ---------------------------------------------------------------
    Find an order with an email and a reference, no account needed. */
 pages.track = async () => {
-  const form = pick('form');
-  const emailEl = pick('input[type="email"]|input[placeholder*="mail" i]');
-  const refEl = pick('input[placeholder*="order" i]|input[placeholder*="reference" i]|input[name="order_id"]|input[type="text"]');
-  if (!form || !emailEl || !refEl) return;
+  /* Pick the form by what it CONTAINS, not by being first on the page — the
+     first form is the header search on every one of these templates, so the
+     lookup was submitted with two empty strings and the store answered
+     "Enter your email and order reference." */
+  /* Pick the REFERENCE first and let the email be whatever is left. Scoring
+     both independently failed on a template where BOTH captions mention an
+     order — "Found in your order confirmation email" and a field whose id is
+     `order-idt` — so neither could win the email role and the form was thrown
+     away as incomplete. There are two boxes; naming one names the other. */
+  const REF = /order|reference|tracking|confirmation|invoice|#|\d{5}/i;
+  const caption = (i) => [i.placeholder, i.name, i.id,
+    i.closest('label, .single-input, p, div')?.querySelector('label')?.textContent || ''].join(' ');
+
+  const candidates = $$('form').map((form) => {
+    const inputs = $$('input', form).filter((i) => !/^(hidden|checkbox|radio|submit|button)$/.test(i.type));
+    if (inputs.length < 2) return { score: 0 };
+
+    /* The reference is the one whose caption is MOST about an order. */
+    const refScore = (i) => (REF.test(caption(i)) ? 1 : 0) + (/\bref|order\s*(id|no|number)|#/i.test(caption(i)) ? 1 : 0);
+    const ranked = [...inputs].sort((a, b) => refScore(b) - refScore(a));
+    const ref = refScore(ranked[0]) > 0 ? ranked[0] : null;
+
+    const rest = inputs.filter((i) => i !== ref);
+    const email = rest.find((i) => i.type === 'email') || rest.find((i) => /e-?mail/i.test(caption(i))) || rest[0];
+    return { form, email, ref, score: (email ? 1 : 0) + (ref ? 1 : 0) };
+  }).filter((c) => c.score === 2);
+
+  const found = candidates[0];
+  if (!found) { warn('no order-tracking form found on ' + location.pathname); return; }
+  const { form, email, ref } = found;
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const addr = email.value.trim();
+    const reference = ref.value.trim();
+    if (!addr || !reference) return notify('Enter the email you ordered with and your order reference.', 'error');
     try {
-      const order = await api.lookupOrder(emailEl.value.trim(), refEl.value.trim());
-      const id = order.id || order.orderId;
+      const order = await api.lookupOrder(addr, reference);
+      const id = order.id || order.orderId || order.order?.id;
       if (id) location.href = pageUrl('order', { id });
       else paintOrder(order);
     } catch (err) { showError(err); }
@@ -3215,10 +3597,15 @@ pages.account = async () => {
 
   showSignedIn(me);
   await Promise.all([paintOrders(), paintAddresses(), wishlist.sync()]);
+  wireAddressForm();
   wireSignOut();
 };
 pages.orders = async () => { if (token.get()) await paintOrders(); else showSignedOut(); };
-pages.addresses = async () => { if (token.get()) await paintAddresses(); else showSignedOut(); };
+pages.addresses = async () => {
+  if (!token.get()) return showSignedOut();
+  wireAddressForm();
+  await paintAddresses();
+};
 pages.orderDetail = pages.order;
 
 function showSignedOut() {
@@ -3238,7 +3625,7 @@ async function paintOrders() {
   const spec = { container: '.order-list|.account-orders tbody|table tbody|.tf-table-page-cart tbody', card: 'tr|.order-item' };
   const t = takeTemplate(spec);
   if (!t) return;
-  if (!orders.length) return renderEmpty(t.container, 'You have not placed an order yet.');
+  if (!orders.length) return renderEmpty(t.container, 'You have not placed an order yet.', spec);
   repeat(t, orders, (node, o) => {
     const cells = pickAll('td', node);
     const texts = [o.reference || o.id, new Date(o.createdAt).toLocaleDateString(), o.orderStatus || o.status, money(o.total ?? o.totalAmount)];
@@ -3250,10 +3637,12 @@ async function paintOrders() {
 async function paintAddresses() {
   let list = [];
   try { list = await api.addresses(); } catch (e) { return showError(e); }
-  const spec = { container: '.address-list|.account-addresses|.row', card: '.address-item|.single-address|[class*="col-"]' };
+  /* `.row` used to be in this list and matched the row that also holds the
+     "add an address" form, so an empty list took the form with it. */
+  const spec = { container: '.address-list|.account-addresses|.list-address', card: '.address-item|.single-address|.account-address-item' };
   const t = takeTemplate(spec);
   if (!t) return;
-  if (!list.length) return renderEmpty(t.container, 'No saved addresses yet.');
+  if (!list.length) return renderEmpty(t.container, 'No saved addresses yet.', spec);
   repeat(t, list, (node, a) => {
     setText(pick('.address-name|h5|h6', node), a.name || '');
     setText(pick('.address-body|p|address', node),
@@ -3263,6 +3652,20 @@ async function paintAddresses() {
       try { await api.makeAddressDefault(a.id); notify('Default address updated.', 'success'); }
       catch (err) { showError(err); }
     });
+    pick('.address-edit|[data-edit]', node)?.addEventListener('click', (e) => {
+      e.preventDefault();
+      const form = $$('form').find((f) => f.dataset.merchAddress);
+      if (!form) return;
+      form.dataset.merchEditing = a.id;
+      const set = (sel, v) => { const el = pick(sel, form); if (el) el.value = v || ''; };
+      set('input[placeholder*="name" i]:not([placeholder*="user" i])', a.name);
+      set('input[type="tel"]|input[placeholder*="phone" i]', a.phone);
+      set('input[placeholder*="address" i]|input[placeholder*="street" i]|textarea', a.line);
+      set('input[placeholder*="city" i]|input[placeholder*="town" i]', a.city);
+      set('input[placeholder*="state" i]', a.state);
+      set('input[placeholder*="zip" i]|input[placeholder*="post" i]|input[placeholder*="pin" i]', a.pincode);
+      form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
     pick('.address-delete|[data-delete]', node)?.addEventListener('click', async (e) => {
       e.preventDefault();
       try { await api.deleteAddress(a.id); node.remove(); }
@@ -3271,8 +3674,69 @@ async function paintAddresses() {
   });
 }
 
+/* The "add a new address" form on the account pages. Every template has one
+   and none of them was connected to anything. */
+function wireAddressForm() {
+  for (const form of $$('form')) {
+    if (form.dataset.merchAddress) continue;
+    const fields = {
+      name: pick('input[placeholder*="name" i]:not([placeholder*="user" i])', form),
+      phone: pick('input[type="tel"]|input[placeholder*="phone" i]|input[placeholder*="mobile" i]', form),
+      line: pick('input[placeholder*="address" i]|input[placeholder*="street" i]|textarea', form),
+      city: pick('input[placeholder*="city" i]|input[placeholder*="town" i]', form),
+      state: pick('input[placeholder*="state" i]', form),
+      pincode: pick('input[placeholder*="zip" i]|input[placeholder*="post" i]|input[placeholder*="pin" i]', form),
+    };
+    /* An address form is the one with a street and a town. Requiring a
+       postcode here matched nothing on one of these templates, whose address
+       block has only Address and City — so the form sat inert and pressing
+       Save submitted it natively. */
+    if (!fields.line || !(fields.city || fields.pincode)) continue;
+    form.dataset.merchAddress = '1';
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!token.get()) return notify('Please sign in first.', 'error');
+      const body = {
+        name: fields.name?.value.trim() || '',
+        phone: fields.phone?.value.trim() || '',
+        line: fields.line.value.trim(),
+        city: fields.city?.value.trim() || '',
+        state: fields.state?.value.trim() || '',
+        pincode: fields.pincode.value.trim(),
+      };
+      /* The store requires a postcode. Where the template has no field for
+         one, borrow it from an address the shopper already has rather than
+         refusing them for something they were never asked. */
+      if (!body.pincode) {
+        try { body.pincode = ((await api.addresses()) || []).find((a) => a.pincode)?.pincode || ''; } catch { /* ignore */ }
+      }
+      if (!body.name || !body.line) return notify('Please fill in your name and address.', 'error');
+      if (!body.pincode) {
+        warn('this template\u2019s address form has no postal-code field, and the store requires one');
+        return notify('We need a postal code to save this address. Please add one at checkout.', 'error');
+      }
+      try {
+        const editing = form.dataset.merchEditing;
+        if (editing) await api.updateAddress(editing, body);
+        else await api.addAddress(body);
+        notify(editing ? 'Address updated.' : 'Address saved.', 'success');
+        delete form.dataset.merchEditing;
+        form.reset();
+        await paintAddresses();
+      } catch (err) { showError(err); }
+    });
+  }
+}
+
 function wireSignOut() {
-  pickAll('a[href*="logout"]|.sign-out|[data-signout]').forEach((a) => {
+  /* Matched on href before, but these themes point Logout at `login.html` and
+     only the WORDS say what it does. */
+  const links = new Set([
+    ...$$('a[href*="logout"], a[href*="sign-out"], .sign-out, [data-signout]'),
+    ...$$('a, button').filter((el) => /^(log ?out|sign ?out)$/i.test((el.textContent || '').trim())),
+  ]);
+  links.forEach((a) => {
     a.addEventListener('click', async (e) => {
       e.preventDefault();
       try { await api.signOutEverywhere(); } catch { /* the local token goes either way */ }
@@ -3283,20 +3747,41 @@ function wireSignOut() {
 }
 
 function wirePasswordChange() {
-  const current = pick('input[placeholder*="current" i][type="password"]');
-  const next = pick('input[placeholder*="new" i][type="password"]');
-  const confirmEl = pick('input[placeholder*="confirm" i][type="password"]');
+  /* Themes label the first box just "Password*", not "Current password", so
+     matching on the word "current" found nothing and the form did nothing.
+     Three password boxes in one form means current / new / confirm, in order. */
+  let current = pick('input[placeholder*="current" i][type="password"]');
+  let next = pick('input[placeholder*="new" i][type="password"]');
+  let confirmEl = pick('input[placeholder*="confirm" i][type="password"]');
+  if (!current || !next) {
+    const form = $$('form').find((f) => f.querySelectorAll('input[type="password"]').length >= 3);
+    if (!form) return;
+    const boxes = $$('input[type="password"]', form);
+    [current, next, confirmEl] = boxes;
+  }
   if (!current || !next) return;
-  const btn = current.closest('form, div')?.querySelector('button');
-  btn?.addEventListener('click', async (e) => {
+
+  /* `closest('form, div')` returns whichever ancestor comes FIRST — which is
+     the wrapper div around the input, not the form, so the button was never
+     found and the form did nothing. Take the form, and listen for its submit
+     as well as the button, because either can be how the shopper sends it. */
+  const form = current.closest('form');
+  if (!form || form.dataset.merchPassword) return;
+  form.dataset.merchPassword = '1';
+
+  const submit = async (e) => {
     e.preventDefault();
+    if (!current.value || !next.value) return notify('Please fill in your current and new password.', 'error');
     if (confirmEl && confirmEl.value !== next.value) return notify('The two new passwords do not match.', 'error');
     try {
       await api.changePassword(current.value, next.value);
       notify('Password changed. You are signed out everywhere else.', 'success');
       current.value = next.value = ''; if (confirmEl) confirmEl.value = '';
     } catch (err) { showError(err); }
-  });
+  };
+
+  form.addEventListener('submit', submit);
+  form.querySelector('button, input[type="submit"]')?.addEventListener('click', submit);
 }
 
 /* --- AUTH ----------------------------------------------------------------
@@ -3319,6 +3804,14 @@ function wireAuthForms() {
   mountGoogleButton();
 }
 pages.auth = async () => { wireAuthForms(); };
+
+/* The theme tables name these pages `login` and `register`, and the binder was
+   called `auth` — so on three of the four themes the sign-in page fell through
+   to `unknown` and its form was never wired. The theme's form then submitted
+   NATIVELY, as a GET, which puts the shopper's password in the address bar,
+   in browser history and in the referrer of the next request. */
+pages.login = pages.auth;
+pages.register = pages.auth;
 pages.forgot = async () => { wireAuthForms(); wireResetForm(); };
 
 function wireLoginForm(form, email, password) {
@@ -3746,9 +4239,24 @@ async function boot() {
 
   /* Things every page has: the basket count in the header, the search box,
      and a category menu pointing at real categories. */
+  /* Sign-in forms are not only on the sign-in page — these themes put one in a
+     header dropdown and an offcanvas panel too, and an unwired one submits the
+     password in the URL. Wire every form on every page. */
+  try { wireAuthForms(); } catch (e) { warn('auth forms', e); }
+
+  /* The account controls are spread across several pages that no single role
+     covers — fashion keeps its change-password form on `account-setting.html`
+     and its addresses on `account-addresses.html`, and every theme puts a
+     Logout link in the header of all of them. Wire whichever are present. */
+  if (token.get()) {
+    try { wirePasswordChange(); wireAddressForm(); wireSignOut(); }
+    catch (e) { warn('account controls', e); }
+  }
+
   paintHeader();
   cart.onChange(paintHeader);
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
+  paintCurrencySwitcher().catch((e) => warn('currency switcher', e));
   if (PAGE !== 'listing') { wireSearchInputs(null); wireCategoryLinks(); }
 
   const run = PAGE.startsWith('policy:') ? () => pages.policy(PAGE.slice(7)) : (pages[PAGE] || pages.unknown);
