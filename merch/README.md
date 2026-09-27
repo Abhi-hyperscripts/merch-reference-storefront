@@ -59,13 +59,13 @@ One line per page, anywhere before `</body>`:
 That is the whole integration. The theme and the page role are worked out from
 the URL, so no page needs an attribute of its own.
 
-| Attribute | Default | What it does |
-|---|---|---|
-| `data-api` | same origin | Your shop's origin. Your store **is** the API — there is no separate host. |
-| `data-theme` | the folder name | `electronic` \| `fashion` \| `grocery` \| `jewellery`. Only needed if the folder was renamed. |
-| `data-page` | the filename | Force a role (below). Only needed for a page whose name says nothing. |
-| `data-google-client-id` | *(blank)* | Turns on Google sign-in. Must match the id in the store's admin. Blank = the button is hidden, not broken. |
-| `data-debug` | `false` | Logs what it decided and what it rendered. |
+| Attribute                 | Default         | What it does                                                                                               |
+| ------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------- |
+| `data-api`              | same origin     | Your shop's origin. Your store**is** the API — there is no separate host.                           |
+| `data-theme`            | the folder name | `electronic` \| `fashion` \| `grocery` \| `jewellery`. Only needed if the folder was renamed.      |
+| `data-page`             | the filename    | Force a role (below). Only needed for a page whose name says nothing.                                      |
+| `data-google-client-id` | *(blank)*     | Turns on Google sign-in. Must match the id in the store's admin. Blank = the button is hidden, not broken. |
+| `data-debug`            | `false`       | Logs what it decided and what it rendered.                                                                 |
 
 Or set `window.MERCH_CONFIG = { api: '…' }` before the tag.
 
@@ -214,12 +214,12 @@ in the SAME theme, so they inherit its head, header, footer and script tags,
 and their content is written in that theme's own classes — nothing is styled
 here and no palette, font or radius is touched.
 
-| Theme | Added |
-|---|---|
-| grocery | `login`, `register`, `forgot-password`, `order-received`, `blog`, `blog-details`, `addresses`, `returns`, `subscriptions`, `collections` |
-| jewellery | `order-received`, `track-order`, `addresses`, `returns`, `subscriptions`, `collections` |
-| electronic | `order-received`, `returns`, `subscriptions`, `collections` |
-| fashion | `returns`, `subscriptions`, `collections` |
+| Theme      | Added                                                                                                                                                        |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| grocery    | `login`, `register`, `forgot-password`, `order-received`, `blog`, `blog-details`, `addresses`, `returns`, `subscriptions`, `collections` |
+| jewellery  | `order-received`, `track-order`, `addresses`, `returns`, `subscriptions`, `collections`                                                          |
+| electronic | `order-received`, `returns`, `subscriptions`, `collections`                                                                                          |
+| fashion    | `returns`, `subscriptions`, `collections`                                                                                                              |
 
 `electronic/payment-confirmation.html` is NOT the order page: it is that
 theme's *pre*-payment screen, with demo card digits and a "Confirm Payment"
@@ -251,10 +251,10 @@ so the shopper sees no extra wait.
 
 **Measured, on `jewellery/` against a live store:**
 
-| | products shown | demo products still visible | hero |
-|---|---|---|---|
-| without it | 6 of 99 | **70** | untouched |
-| with it | 63 of 63 | **0** | merchant's banner |
+|            | products shown | demo products still visible | hero              |
+| ---------- | -------------- | --------------------------- | ----------------- |
+| without it | 6 of 99        | **70**                | untouched         |
+| with it    | 63 of 63       | **0**                 | merchant's banner |
 
 That theme's `main.js` is a bare IIFE with no ready wrapper, so Slick has
 already rebuilt every rail before our first answer arrives — and Slick rebuilds
@@ -367,27 +367,29 @@ reached. The last run:
 
 | | grocery | jewellery | electronic | fashion |
 |---|---|---|---|---|
-| through the template's own controls | 45 | 45 | 45 | 46 |
-| through the page's own merch.js client | 9 | 9 | 9 | 9 |
-| not reachable on the demo store | 3 | 3 | 3 | 2 |
+| through the template's own controls | 46 | 47 | 48 | 48 |
+| through the page's own merch.js client | 9 | 9 | 8 | 8 |
+| not exercised | 2 | 1 | 1 | 1 |
 
-The nine called through the client are the ones with no control to press:
-Google sign-in (needs Google's own flow), password reset (needs the token from
-the email), create-order / verify / abandon (the gateway's modal), address
-update / delete / set-default (no theme ships those buttons), and variants.
+The ones called through the client are those with no control to press: Google
+sign-in (needs Google's own flow), password reset (needs the token from the
+email), create-order / verify / abandon (the gateway's modal), and address
+update / delete / set-default, which no theme ships buttons for.
 
-Not reachable on the demo store, and why — none of these is a wiring fault:
+The demo store was seeded so the rest could be driven for real rather than
+declared untestable: three published blog posts, two collections over real
+catalogue items, three display currencies, and one variant group of three
+cold-pressed oils. `variants` and `blog/{slug}` went from "unreachable" to
+driven through the UI on the templates that have somewhere to show them.
 
-- `GET /api/products/{id}/variants` — all 7,832 products have `variantCount: 0`,
-  and the page only asks when a product has more than one variant.
-- `GET /api/blog/{slug}` — the store has no posts, so the strip is hidden and
-  there is nothing to link to. Verified separately by serving real-shaped
-  posts: all four list them, link with `?slug=`, and fetch the right one.
-- `GET /api/currencies` — only one of the four ships a plain currency label for
-  us to adopt; the others put a flag or a country name in it and keep their own.
-- `GET /api/auth/config` — read only when a theme ships somewhere to put a
-  Google button. Only one of the four does, so Google sign-in is unavailable on
-  the other three until a holder is added to their sign-in pages.
+Still not driven through the UI:
+
+- `GET /api/auth/config` on three of the four — it is read only when a theme
+  ships somewhere to put a Google button, and only one does. Google sign-in is
+  therefore unavailable on the other three until a holder is added to their
+  sign-in pages, which means adding a visible button to those themes.
+- `GET /api/products/{id}/variants` on grocery and jewellery — neither product
+  page has a variant selector to fill, so the binder returns before asking.
 
 ### Shapes that are easy to get wrong
 
@@ -435,24 +437,20 @@ wrong first:
 - **grocery** — the promo countdown in `assets/js/main.js` targets a date that
   has passed, so the topbar reads "Sorry, your session has expired." on every
   page. It is the theme's own timer, nothing to do with sign-in.
-- **grocery** — `.single-input` is styled only under `.rts-billing-details-area
-  form`. A form using it anywhere else gets input boxes with no border at all,
+- **grocery** — `.single-input` is styled only under `.rts-billing-details-area form`. A form using it anywhere else gets input boxes with no border at all,
   which is why the pages added here wrap their forms in that div.
 - **fashion** — the header, topbar and footer live INSIDE `<main id="wrapper">`,
   unlike every other theme, so a page grown by replacing main's contents loses
   all three.
 
-
 Found while testing, present in the **pristine** theme files with no merch.js
 anywhere near them. Left alone — they are the vendor's to fix:
 
-- `fashion/product-detail.html` (and its variants): `ReferenceError:
-  PhotoSwipeLightbox is not defined` — `zoom.js` runs before the lightbox
+- `fashion/product-detail.html` (and its variants): `ReferenceError: PhotoSwipeLightbox is not defined` — `zoom.js` runs before the lightbox
   finishes loading.
 - `fashion/index.html`: `$(...).modal is not a function` — the theme calls the
   jQuery Bootstrap plugin, which Bootstrap 5 removed.
-- `jewellery/blog-*`: a SoundCloud embed that throws `writeEmbed is not
-  defined` and trips a Trusted Types policy.
+- `jewellery/blog-*`: a SoundCloud embed that throws `writeEmbed is not defined` and trips a Trusted Types policy.
 - `grocery/`: 24 of its 38 pages are **0 bytes**, and ~90 of its images were
   saved as 0-byte `.html` files. The theme was scraped rather than extracted —
   `jewellery`'s own footer still carries the `HTTrack Website Copier` banner.

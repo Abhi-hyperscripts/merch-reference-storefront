@@ -231,23 +231,36 @@ function writeJson(key, value) {
    before /api/theme answers on a cold load. Themes hard-code "$36.00" in their
    demo markup — every one of those is overwritten. */
 let CURRENCY = CONFIG.currency;
+/* The shopper's chosen DISPLAY currency, or null for the store's own.
+   `/api/currencies` exists "for a currency switcher" and ships rates, so the
+   conversion is ours to do. It is display only: the store prices and charges
+   in its own currency, which is why the checkout and the order page always
+   show that one — see displayCurrencyFor(). */
+const DISPLAY_KEY = 'merch.currency';
+let DISPLAY = null;
+function readDisplayCurrency() {
+  try { return JSON.parse(localStorage.getItem(DISPLAY_KEY) || 'null'); } catch { return null; }
+}
+
 function money(amount) {
   /* A missing figure is NOT zero. `mrp` is null on most products, and
      Number(null) is 0 — so the obvious guard prints a struck-through
      "free" next to the real price. */
   if (amount == null || amount === '') return '';
-  const n = Number(amount);
-  if (!Number.isFinite(n)) return '';
+  const n0 = Number(amount);
+  if (!Number.isFinite(n0)) return '';
+  const d = DISPLAY && Number(DISPLAY.rate) > 0 ? DISPLAY : null;
+  const n = d ? n0 * Number(d.rate) : n0;
   try {
     return new Intl.NumberFormat(CURRENCY.locale || undefined, {
       style: 'currency',
-      currency: CURRENCY.code || 'INR',
+      currency: (d ? d.code : CURRENCY.code) || 'INR',
       currencyDisplay: 'narrowSymbol',
       minimumFractionDigits: n % 1 === 0 ? 0 : 2,
       maximumFractionDigits: 2,
     }).format(n);
   } catch {
-    return (CURRENCY.symbol || '') + n.toFixed(2);
+    return ((d ? d.symbol : CURRENCY.symbol) || '') + n.toFixed(2);
   }
 }
 
@@ -1903,34 +1916,87 @@ function paintStoreChrome(theme) {
    says which currencies it actually offers — usually none, in which case the
    control is a lie and comes off. */
 async function paintCurrencySwitcher() {
-  const holders = pickAll('.currency-switcher|li:has(> a[href="#"]) .currency|.header-currency|[data-currency-switcher]');
-  /* `children.length === 0` missed every switcher that carries an icon or a
-     flag inside it — which is three of the four — so they went on saying USD
-     while the store quoted INR. Read the element's OWN text instead, and only
-     inside the header, so nothing else on the page can match. */
   const ownText = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim();
-  const CODE = /^(USD|EUR|GBP|INR|AUD|CAD|AED|SGD|JPY|\$ ?Currency)$/i;
-  /* No header constraint: the one template that DOES ship a plain code puts it
-     outside every header container, and scoping to the header stopped it being
-     found at all. Own-text keeps a stray match from a price or a paragraph. */
-  const labels = $$('a, span, button').filter((el) => CODE.test(ownText(el)));
-  if (!labels.length && !holders.length) return;
+  /* A currency label is a code, optionally behind its symbol ("$ USD"), or the
+     word Currency. `children.length === 0` missed every one that carries an
+     icon or a flag — three of the four — so they went on saying USD while the
+     store quoted INR. */
+  const CODE_RE = /\b(USD|EUR|EURO|GBP|INR|AUD|CAD|AED|SGD|JPY)\b/i;
+  const isLabel = (t) => CODE_RE.test(t) || /^\W{0,2}\s*Currency$/i.test(t);
+  const labels = $$('a, span, button, div, li').filter((el) => {
+    const t = ownText(el);
+    return t && t.length <= 34 && isLabel(t);
+  });
+  if (!labels.length) return;
 
   let list = null;
   try { list = await api.currencies(); } catch { return; }
-  const base = list?.base;
+  const base = list?.base || { code: CURRENCY.code, symbol: CURRENCY.symbol };
   const others = list?.currencies || [];
+  const active = DISPLAY || base;
 
-  /* Nothing to switch to: show the store's own currency, and drop the menu. */
-  for (const el of labels) {
-    setText(el, base?.code || CURRENCY.code || '');
-    if (!others.length) {
+  /* Rewrite the code and the symbol inside whatever wording the theme used,
+     so "$ USD" becomes "₹ INR" and a plain "USD" becomes "INR". A label that
+     also names a country is left alone — "United States (INR ₹)" would be a
+     worse lie than the one we are fixing. */
+  const retitle = (el, cur) => {
+    const t = ownText(el);
+    if (/united states|united kingdom|india|emirates|singapore|japan|canada|australia/i.test(t)) return;
+    let next = t.replace(CODE_RE, cur.code).replace(/[$£€₹]|د\.إ/g, cur.symbol || '');
+    if (!CODE_RE.test(t)) next = t;                       // a bare "Currency"
+    if (next !== t) setText(el, next);
+  };
+  for (const el of labels) retitle(el, active);
+
+  /* Nothing to switch to: the control is a lie, so take the menu off. */
+  if (!others.length) {
+    for (const el of labels) {
       const menu = el.closest('li, .dropdown, .currency-switcher');
       const sub = menu?.querySelector('ul, .dropdown-menu, .submenu');
       if (sub) remove(sub);
       if (menu) menu.style.pointerEvents = 'none';
     }
+    return;
   }
+
+  /* The theme's own menu, filled with the currencies the merchant enabled.
+     Only entries that already look like a currency are touched — these menus
+     carry languages in the same list. */
+  const choices = [base, ...others.filter((c) => c.code !== base.code)];
+  for (const el of labels) {
+    const menu = el.closest('li, .dropdown, .currency-switcher, .header-currency');
+    const items = menu ? $$('.dropdown-item, .dropdown-menu a, ul li a', menu).filter((a) => CODE_RE.test(ownText(a) || a.textContent || '')) : [];
+    if (!items.length) continue;
+    const template = items[0];
+    const parent = template.parentElement;
+    const unit = parent && parent.tagName === 'LI' ? parent : template;
+    const host = unit.parentElement;
+    if (!host) continue;
+    items.forEach((a) => remove(a.parentElement?.tagName === 'LI' ? a.parentElement : a));
+
+    for (const cur of choices) {
+      const node = unit.cloneNode(true);
+      const a = node.matches('a') ? node : node.querySelector('a');
+      if (!a) continue;
+      setText(a, (cur.symbol ? cur.symbol + ' ' : '') + cur.code);
+      a.setAttribute('href', '#');
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        const pick = cur.code === base.code ? null : { code: cur.code, symbol: cur.symbol, rate: cur.rate };
+        try { localStorage.setItem(DISPLAY_KEY, JSON.stringify(pick)); } catch { /* private window */ }
+        location.reload();
+      });
+      host.appendChild(node);
+    }
+  }
+}
+
+/* Prices are quoted, and money is taken, in the store's OWN currency — the
+   catalogue has no currency parameter. So the pages where the shopper agrees
+   to an amount always show that currency, whatever they are browsing in. */
+function displayCurrencyFor(role) {
+  if (['checkout', 'order', 'orderDetail', 'invoice', 'track'].includes(role)) return null;
+  return readDisplayCurrency();
 }
 
 /* A list that came back empty. Rather than invent a message in our own styling,
@@ -2569,7 +2635,12 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
    navigation, not a state change — which is also why the price never has to be
    recomputed here. */
 async function paintVariants(spec, p) {
-  if (!spec.variants || !(p.variantCount > 1)) return;
+  if (!spec.variants) return;
+  /* `variantCount` stays 0 even for a product that IS in one of the store's
+     own variant groups — the catalogue projection does not carry them — so
+     gating on it meant the selector never appeared for any product. The
+     endpoint answers 200 with an empty list when there is no group, so the
+     honest thing is to ask, once, on the product page. */
   let group = null;
   try { group = await api.variants(p.id); } catch { return; }
   const options = group?.options || [];
@@ -4603,6 +4674,9 @@ async function boot() {
 
   /* The currency has to be right before anything is priced, so this one call
      is awaited ahead of the page. Everything else happens inside the binder. */
+  /* A display currency the shopper chose earlier, EXCEPT where they are about
+     to agree to an amount — the store charges in its own currency. */
+  DISPLAY = displayCurrencyFor(PAGE);
   await loadStoreSettings();
 
   /* Things every page has: the basket count in the header, the search box,
@@ -4625,6 +4699,10 @@ async function boot() {
   cart.onChange(paintHeader);
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   paintCurrencySwitcher().catch((e) => warn('currency switcher', e));
+  /* Two of these themes BUILD their currency control from their own script,
+     so at this point there is nothing on the page to find and the header went
+     on claiming USD over rupee prices. Run it again once they have. */
+  onThemeReady(() => { paintCurrencySwitcher().catch((e) => warn('currency switcher', e)); });
   if (PAGE !== 'listing') { wireSearchInputs(null); wireCategoryLinks(); }
 
   const run = PAGE.startsWith('policy:') ? () => pages.policy(PAGE.slice(7)) : (pages[PAGE] || pages.unknown);
