@@ -90,6 +90,12 @@ Run `--check` in CI. Edit `merch/merch.js`, never a template's copy.
   — the theme vendor's own Brevo account. Repoint or remove it before launch,
   or your customers' addresses go to them. (`merch.js` never touches that form;
   it belongs to the theme.)
+- **Copy the themes wrote about themselves is still theirs.** Seen on screen:
+  `fashion/` pops a fabricated "Nathan Collins has purchased! High neck midi
+  wool coat — 12 mins ago" notice and a topbar claiming "20% Off – Auto Applied
+  at Checkout"; `jewellery/` greets shoppers with "Welcome to Corano Jewelry
+  online store". None of it is true of your shop. `merch.js` does not rewrite
+  marketing copy — edit or remove these per theme before launch.
 - Every template's product, cart, checkout, order, account, returns,
   subscriptions and collections pages are driven end to end against a real
   store. What is measured, per template, is in

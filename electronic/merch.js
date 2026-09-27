@@ -1062,7 +1062,11 @@ const THEMES = {
            overridden inline or the stylesheet keeps winning. Name the element
            that carries it — the template we cloned is the SLIDE around it. */
         bg:    { sel: '.banner-bg-image', bg: true, value: bannerImage },
-        pre:   { sel: '.pre', text: (b) => b.alt || '' },
+        /* `alt` is the image's ACCESSIBILITY text, not a strapline. Printing
+           it put "Monsoon sale banner" across the hero. The store has no
+           subtitle field, so the slot comes off rather than carry either the
+           alt or the template's own demo copy. */
+        pre:   { sel: '.pre', dropWhen: () => true },
         title: { sel: '.title', text: bannerTitle },
         cta:   { sel: 'a.rts-btn', attr: 'href', value: bannerLink },
       },
@@ -1203,7 +1207,7 @@ const THEMES = {
         /* Slick reads `data-bg` in its own init, so both must change. */
         bg:    { sel: '.hero-slider-item', bg: true, value: bannerImage },
         title: { sel: '.slide-title', text: bannerTitle },
-        desc:  { sel: '.slide-desc', text: (b) => b.alt || '' },
+        desc:  { sel: '.slide-desc', dropWhen: () => true },
         cta:   { sel: 'a.btn-hero', attr: 'href', value: bannerLink },
       },
     },
@@ -1356,7 +1360,7 @@ THEMES.electronic = {
     card: '.wrap-slider',
     fields: {
       image: { sel: 'img', attr: 'src', value: bannerImage },
-      pre:   { sel: '.subtitle', text: (b) => b.alt || '' },
+      pre:   { sel: '.subtitle', dropWhen: () => true },
       title: { sel: '.title-display|.heading', text: bannerTitle },
       desc:  { sel: '.subheading', dropWhen: () => true },
       cta:   { sel: '.box-btn-slider a', attr: 'href', value: bannerLink },
@@ -1507,13 +1511,21 @@ THEMES.fashion = {
     returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
   footerContact: { phone: 'a[href^="tel:"]', email: 'a[href^="mailto:"]', address: '.footer-infor p.lh-26, .need-help-wrap p.lh-26|address' },
+  /* This theme names its basket badge `.count`; the inherited `.count-box`
+     matches nothing here, so the header kept the template's "12". */
+  header: { cartCount: '.nav-icon-item .count|.toolbar-count|.count', cartTotal: '.sub-total-price|.tf-totals-total-value' },
 
   banners: {
     container: '.sw-slide-show .swiper-wrapper|.tf-slideshow .swiper-wrapper',
     card: '.slideshow-wrap',
     fields: {
       image: { sel: '.sld_image img|img', attr: 'src', value: bannerImage },
-      title: { sel: '.heading', text: bannerTitle },
+      /* `.heading` is the WRAPPER around this theme's strapline and headline.
+         Writing to it replaced both with one unstyled line — the hero read as
+         16px body text. Name the headline itself, and drop the strapline the
+         store has no field for. */
+      title: { sel: '.heading .title_sld|.title_sld|.heading', text: bannerTitle },
+      strap: { sel: '.sub-text_sld', dropWhen: () => true },
       cta:   { sel: '.sld_content a', attr: 'href', value: bannerLink },
     },
   },
@@ -1932,14 +1944,27 @@ function paintStoreChrome(theme) {
      classes. Naming every one per theme is a losing game, so match on what
      the text IS, and only inside the page's chrome: never in the content,
      where an email belongs to a customer or a comment, not to the shop. */
-  const CHROME = 'header, footer, .tf-topbar, .tf-topbar_wrap, .topbar, .header-top, '
+  /* A `tel:` or `mailto:` anchor anywhere on a shop's page IS the shop's, so
+     those are swept document-wide. One theme puts its phone in a bar with no
+     <header> ancestor and a class no list would guess, and its link pointed at
+     a DIFFERENT demo number than the one it displayed — tapping it called
+     Norway. */
+  for (const a of $$('a[href^="tel:"]')) if (f.phone) { a.setAttribute('href', 'tel:' + f.phone.replace(/\s+/g, '')); setText(a, f.phone); }
+  for (const a of $$('a[href^="mailto:"]')) if (f.email) { a.setAttribute('href', 'mailto:' + f.email); setText(a, f.email); }
+
+  const CHROME = 'header, footer, [class*="header-top"], [class*="topbar"], [class*="contact"], '
+    + '.tf-topbar, .tf-topbar_wrap, .topbar, .header-top, '
     + '.offcanvas, .mb-canvas-content, .off-canvas-contact-widget, .need-help-wrap, .mb-contact, '
     + '.footer-address, .rts-footer-area, .footer-widget-area, .footer-area, .tf-footer';
   const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i;
   const PHONE_RE = /^[+(]?[\d][\d\s()+-]{6,}$/;
+  const LABELLED_PHONE_RE = /\+?\d[\d\s()-]{7,}\d/;
   const seen = new Set();
   for (const root of $$(CHROME)) {
-    for (const el of $$('a, p, span, li, address', root)) {
+    /* `div` and `h6` belong here too: one theme's hotline is a bare
+       `div.text-title`, so leaving them out meant the sweep walked straight
+       past the number it was written to replace. */
+    for (const el of $$('a, p, span, li, address, div, h6, strong', root)) {
       if (el.children.length || seen.has(el)) continue;
       seen.add(el);
       const t = (el.textContent || '').trim();
@@ -1949,6 +1974,12 @@ function paintStoreChrome(theme) {
       } else if (f.phone && PHONE_RE.test(t)) {
         if (el.tagName === 'A') el.setAttribute('href', 'tel:' + f.phone.replace(/\s+/g, ''));
         setText(el, f.phone);
+      } else if (f.phone && LABELLED_PHONE_RE.test(t)) {
+        /* "Hotline: +01 1234 8888" — the label and the number share one text
+           node, so a whole-string match never fires and the template's number
+           stays under the shop's name. Replace the NUMBER, keep the label.
+           Eight digits minimum, so a price or a badge count cannot match. */
+        setText(el, t.replace(LABELLED_PHONE_RE, f.phone));
       }
     }
   }
@@ -1962,6 +1993,9 @@ function paintStoreChrome(theme) {
    reading "USD" next to prices the store quotes in its own currency. The store
    says which currencies it actually offers — usually none, in which case the
    control is a lie and comes off. */
+/* Menus already rebuilt, so a second pass cannot append to them again. */
+const CURRENCY_MENUS = new WeakSet();
+
 async function paintCurrencySwitcher() {
   const ownText = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim();
   /* A currency label is a code, optionally behind its symbol ("$ USD"), or the
@@ -1970,7 +2004,12 @@ async function paintCurrencySwitcher() {
      store quoted INR. */
   const CODE_RE = /\b(USD|EUR|EURO|GBP|INR|AUD|CAD|AED|SGD|JPY)\b/i;
   const isLabel = (t) => CODE_RE.test(t) || /^\W{0,2}\s*Currency$/i.test(t);
+  /* Skip the entries WE added. They read as currency labels, so on the second
+     pass (this runs again once the theme's own scripts have built their
+     control) each one was treated as another switcher and had the whole menu
+     appended to it again — four copies of the currency list in the topbar. */
   const labels = $$('a, span, button, div, li').filter((el) => {
+    if (el.dataset.merchCurrency || el.closest('[data-merch-currency]')) return false;
     const t = ownText(el);
     return t && t.length <= 34 && isLabel(t);
   });
@@ -1990,7 +2029,9 @@ async function paintCurrencySwitcher() {
     const t = ownText(el);
     if (/united states|united kingdom|india|emirates|singapore|japan|canada|australia/i.test(t)) return;
     let next = t.replace(CODE_RE, cur.code).replace(/[$£€₹]|د\.إ/g, cur.symbol || '');
-    if (!CODE_RE.test(t)) next = t;                       // a bare "Currency"
+    /* A label reading "$ Currency" carries no code, but its SYMBOL is still
+       the template's dollar over a rupee shop. Swap the symbol, keep the word. */
+    if (!CODE_RE.test(t)) next = t.replace(/[$£€₹]|د\.إ/g, cur.symbol || '');
     if (next !== t) setText(el, next);
   };
   for (const el of labels) retitle(el, active);
@@ -2018,13 +2059,16 @@ async function paintCurrencySwitcher() {
     const parent = template.parentElement;
     const unit = parent && parent.tagName === 'LI' ? parent : template;
     const host = unit.parentElement;
-    if (!host) continue;
+    if (!host || CURRENCY_MENUS.has(host)) continue;   // once per menu, per page
+    CURRENCY_MENUS.add(host);
     items.forEach((a) => remove(a.parentElement?.tagName === 'LI' ? a.parentElement : a));
 
     for (const cur of choices) {
       const node = unit.cloneNode(true);
       const a = node.matches('a') ? node : node.querySelector('a');
       if (!a) continue;
+      node.dataset.merchCurrency = '1';
+      a.dataset.merchCurrency = '1';
       setText(a, (cur.symbol ? cur.symbol + ' ' : '') + cur.code);
       a.setAttribute('href', '#');
       a.addEventListener('click', (e) => {
@@ -4709,6 +4753,21 @@ async function runDeferredThemeScripts() {
     });
   }
   if (tags.length) log('ran ' + tags.length + ' theme scripts after hydration');
+
+  /* A theme script that waits for the page to be ready registers its handler
+     AFTER the real event has fired, because we ran it late on purpose. Those
+     handlers then never run at all: one theme starts every carousel inside
+     `$(window).on('load')`, so its hero never initialised and the headline
+     sat at opacity 0 — a blank banner on the shop's front page.
+
+     Firing both events once, after the scripts are in, makes the deferral
+     invisible to them. Neither can have run for these listeners already. */
+  if (tags.length) {
+    try {
+      document.dispatchEvent(new Event('DOMContentLoaded', { bubbles: true }));
+      window.dispatchEvent(new Event('load'));
+    } catch (e) { warn('could not replay the ready events', e); }
+  }
 }
 
 async function boot() {
