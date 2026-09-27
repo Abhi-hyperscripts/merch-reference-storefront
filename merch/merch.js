@@ -1140,6 +1140,7 @@ const THEMES = {
         excerpt: { sel: '.disc|p', text: (b) => b.excerpt || '' },
       },
     },
+    post: { title: '.blog-listing-content .blog-title|.blog-title', date: '.user-info .date|.date', cover: '.blog-listing .thumbnail img|.thumbnail img', body: '.blog-listing-content .blog-content|.blog-content' },
 
     checkout: {
       summary: {
@@ -1172,6 +1173,7 @@ const THEMES = {
       home: 'index.html', listing: 'shop.html', product: 'product-details.html',
       cart: 'cart.html', checkout: 'checkout.html', account: 'my-account.html',
       login: 'login-register.html', register: 'login-register.html', wishlist: 'wishlist.html',
+      blog: 'blog-grid-full-width.html', post: 'blog-details.html', forgot: 'forgot-password.html',
       order: 'order-received.html', track: 'track-order.html',
       addresses: 'addresses.html', returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
     },
@@ -1326,6 +1328,7 @@ THEMES.electronic = {
     track: 'order-tracking.html', account: 'my-account.html', orders: 'my-account-orders.html',
     addresses: 'my-account-address.html', login: 'login.html', register: 'register.html',
     wishlist: 'wish-list.html', forgot: 'forget-password.html',
+    blog: 'blog-grid.html', post: 'blog-detail.html',
     returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
   qtyInput: '.wg-quantity .quantity-product|.quantity-product',
@@ -1468,7 +1471,7 @@ THEMES.electronic = {
       excerpt: { sel: '.body-text', text: (b) => b.excerpt || '' },
     },
   },
-  post: { title: '.title-display|h1|h2.title', date: '.meta-item p', cover: '.image img|article img', body: '.blog-content|.content-inner' },
+  post: { title: '.blog-detail-wrap .heading h3|.title-display|h2.title', date: '.blog-detail-wrap .meta .body-text-1|.meta-item p', cover: '.blog-detail-wrap .image img|.image img', body: '.blog-detail-wrap .inner|.blog-content|.content-inner' },
 
   reinit() { refreshSwipers(); },
 };
@@ -1484,6 +1487,7 @@ THEMES.fashion = {
     track: 'track-order.html', account: 'account-page.html', orders: 'account-orders.html',
     addresses: 'account-addresses.html', login: 'login.html', register: 'register.html',
     wishlist: 'wishlist.html', forgot: 'forget-password.html', invoice: 'invoice.html',
+    blog: 'blog.html', post: 'blog-single.html',
     returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
 
@@ -1565,7 +1569,7 @@ THEMES.fashion = {
       excerpt: { sel: '.entry-desc', text: (b) => b.excerpt || '' },
     },
   },
-  post: { title: '.entry-title|h1|h2.title', date: '.entry-date', cover: '.blog-image img|article img', body: '.blog-content|.entry-content' },
+  post: { title: '.blog-content .entry-title|.entry-title', date: '.entry-meta .meta-date span|.entry-date', cover: '.blog-image img|article img', body: '.blog-content|.entry-content' },
 
   cart: {
     container: 'table.tf-table-page-cart tbody',
@@ -1752,7 +1756,14 @@ function detectRole() {
 
 /* Where each role lives in THIS theme, so links we write stay inside it. */
 function pageUrl(role, query = {}) {
-  const file = THEME?.pages?.[role] || role + '.html';
+  const file = THEME?.pages?.[role];
+  if (!file) {
+    /* The fallback below is a guess, and `post.html` exists in none of these
+       themes — so every blog post link pointed at a 404 on three of them,
+       silently. Say so instead of shipping a dead link in silence. */
+    warn(`this theme names no '${role}' page; linking to ${role}.html, which probably does not exist`);
+    return role + '.html' + qs(query);
+  }
   return file + qs(query);
 }
 function productHref(p) {
@@ -1893,7 +1904,16 @@ function paintStoreChrome(theme) {
    control is a lie and comes off. */
 async function paintCurrencySwitcher() {
   const holders = pickAll('.currency-switcher|li:has(> a[href="#"]) .currency|.header-currency|[data-currency-switcher]');
-  const labels = $$('a, span, button').filter((el) => el.children.length === 0 && /^(USD|EUR|GBP|\$ ?Currency|INR)$/i.test((el.textContent || '').trim()));
+  /* `children.length === 0` missed every switcher that carries an icon or a
+     flag inside it — which is three of the four — so they went on saying USD
+     while the store quoted INR. Read the element's OWN text instead, and only
+     inside the header, so nothing else on the page can match. */
+  const ownText = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim();
+  const CODE = /^(USD|EUR|GBP|INR|AUD|CAD|AED|SGD|JPY|\$ ?Currency)$/i;
+  /* No header constraint: the one template that DOES ship a plain code puts it
+     outside every header container, and scoping to the header stopped it being
+     found at all. Own-text keeps a stray match from a price or a paragraph. */
+  const labels = $$('a, span, button').filter((el) => CODE.test(ownText(el)));
   if (!labels.length && !holders.length) return;
 
   let list = null;
@@ -3966,7 +3986,7 @@ function wireAuthForms() {
     const email = pick('input[type="email"]|input[placeholder*="mail" i]|input[name*="email" i]', form);
     if (!email) continue;
 
-    if (pw.length === 0) { wireForgotForm(form, email); continue; }
+    if (pw.length === 0) { if (looksLikeForgot(form)) wireForgotForm(form, email); continue; }
     /* Two password boxes (or a name field) means registration. */
     const nameEl = pick('input[placeholder*="name" i]:not([placeholder*="user" i])', form);
     if (pw.length >= 2 || nameEl) wireRegisterForm(form, email, pw[0], nameEl);
@@ -4013,6 +4033,23 @@ function wireRegisterForm(form, email, password, nameEl) {
       location.href = pageUrl('account');
     } catch (err) { showError(err); }
   });
+}
+
+/* "An email box and no password" describes the NEWSLETTER SUBSCRIBE form on
+   every one of these templates. Wiring that as "forgot my password" meant a
+   shopper who typed their address into the footer and pressed Subscribe was
+   sent a password-reset email, and was never subscribed to anything. It also
+   made the endpoint look covered on a theme that ships no recovery page.
+
+   On a recovery page, the password-less email form IS the one — the themes do
+   not label it ("Submit" is all one of them says). Anywhere else it has to say
+   so. Marketing and utility forms are excluded either way. */
+function looksLikeForgot(form) {
+  const cls = (form.className || '') + ' ' + (form.id || '') + ' ' + (form.getAttribute('action') || '');
+  if (/newsletter|subscribe|form-sub\b|search|contact|comment|coupon|share|estimate/i.test(cls)) return false;
+  if (form.closest('footer, header, nav, .offcanvas, .modal, .tf-topbar')) return false;
+  if (/forgot|forget|reset-password|lost-password|recover/i.test(location.pathname)) return true;
+  return /forgot|reset|recover|lost (your )?password/i.test((form.innerText || '') + ' ' + cls);
 }
 
 function wireForgotForm(form, email) {
@@ -4162,7 +4199,7 @@ pages.post = async () => {
   if (!post) return;
 
   const spec = THEME.post || {};
-  setText(pick(spec.title || 'h1|h2.title|.blog-title'), post.title);
+  setText(pick(spec.title || '.blog-title|.entry-title|.post-title|article h1|h1.title'), post.title);
   setText(pick(spec.date || '.blog-date|.date|.entry-date'), postDate(post));
   document.title = post.title + document.title.replace(/^[^|\u2013-]*/, '');
 
@@ -4182,7 +4219,23 @@ pages.post = async () => {
      one of these themes was a sidebar of recent posts. */
   const html = markdown(String(post.body || post.excerpt || ''));
   const named = pick(spec.body);
-  if (named) { named.innerHTML = html; return; }
+  if (named) {
+    /* On two of these themes the body container ALSO holds the article's
+       heading and date, so replacing its innerHTML deleted the title we had
+       just written and the post rendered with no heading at all. Keep the
+       block the heading sits in and replace only what follows it. */
+    const head = spec.title ? pick(spec.title, named) : null;
+    const keep = head && [...named.children].find((c) => c === head || c.contains(head));
+    if (keep) {
+      [...named.children].forEach((c) => { if (c !== keep) c.remove(); });
+      const holder = document.createElement('div');
+      holder.innerHTML = html;
+      named.appendChild(holder);
+    } else {
+      named.innerHTML = html;
+    }
+    return;
+  }
 
   const blocks = proseBlocks();
   if (blocks.length) { blocks[0].innerHTML = html; blocks.slice(1).forEach(remove); }

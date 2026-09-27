@@ -360,6 +360,35 @@ All of them, public: `theme`, `currencies`, `auth/config`, `payment/config`,
 `shopper/sessions/revoke`, `shopper/password/{forgot,reset,change}`,
 `shopper/addresses` (CRUD + default), `shopper/wishlist` (list, add, remove).
 
+### What is measured, per template
+
+Every endpoint is driven on each of the four templates and recorded as it is
+reached. The last run:
+
+| | grocery | jewellery | electronic | fashion |
+|---|---|---|---|---|
+| through the template's own controls | 45 | 45 | 45 | 46 |
+| through the page's own merch.js client | 9 | 9 | 9 | 9 |
+| not reachable on the demo store | 3 | 3 | 3 | 2 |
+
+The nine called through the client are the ones with no control to press:
+Google sign-in (needs Google's own flow), password reset (needs the token from
+the email), create-order / verify / abandon (the gateway's modal), address
+update / delete / set-default (no theme ships those buttons), and variants.
+
+Not reachable on the demo store, and why — none of these is a wiring fault:
+
+- `GET /api/products/{id}/variants` — all 7,832 products have `variantCount: 0`,
+  and the page only asks when a product has more than one variant.
+- `GET /api/blog/{slug}` — the store has no posts, so the strip is hidden and
+  there is nothing to link to. Verified separately by serving real-shaped
+  posts: all four list them, link with `?slug=`, and fetch the right one.
+- `GET /api/currencies` — only one of the four ships a plain currency label for
+  us to adopt; the others put a flag or a country name in it and keep their own.
+- `GET /api/auth/config` — read only when a theme ships somewhere to put a
+  Google button. Only one of the four does, so Google sign-in is unavailable on
+  the other three until a holder is added to their sign-in pages.
+
 ### Shapes that are easy to get wrong
 
 These were all measured against a live store, and each one had been guessed
