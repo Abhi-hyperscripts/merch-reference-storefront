@@ -1,99 +1,99 @@
-# Merch reference storefront
+# Merch storefront templates
 
-A complete, working shop front built on the **Merch storefront API** — in plain
-HTML, CSS and JavaScript.
+Four e-commerce templates, each one a folder of static files that talks to the
+**Merch storefront API**. Upload a folder to any static host and it is a shop.
 
-No framework. No build step. No dependencies to install. Open the folder, serve
-it, and it runs. If you can read a `.js` file you can read all of this.
+| Folder | The look | Pages |
+|---|---|---|
+| `grocery/` | Supermarket / daily needs | 26 |
+| `jewellery/` | Jewellery, boutique | 38 |
+| `electronic/` | Electronics, multipurpose | 93 |
+| `fashion/` | Fashion, apparel | 53 |
 
-It exists so you do not have to start from an empty directory. Take it, point it
-at your store, and change whatever you like — or read it once, throw it away and
-write your own now that you know what the API expects.
+Every one of them is driven by the same file, `merch.js`, which each folder
+carries its own copy of. There is no build step and nothing to install.
 
 ---
 
-## Run it in two minutes
+## Deploy one
 
 ```bash
-git clone https://github.com/Abhi-hyperscripts/merch-reference-storefront
-cd merch-reference-storefront
+# 1. point the template at your shop: edit the first line of its merch.js
+#    export const STOREFRONT_URL = 'https://shop.mybrand.com';
 
-# Any static server will do; here are three.
-python3 -m http.server 5610
-#   npx serve -l 5610
-#   php -S localhost:5610
+# 2. upload the folder. That is the whole deployment.
+rsync -a grocery/ user@server:/var/www/shop/
 ```
 
-Then open <http://localhost:5610>. **There is no step two** — it ships in demo
-mode and runs a pretend shop entirely in the browser, so you can click through
-the catalogue, cart, coupons, checkout and order tracking before you have a
-store to point it at. Try coupon `WELCOME10` and gift card `GIFT500`.
+Netlify, Vercel, Cloudflare Pages, GitHub Pages, S3 or nginx all work — it is
+static files. Drag the folder into Netlify and you have a shop.
 
-When you are ready, edit one line in `config.js`:
+**Serve it over `http(s)://`, not `file://`.** `merch.js` is an ES module and
+browsers refuse to load those from the filesystem. To try one locally:
 
-```js
-export const API_BASE = 'https://shop.mybrand.com';
+```bash
+python3 -m http.server 5610     # then open http://localhost:5610/grocery/
 ```
 
-The demo switches itself off the moment that is not `'demo'`. Once you are on
-a real store, delete `js/demo-store.js` and the two demo lines at the bottom of
-`config.js` — nothing else refers to either, deliberately, so the code you are
-learning from is the code that talks to a real shop.
+With `STOREFRONT_URL` left empty the template shows its own demo content and
+fetches nothing, so you can look at the design before you have a store.
 
-**It must be served over `http://`, not opened as a file.** The code uses ES
-modules (`import` / `export`), which browsers refuse to load from `file://`.
-That is the only requirement.
-
-### Deploying it
-
-It is a folder of static files, so anywhere that serves static files works:
-GitHub Pages, Netlify, Vercel, Cloudflare Pages, S3, or nginx on a box you
-already own. There is nothing to build and no server-side runtime.
-
-You do **not** need to host it on the same domain as your shop. The store
-answers requests from any origin on purpose, and the credential is an
-`Authorization` header rather than a cookie, so nothing depends on the two
-sharing a site.
+You do **not** need to host on the same domain as your shop. The store answers
+any origin on purpose, and the credential is an `Authorization` header rather
+than a cookie.
 
 ---
 
-## What's in the box
+## What is in a template folder
 
-| File | What it does |
-|---|---|
-| `config.js` | **The only file you must edit.** API base URL, Google client id. |
-| `index.html` / `js/catalog.js` | The store's home (`GET /api/homepage`: banners, tiles, product rails, recently viewed) + catalogue: search, category, sort, in-stock, collections |
-| `product.html` / `js/product.js` | One product: gallery, variants, stock, reviews |
-| `collection.html` / `js/collection.js` | A curated group of products |
-| `cart.html` / `js/cart-page.js` | Basket, coupon, gift card, shipping quote |
-| `checkout.html` / `js/checkout.js` | **Both payment paths.** Read this one carefully. |
-| `order.html` / `js/order.js` | Confirmation, status, timeline, downloads |
-| `track.html` / `js/track.js` | Find an order with email + reference, no account |
-| `account.html` / `js/account.js` | Sign-in (Google and email + password), orders, addresses, wishlist |
-| `reset.html` / `js/reset.js` | The page a forgot-password email links to |
-| `test/domsmoke.mjs` | `node test/domsmoke.mjs` runs every page script against the demo mock under a fake DOM and fails on any unhandled error — the check that catches a script throwing inside its own catch — then every `test/scenarios/*.mjs`, which drives a booted page (fires listeners, fails one route, edits the cart, opens a product, filters while the home is in flight) and asserts what it wrote, stored and sent |
-| `js/api.js` | Every network call. One error shape, handled once. |
-| `js/cart.js` | Basket state in `localStorage` |
-| `js/ui.js` | Money, escaping, header/footer, toasts, product card |
-| `js/demo-store.js` | **Scaffolding — delete it.** The pretend shop, so this runs with no backend |
-| `css/base.css` | Reset, design tokens, layout |
-| `css/components.css` | Cards, buttons, forms, everything else |
+```
+grocery/
+  index.html, shop-*.html, cart.html, checkout.html, …   the theme's pages
+  merch.js                     the integration — the only file you edit
+  assets/                      the theme's own css, js, fonts and images
+```
 
-**The home page is the store's.** `index.html` first draws `GET /api/homepage` into `#home` — the
-merchant's ordered sections, each already resolved (banners with a mobile image, category and brand
-tiles, product rails, per-category groups, and a "recently viewed" rail this client fetches itself from
-`GET /api/recently-viewed` with its session id). `catalog.js` `renderHome()` is one switch on the section
-`type`; a type it does not know is skipped, and a failed read leaves the block hidden and is retried on the
-next Clear / back / Apply (never cached), so the filterable catalogue grid below is always the page. The
-home belongs to the **unfiltered** page only: a tile's own link (`?category=`), a search, a brand, a sort or
-"in stock only" changes the grid and the home is hidden above it, re-shown on the way back — rendered once
-per page life (a failed read — including a connection that drops mid-body — is retried; a render bug is
-not, and is reported in the console). A banner may link to http(s), `mailto:`, `tel:` or a store-relative
-path; `/collections/<handle>` and `/product/<id>` are mapped onto this client's own pages, other paths are
-left as the store sent them. A brand
-tile filters by slug (`?brand=`); the form has no brand field, so an active brand shows as a chip in the
-filter row with its own clear that keeps the other filters. `product.js` records each view with
-`api.recordView` (and the `product_view` event) so the rail fills as the shopper browses.
+`merch.js` is the same file in all four. It reads the theme's own markup,
+fills it with your shop's data, and never changes the design — which is why
+the four folders look completely different and behave identically.
+
+Read **[`merch/README.md`](merch/README.md)** before changing it: what it
+hydrates, which settings the admin panel owns, how to add a fifth theme, and
+the traps that cost real debugging.
+
+### merch.js lives in five places on purpose
+
+`merch/merch.js` is the source of truth. Each template carries a copy so that
+a folder can be deployed on its own. Four copies drift, so:
+
+```bash
+./merch/sync.sh            # push the source of truth into all four templates
+./merch/sync.sh --check    # fail if any template's copy has drifted
+```
+
+Run `--check` in CI. Edit `merch/merch.js`, never a template's copy.
+
+---
+
+## The state of each template
+
+- **`grocery/` is missing images.** Its vendor download arrived incomplete:
+  106 of its pages were empty files and 39 images referenced by its own markup
+  were never in the archive. The empty files have been removed, so those links
+  now 404 rather than opening a blank page. **Re-download this theme from the
+  vendor** before shipping it to a customer; nothing else here can fix it.
+- `electronic/` and `fashion/` load two scripts the archive did not include
+  (`photoswipe*.esm.min.js`) and one external stylesheet from `sibforms.com`.
+  Both are the theme's own lightbox extras and neither blocks the shop.
+- **The newsletter box posts to the theme author, not to you.** `electronic/`
+  ships 91 pages whose signup form has `action="https://…sibforms.com/serve/…"`
+  — the theme vendor's own Brevo account. Repoint or remove it before launch,
+  or your customers' addresses go to them. (`merch.js` never touches that form;
+  it belongs to the theme.)
+- Every template's product, cart, checkout, order, account, returns,
+  subscriptions and collections pages are driven end to end against a real
+  store. What is measured, per template, is in
+  [`merch/README.md`](merch/README.md).
 
 ---
 
@@ -122,7 +122,7 @@ it twice returns the order already created), and if the shopper pays then closes
 the tab before `verify` runs, the store still receives the gateway's own
 server-to-server notification and creates the order anyway.
 
-See `js/checkout.js`.
+See `payOnline()` and `placeOrder()` in `merch.js`.
 
 ### 2. The browser never decides a price
 
@@ -171,7 +171,7 @@ limited, `503` store briefly unreachable (this one also carries
 `"storeUnavailable": true`, so you can offer a retry instead of blaming input
 that was already fine).
 
-All of it is handled once, in `js/api.js`.
+All of it is handled once, in the `request()` helper at the top of `merch.js`.
 
 ---
 
@@ -179,7 +179,7 @@ All of it is handled once, in `js/api.js`.
 
 - **Product images are store-relative** (`/api/media/ph/ITM-001-a.svg`). Prefix
   them with your API base or they 404 against your own domain. `mediaUrl()` in
-  `js/api.js` does it.
+  `merch.js` does it.
 - **`/api/catalog` is paged**: `page` and `pageSize` (default 24, at most 200),
   with `X-Total-Count` / `X-Total-Pages` headers. It returns a bare array of the
   page. Filter server-side with `search`, `category`, `brand`, `color`, `size`
@@ -200,19 +200,19 @@ All of it is handled once, in `js/api.js`.
   catalogue, facets, categories, collections, currencies, auth/config,
   payment/config, product-by-id, events, order-by-id, the home page, recently viewed). A page that
   renders theme + catalogue + facets + categories + auth/config spends five of
-  the 120 (`index.html` spends seven: theme, currencies, home page, categories,
+  the 120 (a template's home page spends seven: theme, currencies, home page, categories,
   collections, catalogue, recently viewed); an address book edit spends one of the 90.
 - **Do not stack a coupon on top of an automatic discount in your own maths.**
   Whether they combine is decided by the merchant's books, not by the
   storefront, so subtracting both quietly promises a discount that may never
   arrive. Use the `newSubtotal` each preview returns — that is the store's own
   figure. (Found the hard way: the cart said ₹1,624.15 and the order came to
-  ₹2,249.10.) `js/cart-page.js` shows the conservative version.
+  ₹2,249.10.) `pages.cart` in `merch.js` shows the conservative version.
 - **`giftCardApplied`, `amountDue`, `paymentMethod` and `amountUncollected` are
   on every order shape** — `GET /api/orders/{id}`, the account list and
   `POST /api/orders/lookup` — so a confirmation page can re-fetch them. Read
   `paymentMethod` before labelling `amountDue`: on `online` it is money already
-  taken; on `cod` it is what the courier has yet to collect. `js/checkout.js`
+  taken; on `cod` it is what the courier has yet to collect. `merch.js`
   still stashes the checkout reply so the page renders before the re-fetch.
 - **Whatever carries a coupon to checkout must survive a refresh.** Hanging it
   off the Checkout button looks equivalent and is not: a bookmark, a reload or
@@ -225,13 +225,13 @@ All of it is handled once, in `js/api.js`.
 
 The sign-in page implements both methods the store offers: Google, and email +
 password (one form with sign-in / create-account / forgot-password modes; the
-reset email lands on `reset.html`). The account page implements **change
+reset email lands on the template's forgot-password page). The account page implements **change
 password** and **sign out everywhere**, and shows the recycled-address state
-(`emailDetached`). `js/api.js` exposes the whole password surface (`register`,
+(`emailDetached`). `merch.js` exposes the whole password surface (`register`,
 `login`, `forgotPassword`, `resetPassword`, `changePassword`) — see the store's
 `/api/docs/` and `docs/STOREFRONT_API_GUIDE.md`. The reset link is built on
 `auth/config`'s `password.resetOrigin` — the store's configured public origin —
-so `reset.html` must be served from THAT origin (a storefront hosted elsewhere
+so the reset page must be served from THAT origin (a storefront hosted elsewhere
 needs the store's `Storefront__PublicUrl` set to where the storefront lives). `GET /api/auth/config` tells you whether Google
 is switched on and whether reset-by-email works for a given store (password
 sign-in itself is always on). The store hashes passwords itself; your page never
@@ -266,48 +266,26 @@ Google, step by step:
    id, and returns its own token.
 4. That token goes on every later call as `Authorization: Bearer …`.
 
-Step 3 is why the client id must match in **both** `config.js` and the store's
+Step 3 is why the client id must match in **both** `MERCH_CONFIG` and the store's
 admin panel: without the audience check, a token issued to another app could be
 replayed against your shop.
 
 Accounts are optional. Browsing, cart, checkout and order tracking all work
-without one, and `account.html` says so plainly when sign-in is switched off
+without one, and the account page says so plainly when sign-in is switched off
 rather than showing a button that cannot work.
 
 ---
-
-## What was tested, and what wasn't
-
-Worth being straight about, because it tells you where to be careful.
-
-**Exercised end to end against a real store**, in a browser: catalogue with
-filters and sorting, collections, product pages, cart with live re-pricing,
-coupon and gift-card previews, shipping quotes, cash-on-delivery checkout,
-order confirmation, and order tracking by email + reference. A real order was
-placed and the totals shown matched the amount charged to the paisa.
-
-**Written against the documented shapes but not run:** the online-payment path
-(the store used for development had no gateway connected) and everything in
-`account.html` (Google sign-in was switched off on the development store, and
-the account surface was never driven end to end there). Demo mode refuses payment outright; it fakes
-a signed-in shopper only after a register or reset on the demo password forms
-(the token those mint is answered for), and any other token still gets the real
-store's 401s — so which calls need a token is still exactly what you learn there.
-
-That code is a well-informed starting point, not proven code. Nothing in it is
-guesswork about shapes — every call and every field is documented — but expect
-to spend a few minutes on it the first time.
 
 ---
 
 ## Conventions, if you want to keep them
 
 - **Escape everything from the store before putting it in HTML.** Product names
-  and review text are merchant- and shopper-supplied. `esc()` in `js/ui.js`
-  escapes quotes as well as angle brackets, because half of these land inside
-  attributes where a bare `"` is enough to inject a handler.
-- **No inline `onclick` anywhere.** A Content-Security-Policy worth having blocks
-  inline handlers, and you want to find that out now rather than later.
+  and review text are merchant- and shopper-supplied. `escapeHtml()` in
+  `merch.js` escapes quotes as well as angle brackets, because half of these
+  land inside attributes where a bare `"` is enough to inject a handler.
+- **No inline `onclick` anywhere.** A Content-Security-Policy worth having
+  blocks inline handlers, and you want to find that out now rather than later.
 - **Filters live in the URL**, so a filtered view can be shared, bookmarked and
   reached with the back button.
 - **The cart stores `itemId` and `qty` as truth.** Names and prices are cached

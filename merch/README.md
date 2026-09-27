@@ -1,5 +1,11 @@
 # merch.js — one file, every theme, the whole storefront API
 
+> **Where this file lives.** `merch/merch.js` is the source of truth, and every
+> template carries its own copy (`grocery/merch.js`, `fashion/merch.js`, …) so
+> that a template folder can be deployed on its own. Edit the one in `merch/`,
+> then run `./merch/sync.sh`; `./merch/sync.sh --check` fails if a copy has
+> drifted.
+
 `merch.js` wires the **Merch storefront API** into the bundled HTML themes
 (`electronic/`, `fashion/`, `grocery/`, `jewellery/`) **without changing a
 single line of their markup or CSS.**
@@ -52,7 +58,7 @@ is how one build can serve two shops.
 One line per page, anywhere before `</body>`:
 
 ```html
-<script type="module" src="../merch/merch.js"
+<script type="module" src="merch.js"
         data-api="https://shop.mybrand.com"></script>
 ```
 
