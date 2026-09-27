@@ -2183,6 +2183,32 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
 
    The modal is a small product page, so it takes the theme's own product
    field map — scoped to the modal instead of the document. */
+/* The quick view ships its OWN gallery and its own colour and size pickers,
+   neither of which the product-page selectors reach: the panel opened over a
+   jar of peanut butter showing the template's fashion photography, a colour
+   swatch reading "Beige" and a size run of S/M/L/XL. The pictures come from
+   the product; the pickers are the template's clothing demo and come off. */
+function paintQuickViewExtras(panel, p) {
+  const imgs = (p.imageUrls || []).filter(Boolean);
+  const items = pickAll('.quickView-item|.tf-quick-view-image .item|.tf-quick-view-image .swiper-slide', panel);
+  if (items.length && imgs.length) {
+    items.forEach((item, i) => {
+      if (i >= imgs.length) { remove(item); return; }     // six slots, two photos
+      const img = pick('img', item);
+      if (!img) return;
+      const url = mediaUrl(imgs[i]);
+      setAttr(img, 'src', url);
+      if (img.hasAttribute('data-src')) setAttr(img, 'data-src', url);
+      img.removeAttribute('srcset');
+      img.classList.remove('lazyload', 'lazyloading');
+      img.classList.add('lazyloaded');
+    });
+  }
+  /* Static swatches and sizes, hard-coded by the template. They describe a
+     dress, and nothing in the store backs them. */
+  pickAll('.tf-product-info-choose-option|.tf-product-info-variant-picker', panel).forEach(remove);
+}
+
 let quickViewProduct = null;
 
 function wireQuickView() {
@@ -2220,6 +2246,7 @@ function wireQuickView() {
       for (const panel of panels) {
         fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
         paintGalleryIn(panel, THEME.product?.gallery, p);
+        paintQuickViewExtras(panel, p);
       }
     } catch (err) { showError(err); }
   }, true);                                 // capture, so we fill BEFORE the theme opens it
@@ -3547,18 +3574,44 @@ function paintShippingOptions(spec, quote) {
    one, and otherwise by the WORDS on it — every template writes "Place Order",
    "Check Out" or "Pay Now", and two of the four give that control no class we
    could have guessed. */
+const onScreen = (el) => !!el && el.offsetParent !== null;
+
 function findPlaceButton(spec) {
   const named = pick(spec.placeBtn);
-  if (named) return named;
+  if (onScreen(named)) return named;
 
   const WORDS = /^(place order|check ?out|pay now|complete order|confirm order|order now)$/i;
   const candidates = $$('a, button').filter((el) => {
     if (el.closest('header, footer, nav, .modal, .offcanvas')) return false;
+    /* A button a shopper cannot see is not a button. One theme's only
+       "Check Out" lives in the mini-cart DRAWER, and accepting it made the
+       order look placeable while the checkout page offered nothing to press. */
+    if (!onScreen(el)) return false;
     return WORDS.test((el.textContent || '').replace(/\s+/g, ' ').trim());
   });
   /* The order summary sits last on these pages, so the final match is the one
      that submits rather than a "checkout" link higher up. */
-  return candidates[candidates.length - 1] || null;
+  if (candidates.length) return candidates[candidates.length - 1];
+  return buildPlaceButton(spec);
+}
+
+/* No visible way to place the order. Rather than leave the shopper stuck,
+   borrow the theme's OWN button — its element, its classes — and put one at
+   the end of the summary, so it looks like the rest of the page. */
+function buildPlaceButton(spec) {
+  const host = pick(spec.summary?.container) || pick('.tf-page-checkout|.wd-form-order|.checkout-area|.cottom-cart-right-area|main');
+  if (!host) { warn('this checkout has no place-order button and nowhere to put one'); return null; }
+  const model = $$('a, button').find((el) => onScreen(el)
+    && /\b(tf-btn|rts-btn|btn-sqr|btn-fill|btn-primary)\b/.test(el.className || '')
+    && !el.closest('header, footer, nav, .offcanvas, .modal'));
+  const btn = model ? model.cloneNode(true) : document.createElement('button');
+  for (const a of ['href', 'data-bs-toggle', 'data-bs-target', 'data-merch-action', 'id']) btn.removeAttribute?.(a);
+  btn.textContent = 'Place Order';
+  btn.style.width = '100%';
+  btn.style.marginTop = '16px';
+  host.appendChild(btn);
+  warn('this theme ships no place-order button on its checkout page; added one in the theme\u2019s own style');
+  return btn;
 }
 
 function busy(btn, on) {
@@ -3773,12 +3826,24 @@ function paintOrder(order) {
   });
 
   /* The order's own lines, drawn into whatever list the theme shows here. */
-  const spec = { container: '.order-items|.tf-table-page-cart tbody|.single-shop-list|table tbody|.list-product', card: 'tr|.item-product|.single-shop-list' };
+  /* `.item-parent` is one theme's order ROW. Leaving it out meant the lines
+     rendered as the template shipped them — "Product", "—", "—" — on a page
+     the shopper reads to check what they just bought. */
+  const spec = { container: '.order-items|.tf-table-page-cart tbody|.single-shop-list|table tbody|.list-product', card: 'tr|.item-product|.single-shop-list|.item-parent' };
   const t = takeTemplate(spec);
   if (t && items.length) {
     repeat(t, items, (node, l) => {
-      setText(pick('.cart-title|.prd_name|.title|a|td:first-child', node), l.name + ' × ' + l.qty);
-      setText(pick('.cart-total|.price|td:last-child', node), money(l.price * l.qty));
+      setText(pick('.cart-title|.prd_name|.information .title|.title|a|td:first-child', node), l.name);
+      /* Where the theme gives each figure its own cell, fill each one; where
+         it gives one, that one carries the line total. */
+      const qtyEl = pick('.quantity p|.quantity', node);
+      const priceEl = pick('.price p|.price', node);
+      const subEl = pick('.subtotal p|.subtotal', node);
+      if (qtyEl) setText(qtyEl, String(l.qty));
+      if (priceEl) setText(priceEl, money(l.price));
+      if (subEl) setText(subEl, money(l.price * l.qty));
+      if (!priceEl && !subEl) setText(pick('.cart-total|td:last-child', node), money(l.price * l.qty));
+      if (!qtyEl && priceEl) setText(priceEl, money(l.price) + ' × ' + l.qty);
       const img = pick('img', node);
       if (img && l.imageUrl) setAttr(img, 'src', mediaUrl(l.imageUrl));
     });
@@ -3789,7 +3854,11 @@ function paintOrder(order) {
   pickAll('a[href*="invoice"]|.download-invoice').forEach((a) => {
     if (!(o.invoicePdfUrl || o.invoiceId)) { show(a, false); return; }
     show(a, true);
-    a.setAttribute('href', o.invoicePdfUrl || api.invoicePdfUrl(o.id));
+    /* The store answers a RELATIVE path (`/api/orders/…/invoice.pdf`). Put
+       that on a link and the browser resolves it against the SHOP FRONT's own
+       host, not the store's — so a guest, who has no token and follows the
+       href, lands on a 404 of the wrong server. Resolve it against the API. */
+    a.setAttribute('href', mediaUrl(o.invoicePdfUrl) || api.invoicePdfUrl(o.id));
     /* The invoice route is the OWNER's: it answers 401 without an
        Authorization header, and a plain link cannot send one. Following the
        href would hand the shopper a 401 page. Fetch it with the token and

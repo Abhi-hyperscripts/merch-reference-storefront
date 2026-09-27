@@ -90,6 +90,12 @@ Run `--check` in CI. Edit `merch/merch.js`, never a template's copy.
   — the theme vendor's own Brevo account. Repoint or remove it before launch,
   or your customers' addresses go to them. (`merch.js` never touches that form;
   it belongs to the theme.)
+- **`electronic/` shipped no way to place an order.** Its only "Check Out"
+  button lives inside the mini-cart drawer, so the checkout page itself had
+  nothing a shopper could press. `merch.js` now requires a VISIBLE control and
+  builds one from the theme's own button when there is none. Worth knowing
+  because an automated test that dispatches a click will not notice this — only
+  clicking does.
 - **Copy the themes wrote about themselves is still theirs.** Seen on screen:
   `fashion/` pops a fabricated "Nathan Collins has purchased! High neck midi
   wool coat — 12 mins ago" notice and a topbar claiming "20% Off – Auto Applied
