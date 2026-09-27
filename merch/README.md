@@ -391,6 +391,24 @@ Still not driven through the UI:
 - `GET /api/products/{id}/variants` on grocery and jewellery — neither product
   page has a variant selector to fill, so the binder returns before asking.
 
+### Discounts, gift cards and the shop's own details
+
+Proven against the demo store's real records, not only against a refusal:
+
+- **Coupon** `FIRST10` (10% off, capped at ₹150, minimum order ₹500) on a
+  ₹889 basket: validated at ₹88.90 off, carried through to checkout, and the
+  store charged **₹800.10** on all four templates. Cancelled and refunded.
+  The coupon's `per_customer_limit` is enforced at CHECKOUT, not at validate —
+  a second order from the same email is refused after the shopper has been
+  told the code applied, so the error has to reach them, and it does.
+- **Gift card** `GIFT-DWK-2000`: one box takes either kind of code, so it is
+  tried as a coupon first and then as a gift card. The order total stays at
+  ₹889 and the card settles it — `giftCardApplied: 889, amountDue: 0`. A gift
+  card is a TENDER, not a discount, which is why the total does not move.
+- The shop's phone, email and address reach the footer AND the topbar, the
+  mobile menu and the offcanvas panel. A detail the merchant has not set takes
+  the line off the page rather than publishing the template's own.
+
 ### Shapes that are easy to get wrong
 
 These were all measured against a live store, and each one had been guessed

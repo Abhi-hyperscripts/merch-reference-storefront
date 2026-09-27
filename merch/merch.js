@@ -1045,6 +1045,7 @@ const THEMES = {
       addresses: 'addresses.html', returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
       blog: 'blog.html', post: 'blog-details.html',
     },
+    footerContact: { phone: '.call-area a.number|a[href^="tel:"]', email: 'a[href^="mailto:"]', address: 'address|[data-store-address]' },
     qtyInput: '.quantity-edit .input|.cart-edits .input',
     header: {
       cartCount: '.btn-border-only.cart .number|.cart-number',
@@ -1190,6 +1191,7 @@ const THEMES = {
       order: 'order-received.html', track: 'track-order.html',
       addresses: 'addresses.html', returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
     },
+    footerContact: { phone: 'li:has(i.pe-7s-call)|a[href^="tel:"]', email: 'li:has(i.pe-7s-mail) a|a[href^="mailto:"]', address: 'address|li:has(i.pe-7s-home)' },
     qtyInput: '.pro-qty input|.quantity input',
     header: { cartCount: '.cart-item-count|.item-count|.cart-item_count', cartTotal: '.cart-total-price' },
     resultCount: '.toolbar-amount|.product-showing',
@@ -1344,6 +1346,7 @@ THEMES.electronic = {
     blog: 'blog-grid.html', post: 'blog-detail.html',
     returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
+  footerContact: { phone: 'li:has(i.icon-phone) p|a[href^="tel:"]', email: 'li:has(i.icon-mail) p|a[href^="mailto:"]', address: '.footer-address p, .mb-contact p|address' },
   qtyInput: '.wg-quantity .quantity-product|.quantity-product',
   header: { cartCount: '.nav-cart .count-box|.count-box', cartTotal: '.sub-total-price|.tf-totals-total-value' },
   resultCount: '.count-text|.wrapper-control-shop .count-text',
@@ -1503,6 +1506,7 @@ THEMES.fashion = {
     blog: 'blog.html', post: 'blog-single.html',
     returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
+  footerContact: { phone: 'a[href^="tel:"]', email: 'a[href^="mailto:"]', address: '.footer-infor p.lh-26, .need-help-wrap p.lh-26|address' },
 
   banners: {
     container: '.sw-slide-show .swiper-wrapper|.tf-slideshow .swiper-wrapper',
@@ -1896,15 +1900,58 @@ function paintStoreChrome(theme) {
      ships "4710-4890 Breckinridge USA" and "demo@yourdomain.com", and an
      Indian grocer publishing those is telling customers where to write and
      where to turn up. Unset means the line comes off the page. */
-  const contact = (selector, value, apply) => {
-    for (const el of $$(selector)) {
-      if (value) apply(el, value);
-      else show(el.closest('li, .single-contact, .footer-contact-item, p') || el, false);
+  /* `mailto:` / `tel:` / <address> covers ONE of these four themes. The rest
+     print the shop's email and street address as plain <p> or <li> text, so
+     the merchant's details reached nothing and the template's own
+     "themesflat@gmail.com" and "600 N Michigan Ave, Chicago" stayed on the
+     page under the shop's name. Each theme names its own below. */
+  const sel = THEME.footerContact || {};
+
+  /* Several of these lines are an icon followed by the text. Replacing the
+     element's content would take the icon with it, so only the text moves. */
+  const writeText = (el, v) => {
+    const node = [...el.childNodes].reverse().find((n) => n.nodeType === 3 && n.textContent.trim());
+    if (node && el.children.length) node.textContent = ' ' + v;
+    else setText(el, v);
+  };
+
+  const contact = (selector, value, kind) => {
+    for (const el of pickAll(selector)) {
+      if (!value) { show(el.closest('li, .single-contact, .footer-contact-item, p, address') || el, false); continue; }
+      if (el.tagName === 'A' && kind === 'tel') el.setAttribute('href', 'tel:' + value.replace(/\s+/g, ''));
+      if (el.tagName === 'A' && kind === 'mail') el.setAttribute('href', 'mailto:' + value);
+      writeText(el, value);
     }
   };
-  contact('a[href^="tel:"]', f.phone, (a, v) => { a.href = 'tel:' + v.replace(/\s+/g, ''); setText(a, v); });
-  contact('a[href^="mailto:"]', f.email, (a, v) => { a.href = 'mailto:' + v; setText(a, v); });
-  contact('address, [data-store-address]', f.address, (el, v) => setText(el, v));
+  contact(sel.phone || 'a[href^="tel:"]', f.phone, 'tel');
+  contact(sel.email || 'a[href^="mailto:"]', f.email, 'mail');
+  contact(sel.address || 'address|[data-store-address]', f.address, 'text');
+
+  /* These themes repeat the shop's details OUTSIDE the footer — a topbar, a
+     mobile menu, an offcanvas "need help" panel — each with its own icon
+     classes. Naming every one per theme is a losing game, so match on what
+     the text IS, and only inside the page's chrome: never in the content,
+     where an email belongs to a customer or a comment, not to the shop. */
+  const CHROME = 'header, footer, .tf-topbar, .tf-topbar_wrap, .topbar, .header-top, '
+    + '.offcanvas, .mb-canvas-content, .off-canvas-contact-widget, .need-help-wrap, .mb-contact, '
+    + '.footer-address, .rts-footer-area, .footer-widget-area, .footer-area, .tf-footer';
+  const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i;
+  const PHONE_RE = /^[+(]?[\d][\d\s()+-]{6,}$/;
+  const seen = new Set();
+  for (const root of $$(CHROME)) {
+    for (const el of $$('a, p, span, li, address', root)) {
+      if (el.children.length || seen.has(el)) continue;
+      seen.add(el);
+      const t = (el.textContent || '').trim();
+      if (f.email && EMAIL_RE.test(t)) {
+        if (el.tagName === 'A') el.setAttribute('href', 'mailto:' + f.email);
+        setText(el, f.email);
+      } else if (f.phone && PHONE_RE.test(t)) {
+        if (el.tagName === 'A') el.setAttribute('href', 'tel:' + f.phone.replace(/\s+/g, ''));
+        setText(el, f.phone);
+      }
+    }
+  }
 
   /* The "about us" blurb is marketing copy rather than a fact a customer acts
      on, so an unset one keeps the template's. */
@@ -3674,10 +3721,8 @@ function paintOrder(order) {
   put('.order-status|[data-order-status]', o.orderStatus || o.status);
   put('.order-tracking|[data-order-tracking]', o.trackingNumber || o.awb || '');
   put('.order-carrier|[data-order-carrier]', o.carrier || '');
-  put('.payment-method .metod|.order-payment|[data-order-payment]',
-    o.paymentMethod === 'cod'
-      ? (o.amountUncollected > 0 ? 'Cash on delivery — ' + money(o.amountUncollected) + ' due' : 'Cash on delivery')
-      : 'Paid online');
+  put('.payment-method .metod|.order-payment|[data-order-payment]', paymentLine(o));
+  put('.gift-card-applied|[data-gift-card]', Number(o.giftCardApplied) > 0 ? money(o.giftCardApplied) : '');
   pickAll('a[href*="tracking"]|.track-shipment').forEach((a) => {
     if (o.trackingUrl) { a.setAttribute('href', o.trackingUrl); a.setAttribute('target', '_blank'); show(a, true); }
     else show(a, false);
@@ -3743,6 +3788,23 @@ function paintOrder(order) {
       } catch (err) { showError(err); }
     });
   });
+}
+
+/* What the shopper actually paid with. A gift card is a TENDER, not a
+   discount: the order total stays the same and the card settles it. The store
+   reports `giftCardApplied` and nothing read it, so an order paid in full by a
+   gift card said "Cash on delivery" and never mentioned the card. */
+function paymentLine(o) {
+  const gift = Number(o.giftCardApplied) || 0;
+  const due = Number(o.amountDue);
+  const parts = [];
+  if (gift > 0) parts.push('Gift card \u2014 ' + money(gift) + ' applied');
+  if (gift === 0 || due !== 0) {
+    parts.push(o.paymentMethod === 'cod'
+      ? (o.amountUncollected > 0 ? 'Cash on delivery \u2014 ' + money(o.amountUncollected) + ' due' : 'Cash on delivery')
+      : 'Paid online');
+  }
+  return parts.join(' \u00b7 ');
 }
 
 /* --- TRACK ---------------------------------------------------------------
