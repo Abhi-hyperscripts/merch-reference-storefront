@@ -48,7 +48,7 @@
    Fill it in and the same pages show your real catalogue instead.
    =========================================================================== */
 
-export const STOREFRONT_URL = '';
+export const STOREFRONT_URL = 'https://demo.wisetracktechnologies.com/admin';
 
 /* ---------------------------------------------------------------------------
    WHO OWNS THE LOOK — the admin panel, or this template?
@@ -1121,25 +1121,43 @@ const THEMES = {
     product: {
       fields: {
         title:    { sel: '.contents .product-title', text: (p) => p.name },
-        category: { sel: '.product-catagory', text: (p) => p.category || '' },
+        category: { sel: '.product-catagory', text: (p) => p.category || '', hideWhen: (p) => !p.category },
         desc:     { sel: '.contents > p', text: (p) => p.description || '' },
-        /* The price sits as a bare text node next to the struck-through one,
-           so we rewrite that node rather than the element — but only when it
-           really is text, because the quick-view modal shapes it differently
-           and `childNodes[0].nodeValue` throws there. */
         price:    { sel: '.product-price', each: (el, p) => {
-          const first = el.firstChild;
-          if (first && first.nodeType === 3) first.nodeValue = money(p.price) + ' ';
-          else el.insertBefore(document.createTextNode(money(p.price) + ' '), el.firstChild);
+          const cur = el.querySelector('.current-price');
+          if (cur) cur.textContent = money(p.price) + ' ';
+          else {
+            const first = el.firstChild;
+            if (first && first.nodeType === 3) first.nodeValue = money(p.price) + ' ';
+            else el.insertBefore(document.createTextNode(money(p.price) + ' '), el.firstChild);
+          }
+          const old = el.querySelector('.old-price');
+          if (old) {
+            if (p.mrp && p.mrp > p.price) {
+              old.textContent = money(p.mrp);
+              show(old, true);
+            } else {
+              show(old, false);
+            }
+          }
+          const tax = el.querySelector('.tax-note');
+          if (tax) {
+            if (p.taxNote) {
+              tax.textContent = '(' + p.taxNote + ')';
+              show(tax, true);
+            } else {
+              show(tax, false);
+            }
+          }
         } },
         mrp:      { sel: '.product-price .old-price', text: mrpText, hideWhen: hasNoMrp },
-        sku:      { sel: '.product-uniques .sku', text: (p) => p.unit ? 'Unit: ' + p.unit : '' },
         add:      { sel: '.product-bottom-action .rts-btn:not(.ml--20)', action: 'add' },
-        wish:     { sel: '.product-bottom-action .ml--20', action: 'wishlist' },
+        wish:     { sel: '.product-bottom-action .ml--20, .single-share-option:first-child', action: 'wishlist' },
         reviews:  { sel: '.rating-stars-group span', each: (el) => el.classList.add('review-count') },
       },
       gallery: { images: '.product-thumb-area .thumb-wrapper .product-thumb', thumbs: '.product-thumb-filter-group .thumb-filter' },
-      taxNote: '.product-price + .tax-note',
+      variants: { container: '.product-variants-container' },
+      taxNote: '.product-price .tax-note',
     },
 
     cart: {
@@ -2477,7 +2495,7 @@ function wireQuickView() {
      offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
      the shopper opens has to be the product they clicked. */
   const panels = [];
-  for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper', '.modal-quick-view']) {
+  for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper:not(.in-shopdetails)', '.modal-quick-view']) {
     $$(sel).forEach((el) => { if (!panels.includes(el)) panels.push(el); });
   }
   if (!panels.length || panels[0].dataset.merchQuickView) return;
@@ -2989,8 +3007,11 @@ pages.product = async () => {
   fillFields(document, spec.fields, p, { node: document, qtyEl: pick(THEME.qtyInput) });
   document.title = p.name + document.title.replace(/^[^|–-]*/, '');
 
+  paintBreadcrumbs(p);
   paintGallery(spec.gallery, p);
   await paintVariants(spec, p);
+  paintProductUniques(p);
+  paintProductTabs(p);
   await paintReviews(p);
   await paintRelated(p);
 
@@ -3002,6 +3023,21 @@ pages.product = async () => {
   THEME.reinit?.();
   onThemeReady(() => paintPriceButtons(p));
 };
+
+function paintBreadcrumbs(p) {
+  const wrapper = pick('.navigator-breadcrumb-wrapper');
+  if (!wrapper) return;
+  const catLink = pick('.breadcrumb-cat, a:nth-of-type(2)', wrapper);
+  if (catLink && p.category) {
+    setText(catLink, p.category);
+    catLink.setAttribute('href', pageUrl('listing', { category: p.category }));
+  }
+  const prodLink = pick('.breadcrumb-prod, .current', wrapper);
+  if (prodLink) {
+    setText(prodLink, p.name);
+    prodLink.setAttribute('href', 'javascript:void(0);');
+  }
+}
 
 /* Any control whose LABEL carries the price. The theme rewrites these from the
    price element after it loads, so they are corrected here, last. */
@@ -3036,6 +3072,52 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
   if (!gallery) return;
   const urls = (p.imageUrls || []).map(mediaUrl);
   if (!urls.length) return;
+
+  // Grocery interactive zoom gallery with dynamic thumbnails
+  const thumbArea = pick('.product-thumb-area');
+  const filterGroup = pick('.product-thumb-filter-group', thumbArea || document);
+  if (thumbArea && filterGroup) {
+    const existingWrappers = pickAll('.thumb-wrapper', thumbArea);
+    existingWrappers.forEach((el) => remove(el));
+    filterGroup.replaceChildren();
+
+    urls.forEach((url, i) => {
+      const wrapper = document.createElement('div');
+      wrapper.className = `thumb-wrapper thumb-idx-${i} filterd-items ${i === 0 ? 'figure' : 'hide'}`;
+      wrapper.innerHTML = `
+        <div class="product-thumb zoom" onmousemove="zoom(event)" style="background-image: url('${url}')">
+          <img src="${url}" alt="${escapeHtml(p.name)}">
+        </div>
+      `;
+      thumbArea.insertBefore(wrapper, filterGroup);
+
+      if (urls.length > 1) {
+        const filterBtn = document.createElement('div');
+        filterBtn.className = `thumb-filter filter-btn ${i === 0 ? 'active' : ''}`;
+        filterBtn.dataset.show = `.thumb-idx-${i}`;
+        filterBtn.innerHTML = `<img src="${url}" alt="${escapeHtml(p.name)} thumb ${i + 1}">`;
+
+        filterBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          pickAll('.thumb-wrapper.filterd-items', thumbArea).forEach((w) => {
+            w.classList.add('hide');
+            w.classList.remove('figure');
+          });
+          wrapper.classList.remove('hide');
+          wrapper.classList.add('figure');
+          pickAll('.thumb-filter.filter-btn', filterGroup).forEach((b) => b.classList.remove('active'));
+          filterBtn.classList.add('active');
+        });
+        filterGroup.appendChild(filterBtn);
+      }
+    });
+
+    if (urls.length <= 1) {
+      show(filterGroup, false);
+    }
+    return;
+  }
+
   for (const sel of [gallery.images, gallery.thumbs]) {
     const nodes = within(sel);
     if (!nodes.length) continue;
@@ -3063,87 +3145,333 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
   }
 }
 
-/* Variants. Where a theme has a picker we relabel its options; where it has
-   none we leave the page alone and the add button sends the base item. */
-/* Variants are not option combinations to be assembled: the store answers
-   { groupId, title, options: [{ id, name, label, price, availability, current }] }
-   and every option IS a product in its own right. Choosing one is therefore a
-   navigation, not a state change — which is also why the price never has to be
-   recomputed here. */
+/* Variants & Attributes. Displays variant choices (navigates between products in a group)
+   and dynamic product attributes (e.g. Size, Color) with responsive styling. */
 async function paintVariants(spec, p) {
-  if (!spec.variants) return;
-  /* `variantCount` stays 0 even for a product that IS in one of the store's
-     own variant groups — the catalogue projection does not carry them — so
-     gating on it meant the selector never appeared for any product. The
-     endpoint answers 200 with an empty list when there is no group, so the
-     honest thing is to ask, once, on the product page. */
   let group = null;
-  try { group = await api.variants(p.id); } catch { return; }
+  try { group = await api.variants(p.id); } catch { /* best effort */ }
   const options = group?.options || [];
-  if (options.length < 2) return;
+  const attrs = Array.isArray(p.attributes) ? p.attributes.filter((a) => a.key && a.value) : [];
 
-  const container = pick(spec.variants.container);
+  const container = pick('.product-variants-container') || (spec?.variants?.container ? pick(spec.variants.container) : null);
   if (!container) return;
-  const picker = pickAll(spec.variants.group, container)[0];
-  if (!picker) return;
-  /* Hide the theme's other pickers: it ships one per option type (colour,
-     size) and this store has exactly one axis. */
-  pickAll(spec.variants.group, container).slice(1).forEach((el) => show(el, false));
 
-  setText(pick('.variant-picker-label|.option-title|h6', picker), (group.title || 'Options') + ':');
-  const values = pick('.variant-picker-values|select|ul', picker);
-  if (!values) return;
+  container.replaceChildren();
 
-  if (values.tagName === 'SELECT') {
-    values.replaceChildren(...options.map((o) => {
-      const el = document.createElement('option');
-      el.value = o.id; el.textContent = o.label || o.name;
-      el.selected = !!o.current;
-      return el;
-    }));
-    values.addEventListener('change', () => { location.href = productHref({ id: values.value }); });
-    return;
+  // 1. Variant Group Selector (Mustard Oil: Groundnut, Mustard, Sunflower)
+  if (options.length >= 2) {
+    const cur = options.find((o) => o.current) || options[0];
+    const groupDiv = document.createElement('div');
+    groupDiv.className = 'variant-selection mb--20';
+    groupDiv.innerHTML = `
+      <div class="variant-label mb--10" style="font-weight: 600; font-size: 15px; color: #222;">
+        <span>${escapeHtml(group.title || 'Options')}:</span> 
+        <span class="selected-variant-label" style="font-weight: 500; color: var(--color-primary); margin-left: 6px;">${escapeHtml(cur?.label || cur?.name || '')}</span>
+      </div>
+      <div class="variant-options d-flex flex-wrap gap-2"></div>
+    `;
+    const optsRow = groupDiv.querySelector('.variant-options');
+    options.forEach((o) => {
+      const isCur = !!o.current;
+      const a = document.createElement('a');
+      a.href = productHref({ id: o.id });
+      a.className = `rts-btn ${isCur ? 'btn-primary' : 'btn-outline-primary'}`;
+      a.style.cssText = `padding: 7px 18px; font-size: 14px; border-radius: 6px; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; border: 1.5px solid var(--color-primary); cursor: pointer; transition: all 0.2s ease; ${isCur ? 'background: var(--color-primary); color: #fff;' : 'background: #fff; color: var(--color-primary);'}`;
+      a.innerHTML = `${escapeHtml(o.label || o.name)}${o.price ? ` <span style="font-size: 12px; margin-left: 6px; opacity: 0.85;">(${money(o.price)})</span>` : ''}`;
+      if (isCur) {
+        a.addEventListener('click', (e) => e.preventDefault());
+      }
+      optsRow.appendChild(a);
+    });
+    container.appendChild(groupDiv);
   }
 
-  /* Clone the theme's own swatch — input + label, or whatever single node it
-     uses — once per option. */
-  const unit = [...values.children].slice(0, values.firstElementChild?.tagName === 'INPUT' ? 2 : 1);
-  if (!unit.length) return;
-  values.replaceChildren();
-  options.forEach((o, i) => {
-    const id = 'merch-variant-' + i;
-    for (const proto of unit) {
-      const node = proto.cloneNode(true);
-      if (node.tagName === 'INPUT') { node.id = id; node.value = o.id; node.name = 'merch-variant'; node.checked = !!o.current; }
-      else {
-        if (node.tagName === 'LABEL') node.setAttribute('for', id);
-        node.dataset.value = o.label || o.name;
-        const t = pick('.text-title|.tooltip|span', node);
-        setText(t || node, o.label || o.name);
-        if (o.availability === 'out') node.classList.add('disabled');
+  // 2. Product Attributes Display (Size: 500 gm, Color: ..., etc.)
+  if (attrs.length) {
+    const attrsDiv = document.createElement('div');
+    attrsDiv.className = 'product-attributes-row mb--20';
+    attrs.forEach((attr) => {
+      const row = document.createElement('div');
+      row.className = 'd-flex align-items-center mb--10';
+      const label = attr.key.charAt(0).toUpperCase() + attr.key.slice(1);
+      row.innerHTML = `
+        <span style="font-weight: 600; font-size: 15px; color: #222; min-width: 70px;">${escapeHtml(label)}:</span>
+        <span class="attr-pill" style="display: inline-block; padding: 6px 16px; border: 1.5px solid var(--color-primary); background: rgba(98, 155, 41, 0.08); color: var(--color-primary); border-radius: 6px; font-weight: 600; font-size: 14px;">
+          ${escapeHtml(attr.value)}
+        </span>
+      `;
+      attrsDiv.appendChild(row);
+    });
+    container.appendChild(attrsDiv);
+  }
+}
+
+function paintProductUniques(p) {
+  const container = pick('.product-uniques');
+  if (!container) return;
+  container.replaceChildren();
+
+  const list = [];
+  if (p.id) {
+    list.push({ label: 'Product Code', value: p.id.split('-')[0].toUpperCase() });
+  }
+  if (p.brandName) {
+    list.push({ label: 'Brand', value: p.brandName });
+  }
+  if (p.category) {
+    list.push({ label: 'Category', value: p.category });
+  }
+  if (p.unit) {
+    list.push({ label: 'Unit', value: p.unit });
+  }
+  if (Array.isArray(p.attributes)) {
+    p.attributes.forEach((attr) => {
+      if (attr.key && attr.value) {
+        list.push({
+          label: attr.key.charAt(0).toUpperCase() + attr.key.slice(1),
+          value: attr.value
+        });
       }
-      node.addEventListener('click', () => { if (!o.current) location.href = productHref({ id: o.id }); });
-      values.appendChild(node);
-    }
+    });
+  }
+  list.push({
+    label: 'Availability',
+    value: p.availability === 'in_stock' ? 'In Stock' : 'Out of Stock'
   });
+
+  list.forEach((item) => {
+    const span = document.createElement('span');
+    span.className = 'product-unipue mb--10';
+    span.innerHTML = `<span style="font-weight: 600; margin-right: 10px; color: #222;">${escapeHtml(item.label)}:</span> <span style="font-weight: 400; color: #666;">${escapeHtml(item.value)}</span>`;
+    container.appendChild(span);
+  });
+}
+
+function paintProductTabs(p) {
+  // --- Tab 1: Product Details (#home-tab-pane) ---
+  const homeTab = pick('#home-tab-pane');
+  if (homeTab) {
+    const disc = pick('.disc', homeTab);
+    if (disc) setText(disc, p.description || '');
+
+    const detailsRow = pick('.details-row-2', homeTab);
+    if (detailsRow) {
+      const img = pick('.left-area img', detailsRow);
+      if (img && p.imageUrls?.length) {
+        setAttr(img, 'src', mediaUrl(p.imageUrls[0]));
+        setAttr(img, 'alt', p.name || 'product');
+      }
+      const title = pick('.right .title', detailsRow);
+      if (title) setText(title, p.name || '');
+
+      const pDesc = pick('.right p', detailsRow);
+      if (pDesc) setText(pDesc, p.description || '');
+
+      const ul = pick('.bottom-ul', detailsRow);
+      if (ul) {
+        ul.replaceChildren();
+        const bullets = [
+          '100% Genuine and Quality Assured',
+          p.brandName ? `Brand: ${p.brandName}` : null,
+          p.category ? `Category: ${p.category}` : null,
+          p.unit ? `Packaging Unit: ${p.unit}` : null,
+          ...(Array.isArray(p.attributes) ? p.attributes.filter((a) => a.key && a.value).map((a) => `${a.key.charAt(0).toUpperCase() + a.key.slice(1)}: ${a.value}`) : []),
+          p.taxNote ? `Tax: ${p.taxNote}` : 'Inclusive of all taxes',
+          `Availability: ${p.availability === 'in_stock' ? 'In Stock' : 'Out of Stock'}`
+        ].filter(Boolean);
+
+        bullets.forEach((text) => {
+          const li = document.createElement('li');
+          li.textContent = text;
+          ul.appendChild(li);
+        });
+      }
+    }
+  }
+
+  // --- Tab 2: Additional Information (#profile-tab-pane) ---
+  const profileTab = pick('#profile-tab-pane');
+  if (profileTab) {
+    const disc = pick('.disc', profileTab);
+    if (disc) disc.remove(); // Remove static lorem ipsum
+
+    const table = pick('table', profileTab);
+    if (table) {
+      const thead = pick('thead', table);
+      if (thead) {
+        thead.innerHTML = `<tr><th style="font-weight: 700; color: #222;">Specification</th><th style="font-weight: 700; color: #222;">Details</th></tr>`;
+      }
+      const tbody = pick('tbody', table) || table;
+      tbody.replaceChildren();
+
+      const specs = [
+        { key: 'Product Name', val: p.name },
+        p.brandName ? { key: 'Brand', val: p.brandName } : null,
+        p.category ? { key: 'Category', val: p.category } : null,
+        p.unit ? { key: 'Unit', val: p.unit } : null,
+        ...(Array.isArray(p.attributes) ? p.attributes.filter((a) => a.key && a.value).map((a) => ({ key: a.key.charAt(0).toUpperCase() + a.key.slice(1), val: a.value })) : []),
+        { key: 'Price', val: money(p.price) },
+        p.taxNote ? { key: 'Tax Note', val: p.taxNote } : null,
+        { key: 'Stock Status', val: p.availability === 'in_stock' ? 'In Stock' : 'Out of Stock' }
+      ].filter(Boolean);
+
+      specs.forEach((s) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td style="font-weight: 600; color: #444; width: 35%;">${escapeHtml(s.key)}</td><td style="color: #666;">${escapeHtml(s.val)}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+  }
 }
 
 async function paintReviews(p) {
   let data = null;
   try { data = await api.reviews(p.id); } catch { return; }
-  /* { summary: { average, count }, reviews: [...] } — not a bare array. */
   const reviews = data?.reviews || [];
   const summary = data?.summary || { average: 0, count: 0 };
+  const avg = Number(summary.average || 0);
+  const count = Number(summary.count || 0);
 
-  pickAll('.rating-count|.review-count|[data-review-count]').forEach((el) => setText(el, summary.count + ' Reviews'));
-  pickAll('.rating-average|[data-review-average]').forEach((el) => setText(el, (summary.average || 0).toFixed(1)));
+  // Tab Header: Customer Reviews (01)
+  pickAll('#profile-tabt, [aria-controls="profile-tab-panes"]').forEach((el) => {
+    setText(el, `Customer Reviews (${count})`);
+  });
 
-  const spec = { container: '.review-list|.product-reviews|.comment-list|.tab-reviews', card: '.review-item|.single-review|li' };
+  // Top Stars & Count
+  pickAll('.rating-count|.review-count|[data-review-count]').forEach((el) => setText(el, count + ' Reviews'));
+  pickAll('.rating-average|[data-review-average]').forEach((el) => setText(el, avg.toFixed(1)));
+
+  // Rating stars above title in product status:
+  const headerRating = pick('.product-status .rating-stars-group');
+  if (headerRating) {
+    const countSpan = pick('span', headerRating);
+    if (countSpan) setText(countSpan, `${count} Review${count === 1 ? '' : 's'}`);
+    const starsDivs = pickAll('.rating-star', headerRating);
+    starsDivs.forEach((starEl, idx) => {
+      const starNum = idx + 1;
+      if (avg >= starNum) {
+        starEl.innerHTML = '<i class="fas fa-star" style="color: #ffb800;"></i>';
+      } else if (avg >= starNum - 0.5) {
+        starEl.innerHTML = '<i class="fas fa-star-half-alt" style="color: #ffb800;"></i>';
+      } else {
+        starEl.innerHTML = '<i class="far fa-star" style="color: #ffb800;"></i>';
+      }
+    });
+  }
+
+  // Reviews Tab: Average number & stars in review section
+  const reviewScore = pick('#profile-tab-panes .top-stars-wrapper .review');
+  if (reviewScore) setText(reviewScore, count > 0 ? avg.toFixed(1) : '0.0');
+
+  const reviewStars = pick('#profile-tab-panes .top-stars-wrapper .stars');
+  if (reviewStars) {
+    let starsHtml = '';
+    for (let i = 1; i <= 5; i++) {
+      if (avg >= i) starsHtml += '<i class="fa-solid fa-star" style="color: #ffb800;"></i> ';
+      else if (avg >= i - 0.5) starsHtml += '<i class="fa-solid fa-star-half-alt" style="color: #ffb800;"></i> ';
+      else starsHtml += '<i class="fa-regular fa-star" style="color: #ffb800;"></i> ';
+    }
+    starsHtml += `<span>(${count} Review${count === 1 ? '' : 's'})</span>`;
+    reviewStars.innerHTML = starsHtml;
+  }
+
+  // Recommended percentage
+  const avgArea = pick('#profile-tab-panes .average-stars-area');
+  if (avgArea) {
+    if (count > 0) {
+      const highRatings = reviews.filter((r) => (r.rating || 5) >= 4).length;
+      const pct = Math.round((highRatings / count) * 100);
+      const h4 = pick('.average', avgArea);
+      if (h4) setText(h4, `${pct}%`);
+      const span = pick('span', avgArea);
+      if (span) setText(span, `Recommended (${highRatings} of ${count})`);
+      show(avgArea, true);
+    } else {
+      show(avgArea, false);
+    }
+  }
+
+  // Breakdown bars (5 to 1)
+  const barRows = pickAll('#profile-tab-panes .review-charts-details .single-review');
+  if (barRows.length === 5) {
+    for (let star = 5; star >= 1; star--) {
+      const idx = 5 - star;
+      const row = barRows[idx];
+      const starCount = reviews.filter((r) => Math.round(r.rating || 5) === star).length;
+      const pct = count > 0 ? Math.round((starCount / count) * 100) : 0;
+      const bar = pick('.progress-bar', row);
+      if (bar) bar.style.width = pct + '%';
+      const pac = pick('.pac', row);
+      if (pac) setText(pac, pct + '%');
+    }
+  }
+
+  // List of real customer reviews:
+  const reviewStyle = pick('.product-details-review-product-style');
+  if (reviewStyle) {
+    let listContainer = pick('.customer-reviews-list-container', reviewStyle);
+    if (!listContainer) {
+      listContainer = document.createElement('div');
+      listContainer.className = 'customer-reviews-list-container mt--40 mb--40';
+      const submitArea = pick('.submit-review-area', reviewStyle);
+      if (submitArea) {
+        reviewStyle.insertBefore(listContainer, submitArea);
+      } else {
+        reviewStyle.appendChild(listContainer);
+      }
+    }
+
+    listContainer.replaceChildren();
+    const heading = document.createElement('h5');
+    heading.className = 'title mb--20';
+    heading.style.fontWeight = '700';
+    heading.textContent = `Customer Reviews (${count})`;
+    listContainer.appendChild(heading);
+
+    if (reviews.length === 0) {
+      const emptyMsg = document.createElement('p');
+      emptyMsg.className = 'text-muted';
+      emptyMsg.textContent = 'There are no reviews for this product yet. Be the first to review!';
+      listContainer.appendChild(emptyMsg);
+    } else {
+      reviews.forEach((r) => {
+        const item = document.createElement('div');
+        item.className = 'single-customer-review-card mb--20 p-4';
+        item.style.cssText = 'border: 1px solid #eef0f4; border-radius: 8px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.03);';
+
+        let stars = '';
+        const rating = r.rating || 5;
+        for (let i = 1; i <= 5; i++) {
+          stars += i <= rating 
+            ? '<i class="fa-solid fa-star" style="color: #ffb800; font-size: 13px; margin-right: 2px;"></i>' 
+            : '<i class="fa-regular fa-star" style="color: #ffb800; font-size: 13px; margin-right: 2px;"></i>';
+        }
+
+        const dateStr = r.createdAt ? new Date(r.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+
+        item.innerHTML = `
+          <div class="d-flex justify-content-between align-items-center mb--10">
+            <div>
+              <h6 class="mb-1" style="font-size: 16px; font-weight: 700; color: #222;">${escapeHtml(r.reviewer || r.name || 'Verified Buyer')}</h6>
+              <span class="text-muted" style="font-size: 13px;">${escapeHtml(dateStr)}</span>
+            </div>
+            <div class="stars">${stars}</div>
+          </div>
+          ${r.title ? `<h6 style="font-size: 15px; font-weight: 600; color: #333; margin-bottom: 6px;">${escapeHtml(r.title)}</h6>` : ''}
+          <p class="mb-0" style="color: #555; font-size: 14px; line-height: 1.6;">${escapeHtml(r.body || r.comment || '')}</p>
+        `;
+        listContainer.appendChild(item);
+      });
+    }
+  }
+
+  // Also maintain template repeater if present:
+  const spec = { container: '.review-list|.product-reviews|.comment-list|.tab-reviews', card: '.review-item|li' };
   const t = takeTemplate(spec);
   if (!t) return;
   if (!reviews.length) return renderEmpty(t.container, 'No reviews yet.', spec);
   repeat(t, reviews, (node, r) => {
-    setText(pick('.review-author|.author|h5|h6', node), r.author || r.name || 'Verified buyer');
+    setText(pick('.review-author|.author|h5|h6', node), r.reviewer || r.author || r.name || 'Verified buyer');
     setText(pick('.review-body|.comment-text|p', node), r.body || r.comment || '');
     setText(pick('.review-date|.date', node), r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '');
   });
