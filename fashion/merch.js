@@ -1359,7 +1359,11 @@ THEMES.electronic = {
     returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
   footerContact: { phone: 'li:has(i.icon-phone) p|a[href^="tel:"]', email: 'li:has(i.icon-mail) p|a[href^="mailto:"]', address: '.footer-address p, .mb-contact p|address' },
-  announcement: '.tf-topbar_wrap .text-caption-1|.tf-topbar p',
+  /* No `announcement` here on purpose: this theme ships NO promo bar. The only
+     thing in its topbar is the shop's own phone and email, and pointing the
+     announcement at `.text-caption-1` replaced the PHONE with it — the
+     merchant's number vanished from the header to make room for a sale. A
+     theme without the slot simply does not show the bar. */
   qtyInput: '.wg-quantity .quantity-product|.quantity-product',
   header: { cartCount: '.nav-cart .count-box|.count-box', cartTotal: '.sub-total-price|.tf-totals-total-value' },
   resultCount: '.count-text|.wrapper-control-shop .count-text',
@@ -2083,10 +2087,26 @@ function paintAnnouncement(theme) {
   if (!el) return;                              // this theme names no promo bar
   const bar = el.closest('.tf-topbar, .topbar, [class*="header-top"], .announcement') || el;
   if (!a.enabled || !a.text) { show(bar, false); return; }
-  setText(el, a.text);
   show(bar, true);
-  const link = el.matches('a') ? el : pick('a', el);
-  if (link && a.link) link.setAttribute('href', storeLink(a.link));
+  const existing = el.matches('a') ? el : (pick('a', el) || el.closest('a'));
+  if (!a.link) { setText(el, a.text); if (existing && existing !== el) setText(existing, a.text); return; }
+
+  if (existing) {
+    setText(existing, a.text);
+    existing.setAttribute('href', storeLink(a.link));
+    return;
+  }
+  /* The merchant gave the bar a destination and the theme's bar is a bare <p>,
+     so there was nothing to click: the admin offered a Link field that did
+     nothing. Put the text in an anchor INSIDE the theme's own element, so the
+     bar keeps its colour, font and spacing and only becomes clickable. */
+  const link = document.createElement('a');
+  link.href = storeLink(a.link);
+  link.textContent = a.text;
+  link.style.color = 'inherit';
+  link.style.textDecoration = 'inherit';
+  link.dataset.merchAnnouncement = '1';
+  el.replaceChildren(link);
 }
 
 function paintUsps(theme) {

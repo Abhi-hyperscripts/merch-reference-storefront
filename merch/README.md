@@ -297,7 +297,15 @@ are **hidden**, because a theme's own icon points at the theme author's profile
 and a `#` is worse than absent.
 
 The other two need one selector each, and a theme that has no such slot simply
-omits it and keeps its own markup. Each is switchable per shop in
+omits it and keeps its own markup. **`electronic` names no `announcement` on
+purpose**: it ships no promo bar, and pointing the field at the nearest thing in
+its topbar replaced the shop's PHONE NUMBER with the sale. A missing slot is a
+bar that does not show; a wrong slot costs the merchant something real.
+
+Where a theme's bar is a bare `<p>` and the merchant set a link, the text is
+wrapped in an anchor inside the theme's own element — it inherits the colour,
+font and spacing and only becomes clickable, because an admin field that says
+"where the bar takes a shopper who taps it" has to take them somewhere. Each is switchable per shop in
 `USE_STORE_APPEARANCE` at the top of this file, like every other setting.
 
 Not here on purpose: category images, labels, order and show/hide. Those
