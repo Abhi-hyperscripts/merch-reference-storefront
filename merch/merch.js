@@ -2825,14 +2825,39 @@ function wireSortSelects(onSort) {
   });
 }
 
+let headerCategoriesPainted = false;
+let categoriesPromise = null;
+function getCategories() {
+  if (!categoriesPromise) categoriesPromise = api.categories().catch(() => []);
+  return categoriesPromise;
+}
+
+function paintHeaderCategories(cats) {
+  if (headerCategoriesPainted || !cats?.length) return;
+  const menus = [...new Set(document.querySelectorAll('.category-btn > ul.category-sub-menu, #category-active-four, #category-active-menu'))];
+  if (!menus.length) return;
+
+  const html = cats.map((cat, i) => {
+    const iconNum = String((i % 10) + 1).padStart(2, '0');
+    const href = pageUrl('listing', { category: cat });
+    return `<li><a href="${escapeHtml(href)}" class="menu-item"><img src="assets/images/icons/${iconNum}.svg" alt="icons"><span>${escapeHtml(cat)}</span></a></li>`;
+  }).join('');
+
+  menus.forEach((menu) => {
+    menu.innerHTML = html;
+  });
+  headerCategoriesPainted = true;
+}
+
 /* The category menus in every theme's header are static links to demo pages.
    Point them at the real categories without touching how they look. */
 async function wireCategoryLinks() {
   let cats = [];
-  try { cats = await api.categories(); } catch { return; }
+  try { cats = await getCategories(); } catch { return; }
   /* This endpoint answers an array of plain STRINGS — category names, which
      are also what ?category= takes. There is no id or slug to look up. */
   if (!cats?.length) return;
+  paintHeaderCategories(cats);
   const known = new Map(cats.map((name) => [String(name).trim().toLowerCase(), name]));
   pickAll('.menu-item a|.sub-menu a|.category-list a|.single-category a|.categories a').forEach((a) => {
     const name = known.get((a.textContent || '').trim().toLowerCase());
@@ -5395,7 +5420,8 @@ async function boot() {
      so at this point there is nothing on the page to find and the header went
      on claiming USD over rupee prices. Run it again once they have. */
   onThemeReady(() => { paintCurrencySwitcher().catch((e) => warn('currency switcher', e)); });
-  if (PAGE !== 'listing') { wireSearchInputs(null); wireCategoryLinks(); }
+  if (PAGE !== 'listing') { wireSearchInputs(null); }
+  try { await wireCategoryLinks(); } catch (e) { warn('category links', e); }
 
   const run = PAGE.startsWith('policy:') ? () => pages.policy(PAGE.slice(7)) : (pages[PAGE] || pages.unknown);
   try { await run(); }
