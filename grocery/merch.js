@@ -3251,21 +3251,41 @@ function paintProductTabs(p) {
   // --- Tab 1: Product Details (#home-tab-pane) ---
   const homeTab = pick('#home-tab-pane');
   if (homeTab) {
+    const desc = (p.description || '').trim();
+    let topDisc = desc;
+    let bodyDesc = desc;
+
+    if (desc) {
+      // Split on sentence boundaries so overview and detailed text are distinct
+      const sentences = desc.match(/[^.!?]+[.!?]+/g)?.map((s) => s.trim()) || [desc];
+      if (sentences.length >= 3) {
+        topDisc = sentences.slice(0, 2).join(' ');
+        bodyDesc = sentences.slice(2).join(' ');
+      } else if (sentences.length === 2) {
+        topDisc = sentences[0];
+        bodyDesc = sentences[1];
+      } else {
+        topDisc = desc;
+        bodyDesc = `Discover the authentic taste and unmatched quality of ${p.name || 'this product'}. Carefully sourced and packed to preserve freshness and nutrition for you and your family.`;
+      }
+    }
+
     const disc = pick('.disc', homeTab);
-    if (disc) setText(disc, p.description || '');
+    if (disc) setText(disc, topDisc || '');
 
     const detailsRow = pick('.details-row-2', homeTab);
     if (detailsRow) {
+      const primaryImg = (p.imageUrls && p.imageUrls[0]) || (p.images && p.images[0]) || '';
       const img = pick('.left-area img', detailsRow);
-      if (img && p.imageUrls?.length) {
-        setAttr(img, 'src', mediaUrl(p.imageUrls[0]));
+      if (img && primaryImg) {
+        setAttr(img, 'src', mediaUrl(primaryImg));
         setAttr(img, 'alt', p.name || 'product');
       }
       const title = pick('.right .title', detailsRow);
       if (title) setText(title, p.name || '');
 
       const pDesc = pick('.right p', detailsRow);
-      if (pDesc) setText(pDesc, p.description || '');
+      if (pDesc) setText(pDesc, bodyDesc || '');
 
       const ul = pick('.bottom-ul', detailsRow);
       if (ul) {
@@ -3282,7 +3302,14 @@ function paintProductTabs(p) {
 
         bullets.forEach((text) => {
           const li = document.createElement('li');
-          li.textContent = text;
+          const colonIdx = text.indexOf(':');
+          if (colonIdx > -1) {
+            const label = text.slice(0, colonIdx);
+            const val = text.slice(colonIdx + 1);
+            li.innerHTML = `<strong>${escapeHtml(label)}:</strong>${escapeHtml(val)}`;
+          } else {
+            li.textContent = text;
+          }
           ul.appendChild(li);
         });
       }
