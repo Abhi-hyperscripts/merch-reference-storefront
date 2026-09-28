@@ -78,6 +78,9 @@ export const USE_STORE_APPEARANCE = {
   tagline: true,        // the one-liner under the name
   menuLinks: true,      // where the header and footer menu items point
   footerContact: true,  // the phone, email and address in the footer
+  announcement: true,   // the promo bar across the top of the page
+  usps: true,           // the "free delivery / 24-7 support" strip
+  social: true,         // the social icons, and hiding the ones you do not use
   banners: true,        // the hero — the merchant's artwork, headline and button
   writtenPages: true,   // Privacy, Terms, Refunds and Shipping
   aboutPage: false,     // About — OFF by default, see below
@@ -1046,6 +1049,9 @@ const THEMES = {
       blog: 'blog.html', post: 'blog-details.html',
     },
     footerContact: { phone: '.call-area a.number|a[href^="tel:"]', email: 'a[href^="mailto:"]', address: 'address|[data-store-address]' },
+    /* The promo strip this theme runs across the very top, and the row of
+       promises under the header. Both ship with the theme author's wording. */
+    announcement: '.header-top-area p|.bwtween-area-header-top p',
     qtyInput: '.quantity-edit .input|.cart-edits .input',
     header: {
       cartCount: '.btn-border-only.cart .number|.cart-number',
@@ -1196,6 +1202,8 @@ const THEMES = {
       addresses: 'addresses.html', returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
     },
     footerContact: { phone: 'li:has(i.pe-7s-call)|a[href^="tel:"]', email: 'li:has(i.pe-7s-mail) a|a[href^="mailto:"]', address: 'address|li:has(i.pe-7s-home)' },
+    announcement: '.header-top-area .welcome-msg|.header-top-area p|.header-top p',
+    usps: { container: '.policy-area .row|.policy-area', card: '.policy-item|.single-policy', title: 'h6|.policy-content h6', text: 'p|.policy-content p' },
     qtyInput: '.pro-qty input|.quantity input',
     header: { cartCount: '.cart-item-count|.item-count|.cart-item_count', cartTotal: '.cart-total-price' },
     resultCount: '.toolbar-amount|.product-showing',
@@ -1351,6 +1359,7 @@ THEMES.electronic = {
     returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
   footerContact: { phone: 'li:has(i.icon-phone) p|a[href^="tel:"]', email: 'li:has(i.icon-mail) p|a[href^="mailto:"]', address: '.footer-address p, .mb-contact p|address' },
+  announcement: '.tf-topbar_wrap .text-caption-1|.tf-topbar p',
   qtyInput: '.wg-quantity .quantity-product|.quantity-product',
   header: { cartCount: '.nav-cart .count-box|.count-box', cartTotal: '.sub-total-price|.tf-totals-total-value' },
   resultCount: '.count-text|.wrapper-control-shop .count-text',
@@ -1511,6 +1520,11 @@ THEMES.fashion = {
     returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
   footerContact: { phone: 'a[href^="tel:"]', email: 'a[href^="mailto:"]', address: '.footer-infor p.lh-26, .need-help-wrap p.lh-26|address' },
+  announcement: '.tf-topbar .swiper-slide p|.tf-topbar p',
+  /* Scope this to the icon-box strip. `.swiper-wrapper` alone matched the
+     TOPBAR's carousel first, so the promises were written over the promo bar
+     and the announcement had nowhere left to go. */
+  usps: { container: '.swiper-wrapper:has(.box-icon_V01)', card: '.swiper-slide:has(.box-icon_V01)', title: '.content .title', text: '.content .desc|.content p:not(.title)' },
   /* This theme names its basket badge `.count`; the inherited `.count-box`
      matches nothing here, so the header kept the template's "12". */
   header: { cartCount: '.nav-icon-item .count|.toolbar-count|.count', cartTotal: '.sub-total-price|.tf-totals-total-value' },
@@ -1987,6 +2001,107 @@ function paintStoreChrome(theme) {
   /* The "about us" blurb is marketing copy rather than a fact a customer acts
      on, so an unset one keeps the template's. */
   if (f.about) pickAll('[data-store-about]').forEach((el) => setText(el, f.about));
+}
+
+/* ---------------------------------------------------------------------------
+   MERCHANT-OWNED CHROME
+
+   Three things every bought theme ships with the THEME AUTHOR's words in them:
+   a promo bar, a row of promises, and social icons. The store now carries all
+   three (`announcement`, `usps`, `social` on /api/theme), so a shop stops
+   advertising a sale it never agreed to and stops linking to someone else's
+   Instagram.
+
+   `social` needs no per-theme selector at all: a social icon is recognisable
+   from its href's host, its own class, or its icon's class, in every one of
+   these templates. The other two name their slot in the theme map, because
+   nothing reliable distinguishes a promo bar from a heading by looking at it.
+--------------------------------------------------------------------------- */
+
+const SOCIAL_ALIASES = {
+  fb: 'facebook', facebook: 'facebook',
+  twitter: 'x', twiter: 'x', x: 'x',
+  ig: 'instagram', insta: 'instagram', instagram: 'instagram',
+  yt: 'youtube', youtube: 'youtube',
+  linkedin: 'linkedin', 'linked-in': 'linkedin',
+  pinterest: 'pinterest', tiktok: 'tiktok', snapchat: 'snapchat',
+  whatsapp: 'whatsapp', telegram: 'telegram',
+};
+
+/* What platform is this anchor for? Themes say it three different ways and a
+   fifth theme will pick one of them. */
+function socialPlatformOf(a) {
+  const href = (a.getAttribute('href') || '').toLowerCase();
+  const host = href.match(/https?:\/\/(?:www\.)?([a-z0-9-]+)\./);
+  if (host && SOCIAL_ALIASES[host[1]]) return SOCIAL_ALIASES[host[1]];
+  const words = ((a.className || '') + ' ' + [...a.querySelectorAll('i, span, svg')].map((e) => e.className?.baseVal || e.className || '').join(' ')).toLowerCase();
+  for (const key of Object.keys(SOCIAL_ALIASES)) {
+    if (new RegExp('(^|[^a-z])' + key + '([^a-z]|$)').test(words)) return SOCIAL_ALIASES[key];
+  }
+  return null;
+}
+
+function paintSocialLinks(theme) {
+  if (!useStore('social')) return;
+  const wanted = new Map();
+  for (const s of theme.social || []) {
+    const key = SOCIAL_ALIASES[String(s.platform || '').toLowerCase()] || String(s.platform || '').toLowerCase();
+    if (key && s.url) wanted.set(key, s.url);
+  }
+  const anchors = $$('[class*="social"] a, .tf-social-icon a, .social-link a, footer a[href*="facebook.com"], footer a[href*="instagram.com"]');
+  if (!anchors.length) return;
+  let matched = 0;
+  for (const a of anchors) {
+    const platform = socialPlatformOf(a);
+    if (!platform) {
+      /* Inside an explicit social row, an icon we cannot name is still not the
+         merchant's — a leftover `#` or the theme author's own network. Take it
+         off rather than leave a dead or borrowed link. */
+      if (a.closest('[class*="social"], .tf-social-icon, .social-link')) show(a.closest('li') || a, false);
+      continue;
+    }
+    matched++;
+    const url = wanted.get(platform);
+    if (url) {
+      a.setAttribute('href', url);
+      a.setAttribute('target', '_blank');
+      a.setAttribute('rel', 'noopener noreferrer');
+      show(a.closest('li') || a, true);
+    } else {
+      /* The merchant does not have this one. The theme's link goes to the
+         author's own profile — or to `#`, which is worse than absent. */
+      show(a.closest('li') || a, false);
+    }
+  }
+  if (matched && !wanted.size) log('no social links set, so the theme\u2019s own icons were hidden');
+}
+
+function paintAnnouncement(theme) {
+  if (!useStore('announcement')) return;
+  const a = theme.announcement || {};
+  const el = pick(THEME.announcement);
+  if (!el) return;                              // this theme names no promo bar
+  const bar = el.closest('.tf-topbar, .topbar, [class*="header-top"], .announcement') || el;
+  if (!a.enabled || !a.text) { show(bar, false); return; }
+  setText(el, a.text);
+  show(bar, true);
+  const link = el.matches('a') ? el : pick('a', el);
+  if (link && a.link) link.setAttribute('href', storeLink(a.link));
+}
+
+function paintUsps(theme) {
+  if (!useStore('usps')) return;
+  const list = (theme.usps || []).filter((u) => u && u.title);
+  const spec = THEME.usps;
+  if (!spec || !list.length) return;            // unset ⇒ the theme keeps its own
+  const t = takeTemplate(spec);
+  if (!t) return;
+  repeat(t, list, (node, u) => {
+    setText(pick(spec.title, node), u.title);
+    setText(pick(spec.text, node), u.text || '');
+    const img = spec.icon ? pick(spec.icon, node) : null;
+    if (img && u.icon && /^(https?:|\/)/.test(u.icon)) setAttr(img, 'src', mediaUrl(u.icon));
+  });
 }
 
 /* The currency switcher in the header. Every one of these templates ships one
@@ -4891,6 +5006,9 @@ async function boot() {
   paintHeader();
   cart.onChange(paintHeader);
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
+  try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
+  try { paintUsps(STORE); } catch (e) { warn('usps', e); }
+  try { paintSocialLinks(STORE); } catch (e) { warn('social links', e); }
   paintCurrencySwitcher().catch((e) => warn('currency switcher', e));
   /* Two of these themes BUILD their currency control from their own script,
      so at this point there is nothing on the page to find and the header went

@@ -276,6 +276,61 @@ initialises at parse time it is a partial result, so mark the scripts.
 Either way the theme's scripts always run. A store that is down leaves an
 ordinary static page, never a dead one.
 
+## What the merchant owns, and what the theme names
+
+Every bought template ships three slots filled with the THEME AUTHOR's words:
+a promo bar, a row of promises, and social icons. A shop that deployed one was
+advertising a sale it never agreed to and linking to someone else's Instagram.
+The store now carries all three, so they are the merchant's:
+
+| Admin field | What it fills | How the theme is found |
+|---|---|---|
+| `announcement` `{enabled,text,link}` | the strip across the top | the theme names `announcement` |
+| `usps[] {icon,title,text}` | "free delivery / 24-7 support / easy returns" | the theme names `usps` |
+| `social[] {platform,url}` | the social icons | **no selector needed** |
+
+`social` needs nothing from a new theme. A social icon is recognisable from its
+href's host (`instagram.com`), from its own class (`social-instagram`) or from
+its icon's class (`fa-instagram`, `icon-instagram`) — and every one of these
+four templates uses one of those three. Platforms the merchant has not given
+are **hidden**, because a theme's own icon points at the theme author's profile
+and a `#` is worse than absent.
+
+The other two need one selector each, and a theme that has no such slot simply
+omits it and keeps its own markup. Each is switchable per shop in
+`USE_STORE_APPEARANCE` at the top of this file, like every other setting.
+
+Not here on purpose: category images, labels, order and show/hide. Those
+already exist as **curation** (Admin → Homepage), resolved onto
+`/api/homepage`'s `browseCategories`. A second way to curate categories would
+compete with the first.
+
+---
+
+## Check a theme before you ship it
+
+```bash
+node merch/theme-check.mjs fashion            # against http://localhost:5610
+node merch/theme-check.mjs fashion https://staging.example.com
+```
+
+It reads the theme's own entry in `THEMES`, opens that theme's own pages, tries
+every selector the entry declares, and prints the ones that match nothing:
+
+```
+theme-check: fashion
+  101 selectors declared, 90 match this theme's pages, 11 match nothing
+
+  MISS  checkout  checkout.summary.container   .sidebar-checkout-content .list-product
+  MISS  checkout  checkout.placeBtn            .tf-btn.btn-fill|…
+```
+
+A miss is not automatically a bug — a theme with no USP strip *should* have no
+`usps` entry — but you see it and decide, instead of a shopper finding it. The
+run exits non-zero when anything misses, so CI can hold a new theme to it.
+
+---
+
 ## Adding a fifth theme
 
 Add one entry to `THEMES`. It is **data, not code** — which element holds the
