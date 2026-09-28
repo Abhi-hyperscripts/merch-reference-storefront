@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 
 
@@ -14,6 +14,16 @@
     <link rel="stylesheet preload" href="assets/css/plugins.css" as="style">
     <link rel="stylesheet preload" href="assets/css/style.css" as="style">
 
+    <style id="about-page-refresh">
+:root{--about-green:#244a32;--about-leaf:#628a45;--about-ink:#26352a;--about-muted:#68736a;--about-cream:#f7f8f3;--about-line:#e7ebe3}
+.about-banner-area-bg{background-image:linear-gradient(90deg,rgba(18,45,27,.77),rgba(18,45,27,.24)),url("assets/images/banner/03.webp");background-position:center;background-size:cover;min-height:440px;height:auto;padding:90px 0;border-radius:0 0 34px 34px;display:flex;align-items:center}.inner-content-about-area{max-width:720px;margin:0 auto;text-align:center;padding:38px 30px;background:rgba(20,49,30,.24);border:1px solid rgba(255,255,255,.2);border-radius:24px;backdrop-filter:blur(3px)}.inner-content-about-area .title{font-size:clamp(34px,5vw,58px);line-height:1.08;margin-bottom:18px}.inner-content-about-area p.disc{max-width:620px;line-height:1.8}
+.about-shell{width:min(1200px,calc(100% - 48px));margin-inline:auto}.about-trust-strip{background:#fff;border-bottom:1px solid var(--about-line);padding:28px 0}.about-trust-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}.about-trust-grid>div{display:flex;align-items:center;gap:13px;padding:8px 14px;border-right:1px solid var(--about-line)}.about-trust-grid>div:last-child{border:0}.trust-mark{width:42px;height:42px;flex:0 0 42px;border-radius:50%;display:grid;place-items:center;background:#eef3e9;color:var(--about-green);font-size:13px;font-weight:700}.about-trust-grid b,.about-trust-grid small,.story-points b,.story-points small{display:block}.about-trust-grid b{color:var(--about-ink);font-size:14px}.about-trust-grid small{margin-top:4px;color:var(--about-muted);font-size:12px}
+.about-story-section{padding:104px 0;background:#fff}.about-story-grid{display:grid;grid-template-columns:1fr 1fr;gap:88px;align-items:center}.story-photo-wrap{position:relative;padding:0 0 32px 28px}.story-photo-wrap:before{content:"";position:absolute;inset:28px 28px 0 0;border-radius:24px;background:#eaf0e4}.story-photo-wrap img{position:relative;display:block;width:100%;height:460px;object-fit:cover;border-radius:22px;box-shadow:0 20px 52px rgba(27,54,33,.12)}.photo-caption{position:absolute;left:0;bottom:0;z-index:1;padding:15px 20px;background:#fff;border:1px solid var(--about-line);border-radius:12px;color:var(--about-ink);font-size:13px;font-weight:600;box-shadow:0 8px 25px rgba(20,40,23,.08)}.caption-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#79a74f;margin-right:9px}.about-eyebrow{text-transform:uppercase;letter-spacing:.13em;color:var(--about-leaf);font-size:11px;font-weight:700}.story-copy h2,.about-team-heading h2,.benefits-heading h2{margin:13px 0 18px;color:var(--about-ink);font-size:clamp(32px,3.2vw,45px);line-height:1.14;font-weight:650;letter-spacing:-.035em}.story-copy>p,.about-team-heading>p,.benefits-heading>p{color:var(--about-muted);font-size:15px;line-height:1.85}.story-points{display:grid;gap:19px;margin-top:27px}.story-points>div{display:flex;gap:13px;align-items:flex-start}.story-points i{width:25px;height:25px;flex:0 0 25px;display:grid;place-items:center;border-radius:50%;background:#edf3e8;color:#4d7a39;font-size:13px;font-style:normal}.story-points b{color:var(--about-ink);font-size:14px}.story-points small{margin-top:4px;color:var(--about-muted);font-size:13px}.about-link{display:inline-flex;align-items:center;gap:15px;margin-top:28px;color:var(--about-green);font-size:14px;font-weight:700}.about-link span{font-size:20px;transition:transform .2s}.about-link:hover span{transform:translateX(4px)}
+.about-team-section{padding:86px 0 100px;background:var(--about-cream)}.about-team-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:50px;margin-bottom:34px}.about-team-heading h2{margin-bottom:0}.about-team-heading>p{max-width:430px;margin:0 0 3px}.about-team-photo{position:relative;overflow:hidden;height:490px;border-radius:22px;background:#e8eee4}.about-team-photo>img{display:block;width:100%;height:100%;object-fit:cover;object-position:center 43%}.team-photo-note{position:absolute;right:22px;bottom:22px;display:flex;align-items:center;gap:12px;padding:15px 20px;background:#fff;border-radius:14px;box-shadow:0 12px 32px rgba(20,40,23,.14)}.team-note-icon{display:grid;place-items:center;width:38px;height:38px;border-radius:50%;background:#edf3e8;color:var(--about-leaf);font-size:20px}.team-photo-note b,.team-photo-note small{display:block}.team-photo-note b{color:var(--about-ink);font-size:14px}.team-photo-note small{margin-top:4px;color:var(--about-muted);font-size:12px}
+.about-benefits-section{padding:100px 0 110px;background:#fff}.benefits-heading{max-width:700px;margin:0 auto 42px;text-align:center}.benefits-heading h2{margin-bottom:13px}.benefits-heading>p{margin:0}.benefits-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.benefits-grid article{padding:29px 28px 31px;border:1px solid var(--about-line);border-radius:16px;background:#fff;transition:transform .2s,box-shadow .2s}.benefits-grid article:hover{transform:translateY(-4px);box-shadow:0 15px 36px rgba(28,57,34,.08)}.benefit-number{color:var(--about-leaf);font-size:12px;font-weight:700;letter-spacing:.1em}.benefits-grid h3{margin:19px 0 9px;color:var(--about-ink);font-size:18px;font-weight:650}.benefits-grid p{margin:0;color:var(--about-muted);font-size:14px;line-height:1.75}
+@media(max-width:900px){.about-trust-grid{grid-template-columns:repeat(2,1fr)}.about-trust-grid>div:nth-child(2){border-right:0}.about-trust-grid>div{padding:10px}.about-story-grid{gap:42px}.story-photo-wrap img{height:400px}.about-team-photo{height:420px}}
+@media(max-width:640px){.about-banner-area-bg{min-height:390px;padding:56px 0;border-radius:0 0 22px 22px}.inner-content-about-area{padding:28px 18px}.inner-content-about-area p.disc{max-width:100%;font-size:15px}.inner-content-about-area .rts-btn{margin-top:24px!important}.about-shell{width:min(100% - 36px,520px)}.about-trust-strip{padding:15px 0}.about-trust-grid{gap:4px 8px}.about-trust-grid>div{gap:9px;padding:10px 2px;border:0}.trust-mark{width:34px;height:34px;flex-basis:34px;font-size:11px}.about-trust-grid b{font-size:12px}.about-trust-grid small{font-size:10px}.about-story-section{padding:58px 0 66px}.about-story-grid{grid-template-columns:1fr;gap:35px}.story-photo-wrap{padding:0 0 22px 15px}.story-photo-wrap:before{inset:16px 15px 0 0;border-radius:17px}.story-photo-wrap img{height:300px;border-radius:16px}.photo-caption{padding:12px 14px;font-size:12px}.story-copy h2,.about-team-heading h2,.benefits-heading h2{font-size:32px}.story-copy>p{font-size:14px}.about-team-section{padding:62px 0 68px}.about-team-heading{display:block;margin-bottom:23px}.about-team-heading>p{margin-top:14px;font-size:14px}.about-team-photo{height:360px;border-radius:16px}.about-team-photo>img{object-position:center}.team-photo-note{right:12px;bottom:12px;padding:11px 13px}.about-benefits-section{padding:66px 0 72px}.benefits-heading{margin-bottom:26px}.benefits-heading>p{font-size:14px}.benefits-grid{grid-template-columns:1fr;gap:12px}.benefits-grid article{padding:21px 20px}.benefits-grid h3{margin:12px 0 7px}}
+ .about-promise-section{padding:55px 0;background:#edf3e8}.promise-inner{display:flex;align-items:center;justify-content:space-between;gap:30px}.promise-inner h2{margin:9px 0;color:var(--about-ink);font-size:clamp(25px,3vw,36px);letter-spacing:-.03em}.promise-inner p{margin:0;color:var(--about-muted);font-size:14px}.promise-button{display:inline-flex;align-items:center;gap:18px;flex:none;padding:15px 21px;border-radius:8px;background:var(--about-green);color:#fff;font-size:14px;font-weight:650}.promise-button:hover{color:#fff;background:#183823}.promise-button span{font-size:19px}@media(max-width:640px){.promise-inner{align-items:flex-start;flex-direction:column;gap:22px}.about-promise-section{padding:38px 0}}`r`n</style>
 </head>
 
 <body>
@@ -26,7 +36,7 @@
                     <div class="col-lg-12">
                         <div class="bwtween-area-header-top">
                             <div class="discount-area">
-                                <p class="disc">FREE delivery & 40% Discount for next 3 orders! Place your 1st order in.</p>
+                                <p class="disc">FREE delivery & 40% DiscountÂ for next 3 orders! Place your 1st order in.</p>
                                 <div class="countdown">
                                     <div class="countDown">10/05/2025 10:20:00</div>
                                 </div>
@@ -693,101 +703,20 @@
             <div class="row">
                 <div class="col-lg-12">
                     <div class="inner-content-about-area">
-                        <h1 class="title">Do You Want To Know Us?</h1>
+                        <h1 class="title">Fresh food, thoughtfully chosen</h1>
                         <p class="disc">
-                            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Quisque pretium mollis ex, vel interdum augue faucibus sit amet. Proin tempor purus ac suscipit sagittis. Nunc finibus euismod enim, eu finibus nunc ullamcorper et.
+                            We bring farm-fresh produce, everyday groceries and pantry favourites together, with quality you can count on and delivery that fits your day.
                         </p>
-                        <a href="#" class="rts-btn btn-primary">Contact Us</a>
+                        <a href="contact.html" class="rts-btn btn-primary">Contact Us</a>
                     </div>
                 </div>
             </div>
         </div>
     </div>
     <!-- rts banner area about end -->
-    <!-- rts counter area start -->
-    <div class="rts-counter-area">
-        <div class="container-3">
-            <div class="row">
-                <div class="col-lg-12">
-                    <div class="counter-area-main-wrapper">
-                        <div class="single-counter-area">
-                            <h2 class="title"><span class="counter">60</span>M+</h2>
-                            <p>
-                                Happy <br>
-                                Customers
-                            </p>
-                        </div>
-                        <div class="single-counter-area">
-                            <h2 class="title"><span class="counter">105</span>M+</h2>
-                            <p>
-                                Grocery <br>
-                                Products
-                            </p>
-                        </div>
-                        <div class="single-counter-area">
-                            <h2 class="title"><span class="counter">80</span>K+</h2>
-                            <p>
-                                Active <br>
-                                Salesman
-                            </p>
-                        </div>
-                        <div class="single-counter-area">
-                            <h2 class="title"><span class="counter">60</span>K+</h2>
-                            <p>
-                                Store <br>
-                                Worldwide
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- rts counter area end -->
+        <section class="about-trust-strip"><div class="about-shell about-trust-grid"><div><span class="trust-mark">01</span><span><b>Fresh every day</b><small>Carefully selected produce</small></span></div><div><span class="trust-mark">02</span><span><b>Quality first</b><small>Good food for every table</small></span></div><div><span class="trust-mark">03</span><span><b>Easy shopping</b><small>Everyday essentials together</small></span></div><div><span class="trust-mark">04</span><span><b>At your doorstep</b><small>Convenience that feels personal</small></span></div></div></section>
 
-    <!-- about area start -->
-    <div class="rts-about-area rts-section-gap2">
-        <div class="container-3">
-            <div class="row align-items-center">
-                <div class="col-lg-4">
-                    <div class="thumbnail-left">
-                        <img src="assets/images/about/02.html" alt="">
-                    </div>
-                </div>
-                <div class="col-lg-8 pl--60 pl_md--10 pt_md--30 pl_sm--10 pt_sm--30">
-                    <div class="about-content-area-1">
-                        <h2 class="title">
-                            Your Destination for Quality Produce <br> and Pantry Essentials
-                        </h2>
-                        <p class="disc">
-                            Venenatis augue consequat class magnis sed purus, euismod ligula nibh congue quis vestibulum nostra, cubilia varius velit vitae rhoncus. Turpis malesuada fringilla urna dui est torquent aliquet, mi nec fermentum placerat nisi venenatis sapien, mattis nunc nullam rutrum feugiat porta. Pharetra mi nisl consequat semper quam litora aenean eros conubia molestie erat, et cursus integer rutrum sollicitudin auctor curae inceptos senectus sagittis est,
-                        </p>
-                        <div class="check-main-wrapper">
-                            <div class="single-check-area">
-                                Elementum sociis rhoncus aptent auctor urna justo
-                            </div>
-                            <div class="single-check-area">
-                                Habitasse venenatis gravida nisl, sollicitudin posuere
-                            </div>
-                            <div class="single-check-area">
-                                Uisque cum convallis nostra in sapien nascetur, netus
-                            </div>
-                            <div class="single-check-area">
-                                Class nunc aliquet nulla dis senectus lputate porta
-                            </div>
-                            <div class="single-check-area">
-                                Aenean gravida a est ante nisl nostra dui hendrerit
-                            </div>
-                            <div class="single-check-area">
-                                Bibendum venenatis dignissim non himenaeos eget
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- about area end -->
+        <section class="about-story-section"><div class="about-shell about-story-grid"><div class="story-photo-wrap"><img src="assets/images/grocery/04.jpg" alt="Fresh seasonal melon selected for the grocery store"><div class="photo-caption"><span class="caption-dot"></span>Fresh choices, made simple</div></div><div class="story-copy"><span class="about-eyebrow">A little about us</span><h2>Good groceries make everyday life better.</h2><p>From the first shop of the week to the small things you need today, we bring fresh produce and trusted pantry favourites into one easy place. We believe grocery shopping should feel simple, dependable and full of good choices.</p><div class="story-points"><div><i>✓</i><span><b>Picked with care</b><small>Quality produce and everyday essentials.</small></span></div><div><i>✓</i><span><b>Packed thoughtfully</b><small>Your order handled with freshness in mind.</small></span></div><div><i>✓</i><span><b>Made for your routine</b><small>A smoother shop, whenever you need it.</small></span></div></div><a href="shop-grid-sidebar.html" class="about-link">Explore our store <span>→</span></a></div></div></section>
 
     <!-- section-seperator start -->
     <div class="section-seperator">
@@ -797,280 +726,12 @@
     </div>
     <!-- section-seperator start -->
 
-    <!-- meet our expart team -->
-    <div class="meet-our-expart-team rts-section-gap2">
-        <div class="container-3">
-            <div class="row">
-                <div class="col-lg-12">
-                    <div class="title-center-area-main">
-                        <h2 class="title">
-                            Meet Our Expert Team
-                        </h2>
-                        <p class="disc">
-                            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Quisque pretium mollis ex, vel interdum augue faucibus sit amet. Proin tempor purus ac suscipit...
-                        </p>
-                    </div>
-                </div>
-            </div>
-            <div class="row g-5 mt--40">
-                <div class="col-lg-3 col-md-6 col-sm-12 col-12">
-                    <!-- single team area start -->
-                    <div class="single-team-style-one">
-                        <a href="#" class="thumbnail">
-                            <img src="assets/images/team/01.html" alt="team_single">
-                        </a>
-                        <div class="bottom-content-area">
-                            <div class="top">
-                                <h3 class="title">
-                                    Samuel Alexander
-                                </h3>
-                                <span class="designation">Design Director</span>
-                            </div>
-                            <div class="bottom">
-                                <a href="#" class="number">
-                                    <i class="fa-solid fa-phone-rotary"></i>
-                                    +25896 3158 3228
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                    <!-- single team area end -->
-                </div>
-                <div class="col-lg-3 col-md-6 col-sm-12 col-12">
-                    <!-- single team area start -->
-                    <div class="single-team-style-one">
-                        <a href="#" class="thumbnail">
-                            <img src="assets/images/team/02.html" alt="team_single">
-                        </a>
-                        <div class="bottom-content-area">
-                            <div class="top">
-                                <h3 class="title">
-                                    Isabella Charlotte
-                                </h3>
-                                <span class="designation">Design Director</span>
-                            </div>
-                            <div class="bottom">
-                                <a href="#" class="number">
-                                    <i class="fa-solid fa-phone-rotary"></i>
-                                    +25896 3158 3228
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                    <!-- single team area end -->
-                </div>
-                <div class="col-lg-3 col-md-6 col-sm-12 col-12">
-                    <!-- single team area start -->
-                    <div class="single-team-style-one">
-                        <a href="#" class="thumbnail">
-                            <img src="assets/images/team/03.html" alt="team_single">
-                        </a>
-                        <div class="bottom-content-area">
-                            <div class="top">
-                                <h3 class="title">
-                                    William Ethan
-                                </h3>
-                                <span class="designation">Design Director</span>
-                            </div>
-                            <div class="bottom">
-                                <a href="#" class="number">
-                                    <i class="fa-solid fa-phone-rotary"></i>
-                                    +25896 3158 3228
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                    <!-- single team area end -->
-                </div>
-                <div class="col-lg-3 col-md-6 col-sm-12 col-12">
-                    <!-- single team area start -->
-                    <div class="single-team-style-one">
-                        <a href="#" class="thumbnail">
-                            <img src="assets/images/team/04.html" alt="team_single">
-                        </a>
-                        <div class="bottom-content-area">
-                            <div class="top">
-                                <h3 class="title">
-                                    Sophia Amelia
-                                </h3>
-                                <span class="designation">Design Director</span>
-                            </div>
-                            <div class="bottom">
-                                <a href="#" class="number">
-                                    <i class="fa-solid fa-phone-rotary"></i>
-                                    +25896 3158 3228
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                    <!-- single team area end -->
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- meet our expart end -->
+        <section class="about-team-section"><div class="about-shell"><div class="about-team-heading"><div><span class="about-eyebrow">The people behind your shop</span><h2>Here for your everyday.</h2></div><p>A friendly team, a thoughtful shop, and a shared love of good food. We are here to make each grocery run feel a little easier.</p></div><div class="about-team-photo"><img src="assets/images/team/team-grocery.png" alt="The grocery team welcoming customers in the fresh produce aisle"><div class="team-photo-note"><span class="team-note-icon">✳</span><span><b>Good food. Good people.</b><small>Care in every part of your order.</small></span></div></div></div></section>
 
-    <!-- choosing reason service area start -->
-    <div class="rts-service-area rts-section-gap2 bg_light-1">
-        <div class="container-3">
-            <div class="row">
-                <div class="col-lg-12">
-                    <div class="title-center-area-main">
-                        <h2 class="title">
-                            Why You Choose Us?
-                        </h2>
-                        <p class="disc">
-                            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Quisque pretium mollis ex, vel interdum augue faucibus sit amet. Proin tempor purus ac suscipit...
-                        </p>
-                    </div>
-                </div>
-            </div>
-            <div class="row mt--30 g-5">
-                <div class="col-lg-4 col-md-6 col-sm-12 col-12">
-                    <div class="single-service-area-style-one">
-                        <div class="icon-area">
-                            <span class="bg-text">01</span>
-                            <img src="assets/images/service/01.html" alt="service">
-                        </div>
-                        <div class="bottom-content">
-                            <h3 class="title">
-                                Organic Food Services
-                            </h3>
-                            <p class="disc">
-                                When an unknown printer took a galley of type and scrambled it to make follow type specimen area book.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-lg-4 col-md-6 col-sm-12 col-12">
-                    <div class="single-service-area-style-one">
-                        <div class="icon-area">
-                            <span class="bg-text">02</span>
-                            <img src="assets/images/service/02.html" alt="service">
-                        </div>
-                        <div class="bottom-content">
-                            <h3 class="title">
-                                Organic Food Services
-                            </h3>
-                            <p class="disc">
-                                When an unknown printer took a galley of type and scrambled it to make follow type specimen area book.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-lg-4 col-md-6 col-sm-12 col-12">
-                    <div class="single-service-area-style-one">
-                        <div class="icon-area">
-                            <span class="bg-text">03</span>
-                            <img src="assets/images/service/03.html" alt="service">
-                        </div>
-                        <div class="bottom-content">
-                            <h3 class="title">
-                                Organic Food Services
-                            </h3>
-                            <p class="disc">
-                                When an unknown printer took a galley of type and scrambled it to make follow type specimen area book.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- choosing reason service area end -->
+        <section class="about-benefits-section"><div class="about-shell"><div class="benefits-heading"><span class="about-eyebrow">Why shop with us</span><h2>Everyday essentials, with a little more care.</h2><p>The details matter—from the quality on the shelf to the moment your groceries reach home.</p></div><div class="benefits-grid"><article><span class="benefit-number">01</span><h3>Fresh finds</h3><p>Discover seasonal produce and daily favourites chosen to make meals more enjoyable.</p></article><article><span class="benefit-number">02</span><h3>One easy shop</h3><p>Bring pantry staples, household needs and fresh food together in one convenient place.</p></article><article><span class="benefit-number">03</span><h3>Thoughtful service</h3><p>From browsing to delivery, we work to make every part of your shop feel straightforward.</p></article></div></div></section>
 
 
-    <!-- rts customers feedbacka area start -->
-    <div class="rts-cuystomers-feedback-area rts-section-gap2">
-        <div class="container-3">
-            <div class="row">
-                <div class="col-lgl-12">
-                    <div class="title-area-left pl--0">
-                        <h2 class="title-left mb--0">
-                            Customer Feedbacks
-                        </h2>
-                    </div>
-                </div>
-            </div>
-            <div class="row mt--50">
-                <div class="col-lg-12">
-                    <div class="customers-feedback-area-main-wrapper">
-                        <!-- rts category area satart -->
-                        <div class="rts-caregory-area-one ">
-                            <div class="row">
-                                <div class="col-lg-12">
-                                    <div class="category-area-main-wrapper-one">
-                                        <div class="swiper mySwiper-category-1 swiper-data" data-swiper='{
-                                            "spaceBetween":24,
-                                            "slidesPerView":2,
-                                            "loop": true,
-                                            "speed": 1000,
-                                            "navigation":{
-                                                "nextEl":".swiper-button-nexts",
-                                                "prevEl":".swiper-button-prevs"
-                                                },
-                                            "breakpoints":{
-                                            "0":{
-                                                "slidesPerView":1,
-                                                "spaceBetween": 24},
-                                            "320":{
-                                                "slidesPerView":1,
-                                                "spaceBetween":24},
-                                            "480":{
-                                                "slidesPerView":1,
-                                                "spaceBetween":24},
-                                            "640":{
-                                                "slidesPerView":1,
-                                                "spaceBetween":24},
-                                            "840":{
-                                                "slidesPerView":1,
-                                                "spaceBetween":24},
-                                            "1140":{
-                                                "slidesPerView":2,
-                                                "spaceBetween":24}
-                                            }
-                                        }'>
-                                            <div class="swiper-wrapper">
-                                                <!-- single swiper start -->
-                                                <div class="swiper-slide">
-                                                    <!-- single customers feedback area start -->
-                                                    <div class="single-customers-feedback-area">
-                                                        <div class="top-thumbnail-area">
-                                                            <div class="left">
-                                                                <img src="assets/images/testimonial/01.html" alt="logo">
-                                                                <div class="information">
-                                                                    <h4 class="title">
-                                                                        Andrew D. Smith
-                                                                    </h4>
-                                                                    <span>Manager</span>
-                                                                </div>
-                                                            </div>
-                                                            <div class="right">
-                                                                <img src="assets/images/testimonial/02.html" alt="logo">
-                                                            </div>
-                                                        </div>
-                                                        <div class="body-content">
-                                                            <p class="disc">
-                                                                “According to the council of supply chain professionals the council of logistics management logistics is the process of planning, implementing and controlling procedures”
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                    <!-- single customers feedback area end -->
-                                                </div>
-                                                <!-- single swiper start -->
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <!-- rts category area end -->
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- rts customers feedbacka area end -->
+        <section class="about-promise-section"><div class="about-shell promise-inner"><div><span class="about-eyebrow">Your next good shop starts here</span><h2>Make room for something fresh.</h2><p>Find the everyday favourites and fresh picks that make home feel well stocked.</p></div><a href="shop-grid-sidebar.html" class="promise-button">Shop groceries <span>→</span></a></div></section>
 
 
 
@@ -1269,7 +930,7 @@
                         </div>
                         <div class="payment-access">
                             <span>Payment Accepts:</span>
-                            <img src="assets/images/payment/01.html" alt="">
+                            <img src="assets/images/payment/01.jpg" alt="">
                         </div>
                     </div>
                 </div>
@@ -1285,12 +946,12 @@
                 <div class="col-lg-12">
                     <div class="copyright-between-1">
                         <p class="disc">
-                            Copyright 2024 <a href="#">©Ekomart</a>. All rights reserved.
+                            Copyright 2024 <a href="#">Â©Ekomart</a>. All rights reserved.
                         </p>
                         <a href="#" class="playstore-app-area">
                             <span>Download App</span>
-                            <img src="assets/images/payment/02.html" alt="">
-                            <img src="assets/images/payment/03.html" alt="">
+                            <img src="assets/images/payment/02.jpg" alt="">
+                            <img src="assets/images/payment/03.jpg" alt="">
                         </a>
                     </div>
                 </div>
@@ -1652,3 +1313,5 @@
 
 <!-- Mirrored from html.themewant.com/ekomart/about.html by HTTrack Website Copier/3.x [XR&CO'2014], Sat, 26 Sep 2026 08:15:21 GMT -->
 </html>
+
+
