@@ -4068,8 +4068,11 @@ async function paintAddresses() {
   if (!list.length) return renderEmpty(t.container, 'No saved addresses yet.', spec);
   repeat(t, list, (node, a) => {
     setText(pick('.address-name|h5|h6', node), a.name || '');
+    /* A saved address uses `line`, SINGULAR — the edit handler below already
+       knew that; this line did not, so every saved address was shown without
+       its street: "Noida, Uttar Pradesh, 201301" and nothing to deliver to. */
     setText(pick('.address-body|p|address', node),
-      [a.line1, a.line2, a.city, a.state, a.pincode, a.country].filter(Boolean).join(', '));
+      [a.line, a.line1, a.line2, a.city, a.state, a.pincode, a.country].filter(Boolean).join(', '));
     pick('.address-default|[data-default]', node)?.addEventListener('click', async (e) => {
       e.preventDefault();
       try { await api.makeAddressDefault(a.id); notify('Default address updated.', 'success'); }
