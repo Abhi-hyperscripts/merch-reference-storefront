@@ -570,14 +570,21 @@ export const cart = {
 /* A local wishlist for guests, merged into the account's on sign-in. The store
    owns the real one; this is what makes the heart icon work signed out. */
 const WISH_KEY = 'merch.wishlist';
+const wishListeners = new Set();
+function writeWish(ids) {
+  writeJson(WISH_KEY, ids);
+  wishListeners.forEach((fn) => { try { fn(ids); } catch (e) { warn(e); } });
+}
+
 export const wishlist = {
   ids: () => readJson(WISH_KEY, []),
   has: (id) => wishlist.ids().includes(id),
+  onChange: (fn) => { wishListeners.add(fn); return () => wishListeners.delete(fn); },
   async toggle(itemId) {
     const on = !wishlist.has(itemId);
     const ids = wishlist.ids().filter((x) => x !== itemId);
     if (on) ids.push(itemId);
-    writeJson(WISH_KEY, ids);
+    writeWish(ids);
     if (token.get()) {
       try { on ? await api.addToWishlist(itemId) : await api.removeFromWishlist(itemId); }
       catch (e) { if (!(e instanceof ApiError && e.isUnauthenticated)) warn(e); }
@@ -590,7 +597,7 @@ export const wishlist = {
     const local = wishlist.ids();
     try {
       for (const id of local) await api.addToWishlist(id).catch(() => {});
-      writeJson(WISH_KEY, (await api.wishlist()) || []);
+      writeWish((await api.wishlist()) || []);
     } catch (e) { warn(e); }
   },
 };
@@ -1856,12 +1863,130 @@ async function loadStoreSettings() {
   }
 }
 
+function paintMiniCart() {
+  const popups = pickAll('.category-sub-menu.card-number-show');
+  if (!popups.length) return;
+
+  const lines = cart.lines();
+  const count = cart.count();
+  const subtotal = cart.localSubtotal();
+  const countPad = String(count).padStart(2, '0');
+
+  let itemsHtml = '';
+  if (lines.length > 0) {
+    itemsHtml = lines.map((l, i) => `
+      <div class="cart-item-1${i === 0 ? ' border-top' : ''}">
+          <div class="img-name">
+              <div class="thumbanil">
+                  <img src="${escapeHtml(mediaUrl(l.image) || 'assets/images/shop/cart-1.png')}" alt="${escapeHtml(l.name)}" style="width: 70px; height: 70px; object-fit: contain;">
+              </div>
+              <div class="details">
+                  <a href="${escapeHtml(productHref({ id: l.itemId }))}">
+                      <h5 class="title" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${escapeHtml(l.name)}</h5>
+                  </a>
+                  <div class="number">
+                      ${l.qty} <i class="fa-regular fa-x"></i>
+                      <span>${money(l.price)}</span>
+                  </div>
+              </div>
+          </div>
+          <div class="close-c1" data-remove-id="${escapeHtml(l.itemId)}" role="button" title="Remove item" style="cursor: pointer;">
+              <i class="fa-regular fa-x"></i>
+          </div>
+      </div>
+    `).join('');
+  }
+
+  const freeShippingLimit = 125;
+  const progressPct = Math.min(100, Math.round((subtotal / freeShippingLimit) * 100));
+  const shippingMsg = subtotal >= freeShippingLimit
+    ? 'You have reached <span>Free Shipping</span>!'
+    : `Spend More <span>${money(Math.max(0, freeShippingLimit - subtotal))}</span> to reach <span>Free Shipping</span>`;
+
+  popups.forEach((popup) => {
+    if (lines.length === 0) {
+      popup.innerHTML = `
+        <h5 class="shopping-cart-number">Shopping Cart (00)</h5>
+        <div class="empty-cart-popup" style="padding: 30px 15px; text-align: center;">
+            <i class="fa-sharp fa-regular fa-cart-shopping" style="font-size: 32px; color: #94a3b8; margin-bottom: 12px; display: inline-block;"></i>
+            <p style="color: #64748b; margin-bottom: 15px; font-size: 14px;">Your cart is currently empty.</p>
+            <a href="${pageUrl('listing')}" class="rts-btn btn-primary" style="padding: 8px 18px; font-size: 13px; display: inline-block;">Shop Now</a>
+        </div>
+      `;
+    } else {
+      popup.innerHTML = `
+        <h5 class="shopping-cart-number">Shopping Cart (${countPad})</h5>
+        <div class="cart-items-wrapper">
+            ${itemsHtml}
+        </div>
+        <div class="sub-total-cart-balance">
+            <div class="bottom-content-deals mt--10">
+                <div class="top">
+                    <span>Sub Total:</span>
+                    <span class="number-c">${money(subtotal)}</span>
+                </div>
+                <div class="single-progress-area-incard">
+                    <div class="progress">
+                        <div class="progress-bar wow fadeInLeft" role="progressbar" style="width: ${progressPct}%" aria-valuenow="${progressPct}" aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                </div>
+                <p>${shippingMsg}</p>
+            </div>
+            <div class="button-wrapper d-flex align-items-center justify-content-between">
+                <a href="${pageUrl('cart')}" class="rts-btn btn-primary">View Cart</a>
+                <a href="${pageUrl('checkout')}" class="rts-btn btn-primary border-only">CheckOut</a>
+            </div>
+        </div>
+      `;
+    }
+
+    popup.querySelectorAll('.close-c1[data-remove-id]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const id = btn.getAttribute('data-remove-id');
+        if (id) cart.remove(id);
+      });
+    });
+
+    popup.onclick = (e) => {
+      e.stopPropagation();
+    };
+  });
+}
+
 function paintHeader() {
   const h = THEME?.header || {};
-  const count = cart.count();
-  pickAll(h.cartCount).forEach((el) => setText(el, count));
-  pickAll(h.wishCount).forEach((el) => setText(el, wishlist.ids().length));
+  const cartCount = cart.count();
+  const wishCount = wishlist.ids().length;
+
+  pickAll('.btn-border-only.cart').forEach((btn) => {
+    let num = btn.querySelector('.number');
+    if (!num) {
+      num = document.createElement('span');
+      num.className = 'number';
+      const menu = btn.querySelector('.category-sub-menu');
+      if (menu) btn.insertBefore(num, menu);
+      else btn.appendChild(num);
+    }
+    setText(num, cartCount);
+  });
+  pickAll(h.cartCount).forEach((el) => setText(el, cartCount));
+
+  pickAll('.btn-border-only.wishlist').forEach((btn) => {
+    let num = btn.querySelector('.number');
+    if (!num) {
+      num = document.createElement('span');
+      num.className = 'number';
+      btn.appendChild(num);
+    }
+    setText(num, wishCount);
+  });
+  pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
+
   pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
+
+  paintMiniCart();
 }
 
 /* --- The shop's own identity -------------------------------------------------
@@ -4583,8 +4708,28 @@ pages.wishlist = async () => {
     const t = takeTemplate(spec);
     if (!t) return;
     if (!items.length) return renderEmpty(t.container, 'Your wishlist is empty.');
-    repeat(t, items, (node, p) => fillFields(node, spec.fields,
-      { itemId: p.id, name: p.name, price: p.price, qty: 1, image: (p.imageUrls || [])[0] }, { node }));
+    repeat(t, items, (node, p) => {
+      fillFields(node, spec.fields,
+        { itemId: p.id, name: p.name, price: p.price, qty: 1, image: (p.imageUrls || [])[0] }, { node });
+      const removeBtn = pick('.close', node);
+      if (removeBtn) {
+        removeBtn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          await wishlist.toggle(p.id);
+          node.remove();
+          if (!wishlist.ids().length) renderEmpty(t.container, 'Your wishlist is empty.');
+        };
+      }
+      const addCartBtn = pick('.button-area a', node);
+      if (addCartBtn) {
+        addCartBtn.onclick = (e) => {
+          e.preventDefault();
+          cart.add(p, 1);
+          notify('Added to cart.', 'success');
+        };
+      }
+    });
   }
 };
 
@@ -5083,6 +5228,7 @@ async function boot() {
 
   paintHeader();
   cart.onChange(paintHeader);
+  wishlist.onChange(paintHeader);
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
   try { paintUsps(STORE); } catch (e) { warn('usps', e); }
