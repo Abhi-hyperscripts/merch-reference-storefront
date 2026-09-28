@@ -27755,37 +27755,85 @@ header.header-three .sub-dropdown .submenu.third-lvl.base {
 .single-tab-content-shop-details .details-row-2 {
   display: flex;
   align-items: flex-start;
-  gap: 40px;
+  gap: 35px;
 }
 
-@media only screen and (max-width: 1199px) {
+@media only screen and (max-width: 767px) {
   .single-tab-content-shop-details .details-row-2 {
     flex-direction: column;
-    gap: 15px;
+    gap: 20px;
     align-items: flex-start;
   }
 }
 
 .single-tab-content-shop-details .details-row-2 .left-area {
   display: block;
-  min-width: max-content;
+  flex: 0 0 360px;
+  max-width: 360px;
+  width: 360px;
+  min-width: 0;
 }
 
-@media only screen and (max-width: 575px) {
+.single-tab-content-shop-details .details-row-2 .left-area .tab-img-card {
+  width: 100%;
+  height: 250px;
+  background: #ffffff;
+  border: 1px solid #eaedf2;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
+}
+
+@media only screen and (max-width: 767px) {
   .single-tab-content-shop-details .details-row-2 .left-area {
-    min-width: 100%;
+    flex: 0 0 100%;
+    max-width: 100%;
+    width: 100%;
+    min-width: 0;
+  }
+  .single-tab-content-shop-details .details-row-2 .left-area .tab-img-card {
+    height: 220px;
   }
 }
 
 .single-tab-content-shop-details .details-row-2 .left-area img {
-  min-width: max-content;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 6px;
+  display: block;
+  min-width: 0;
+  margin: 0 auto;
 }
 
-@media only screen and (max-width: 575px) {
-  .single-tab-content-shop-details .details-row-2 .left-area img {
-    min-width: 100%;
-  }
+.single-tab-content-shop-details .details-row-2 .right {
+  flex: 1 1 0%;
+  min-width: 0;
 }
+
+.single-tab-content-shop-details .details-row-2 .right .title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1a202c;
+  margin-top: 0;
+  margin-bottom: 14px;
+  line-height: 1.3;
+}
+
+.single-tab-content-shop-details .details-row-2 .right p {
+  font-size: 15px;
+  line-height: 1.75;
+  color: #55585b;
+  margin-bottom: 18px;
+}
+
 
 .product-discription-tab-shop {
   margin-top: 30px;
