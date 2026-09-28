@@ -1160,7 +1160,8 @@ const THEMES = {
         link:  { sel: 'a', attr: 'href', all: true, value: postHref },
         image: { sel: 'img', attr: 'src', value: postImage },
         title: { sel: '.title|h4|h5', text: (b) => b.title },
-        date:  { sel: '.date|.blog-date', text: postDate },
+        date:  { sel: '.date|.blog-date|.single-meta:first-child span', text: postDate },
+        category: { sel: '.single-meta:has(.fa-folder)', dropWhen: (b) => !b.category, text: (b) => b.category },
         excerpt: { sel: '.disc|p', text: (b) => b.excerpt || '' },
       },
     },
@@ -2468,6 +2469,7 @@ pages.home = async () => {
   paintBanners(data);
   paintCategoryTiles(data);
   await renderRecentlyViewed(rails[rails.length - 1]);
+  await paintBlogStrip(4);
   wireQuickView();
 };
 
@@ -2546,6 +2548,37 @@ function paintCategoryTiles(data) {
     const room = Math.max(1, templateCount({ ...spec, el }));
     repeat(t, cats.slice(0, Math.max(room, Math.min(cats.length, room * 2))), (node, c) => {
       fillFields(node, spec.fields, c, { node });
+    });
+  }
+}
+
+/* Blog posts on pages outside the blog archive - e.g. the home page's
+   "Latest Blog Post Insights" strip. Shown with at most `max` posts (default 4). */
+const hydratedBlogs = new WeakSet();
+async function paintBlogStrip(max = 4) {
+  const spec = THEME?.blog;
+  if (!spec) return;
+  const cards = pickAll(spec.card);
+  if (!cards.length) return;
+
+  const containers = productContainers(spec).filter((el) => !hydratedBlogs.has(el));
+  if (!containers.length) return;
+
+  let posts = [];
+  try { posts = (await api.blog()) || []; } catch (e) { return warn('blog strip', e); }
+
+  if (!posts.length) {
+    containers.forEach((el) => show(el.closest('section, .section, .rts-section, .blog-area-start') || el, false));
+    return;
+  }
+
+  for (const el of containers) {
+    hydratedBlogs.add(el);
+    const t = takeTemplate({ ...spec, el });
+    if (!t) continue;
+    repeat(t, posts.slice(0, max), (node, post) => {
+      node.dataset.merchSlug = post.slug;
+      fillFields(node, spec.fields, post, { node });
     });
   }
 }
@@ -5046,6 +5079,7 @@ async function boot() {
 
   /* Whatever the role did not reach. */
   try { await fillStrayStrips(); } catch (e) { warn('stray strips', e); }
+  if (PAGE !== 'blog') { try { await paintBlogStrip(4); } catch (e) { warn('blog strip', e); } }
   try { wireQuickView(); } catch (e) { warn('quick view', e); }
 
   await runDeferredThemeScripts();
