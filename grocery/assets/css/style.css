@@ -23344,6 +23344,13 @@ body.modal-open {
   max-width: 65px;
 }
 
+.single-cart-area-list.main .product-main-cart .thumbnail img {
+  width: 65px;
+  height: 65px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
 .single-cart-area-list.main .product-main-cart .information .title {
   margin-bottom: 7px;
 }
@@ -23370,6 +23377,12 @@ body.modal-open {
   background: #FF0000;
   justify-content: center;
   color: #fff;
+  transition: all 0.2s ease;
+}
+
+.single-cart-area-list.main .product-main-cart .close i:hover {
+  background: #dc2626;
+  transform: scale(1.08);
 }
 
 .single-cart-area-list.main .price {
