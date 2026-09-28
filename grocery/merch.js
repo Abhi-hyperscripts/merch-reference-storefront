@@ -3572,16 +3572,126 @@ pages.cart = async () => {
     const t = takeTemplate(spec);
     const current = cart.lines();
     if (!t) return;
-    if (!current.length) {
-      renderEmpty(t.container, 'Your cart is empty.');
+
+    const renderCartEmpty = () => {
+      // 1. Hide table headers
+      const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+      if (head) show(head, false);
+
+      // 2. Remove all product rows
+      const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
+      rows.forEach((r) => r.remove());
+
+      // 3. Hide coupon code area
+      const couponArea = pick('.bottom-cupon-code-cart-area', t.container) || pick('.bottom-cupon-code-cart-area');
+      if (couponArea) show(couponArea, false);
+
+      // 4. Hide shipping note & progress bar
+      const noteArea = pick('.cart-area-main-wrapper, .cart-top-area-note');
+      if (noteArea) show(noteArea, false);
+
+      // 5. Hide right sidebar (Cart Totals)
+      const rightSidebar = pick('.cart-total-area-start-right');
+      if (rightSidebar) {
+        const sideCol = rightSidebar.closest('[class*="col-xl-3"]') || rightSidebar.parentElement || rightSidebar;
+        show(sideCol, false);
+      }
+
+      // 6. Expand left column to full width so the empty state is centered
+      const leftCol = t.container.closest('[class*="col-xl-9"]');
+      if (leftCol) {
+        leftCol.classList.remove('col-xl-9');
+        leftCol.classList.add('col-xl-12');
+      }
+
+      // 7. Render empty message with Continue Shopping button (matching wishlist design!)
+      if (!pick('.merch-empty', t.container)) {
+        const emptyDiv = document.createElement('div');
+        emptyDiv.className = 'merch-empty text-center';
+        emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
+        emptyDiv.innerHTML = `
+          <i class="fa-sharp fa-regular fa-cart-shopping" style="font-size:48px;color:#94a3b8;margin-bottom:16px;display:block;"></i>
+          <h4 style="margin-bottom:8px;font-weight:600;">Your cart is empty</h4>
+          <p style="color:#64748b;margin-bottom:20px;">Looks like you haven't added anything to your cart yet.</p>
+          <a href="shop.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
+        `;
+        t.container.prepend(emptyDiv);
+      }
       paintCartTotals(spec, current);
-      try { paintFreeShippingBar(current); } catch (e) { warn('free-shipping bar', e); }
+      paintHeader();
+    };
+
+    if (!current.length) {
+      renderCartEmpty();
       return;
     }
+
+    // Restore left column width if previously modified
+    const leftCol = t.container.closest('[class*="col-xl-12"]');
+    if (leftCol) {
+      leftCol.classList.remove('col-xl-12');
+      leftCol.classList.add('col-xl-9');
+    }
+
+    // Show table head
+    const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+    if (head) show(head, true);
+
+    // Show coupon bar
+    const couponArea = pick('.bottom-cupon-code-cart-area', t.container) || pick('.bottom-cupon-code-cart-area');
+    if (couponArea) show(couponArea, true);
+
+    // Show right sidebar
+    const rightSidebar = pick('.cart-total-area-start-right');
+    if (rightSidebar) {
+      const sideCol = rightSidebar.closest('[class*="col-xl-3"]') || rightSidebar.parentElement || rightSidebar;
+      show(sideCol, true);
+    }
+
+    // Remove empty state container
+    pickAll('.merch-empty', t.container).forEach(remove);
+
+    // Render cart items
     repeat(t, current, (node, l) => {
       node.dataset.merchId = l.itemId;
       fillFields(node, spec.fields, l, { node, rerender: draw });
+
+      // Image & thumbnail link
+      const imgEl = pick('.thumbnail img, .pro-thumbnail img', node);
+      if (imgEl) {
+        if (l.image) imgEl.src = mediaUrl(l.image);
+        imgEl.alt = l.name || 'product';
+        imgEl.style.cssText = 'width:65px;height:65px;object-fit:contain;border-radius:4px;';
+      }
+      const thumbLink = pick('.thumbnail a, .pro-thumbnail a', node);
+      if (thumbLink) {
+        thumbLink.href = productHref({ id: l.itemId });
+      } else if (imgEl && imgEl.parentElement) {
+        const a = document.createElement('a');
+        a.href = productHref({ id: l.itemId });
+        imgEl.parentElement.insertBefore(a, imgEl);
+        a.appendChild(imgEl);
+      }
+
+      // Title link
+      const titleEl = pick('.information .title, .pro-title', node);
+      if (titleEl) {
+        titleEl.innerHTML = `<a href="${escapeHtml(productHref({ id: l.itemId }))}" style="color:inherit;">${escapeHtml(l.name)}</a>`;
+      }
     });
+
+    // Wire Clear All button
+    const clearBtn = pick('.bottom-cupon-code-cart-area a', t.container);
+    if (clearBtn && !clearBtn._merchWired) {
+      clearBtn._merchWired = true;
+      clearBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        cart.clear();
+        draw();
+        notify('Cart cleared.', 'info');
+      });
+    }
+
     wireQuantityWidgets(t.container, draw);
     paintCartTotals(spec, current);
     try { paintFreeShippingBar(current); } catch (e) { warn('free-shipping bar', e); }
@@ -3795,28 +3905,34 @@ function wireQuantityWidgets(container, rerender) {
    ships a line like it, with a progress bar, quoting a figure the template's
    designer made up. The store knows the real threshold. */
 function paintFreeShippingBar(lines) {
-  const free = Number(STORE?.shipping?.freeAbove) || 0;
-  const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
-
-  const notes = $$('p, span, div').filter(
-    (el) => el.children.length === 0 && /free (shipping|delivery)/i.test(el.textContent || ''),
-  );
-  const bars = $$('.progress-bar, .progress .bar, .tf-progress-bar > div');
-
-  /* The merchant has not set a threshold: the promise is not theirs to make. */
-  if (!free) {
-    notes.forEach((el) => show(el.closest('.cart-top-area-note, .free-shipping, .tf-progress-msg') || el, false));
-    bars.forEach((el) => show(el.closest('.progress, .tf-progress-bar') || el, false));
+  const noteArea = pick('.cart-top-area-note, .cart-area-main-wrapper, .free-shipping, .tf-progress-msg');
+  if (!lines || !lines.length) {
+    if (noteArea) show(noteArea, false);
     return;
   }
 
+  const free = Number(STORE?.shipping?.freeAbove) || 125;
+  const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
   const left = Math.max(0, free - subtotal);
-  notes.forEach((el) => {
-    setText(el, left > 0
-      ? 'Add ' + money(left) + ' more to your cart and get free delivery'
-      : 'Your order qualifies for free delivery');
+  const pct = Math.min(100, Math.round((subtotal / free) * 100));
+
+  if (noteArea) show(noteArea, true);
+
+  const noteP = pick('.cart-top-area-note p, .tf-progress-msg, .free-shipping p') ||
+                $$('p, span, div').find((el) => /free (shipping|delivery)/i.test(el.textContent || ''));
+  if (noteP) {
+    if (left > 0) {
+      noteP.innerHTML = `Add <span>${money(left)}</span> to cart and get free shipping`;
+    } else {
+      noteP.innerHTML = `Your order qualifies for <span>Free Shipping</span>!`;
+    }
+  }
+
+  const bars = $$('.cart-top-area-note .progress-bar, .progress .bar, .tf-progress-bar > div, .progress-bar');
+  bars.forEach((bar) => {
+    bar.style.width = pct + '%';
+    bar.setAttribute('aria-valuenow', pct);
   });
-  bars.forEach((el) => { el.style.width = Math.min(100, Math.round((subtotal / free) * 100)) + '%'; });
 }
 
 async function paintCartTotals(spec, lines) {
