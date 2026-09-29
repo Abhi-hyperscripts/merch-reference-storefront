@@ -520,7 +520,8 @@ function writeCart(lines) {
 export const cart = {
   lines: () => readCart(),
   apiLines: () => readCart().map((l) => ({ itemId: l.itemId, qty: l.qty })),
-  count: () => readCart().reduce((n, l) => n + l.qty, 0),
+  count: () => readCart().length,
+  totalUnits: () => readCart().reduce((n, l) => n + l.qty, 0),
   localSubtotal: () => readCart().reduce((n, l) => n + (Number(l.price) || 0) * l.qty, 0),
   onChange: (fn) => { cartListeners.add(fn); return () => cartListeners.delete(fn); },
 
@@ -4721,10 +4722,11 @@ pages.cart = async () => {
   await cart.refresh();
 
   // If electronic theme, remove any static "You may also like" section
-  const recsSection = pick('section.flat-spacing.pt-0, .tf-cart-sold + section, section:has(.tf-sw-recent)');
+  const recsSection = pick('section.flat-spacing.pt-0');
   if (recsSection) recsSection.remove();
 
   const draw = () => {
+    const t = takeTemplate(spec);
     const current = cart.lines();
     const emptyWrap = pick('.tf-cart-empty-wrap');
     const contentRow = pick('.cart-content-row');
@@ -4738,30 +4740,27 @@ pages.cart = async () => {
         if (contentRow) contentRow.style.display = 'none';
         if (soldEl) show(soldEl, false);
         if (sideCol) show(sideCol, false);
-      } else {
-        const t = takeTemplate(spec);
-        if (t) {
-          const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container);
-          if (head) show(head, false);
-          const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
-          rows.forEach((r) => r.remove());
-          const couponArea = pick('.bottom-cupon-code-cart-area, .ip-discount-code, .group-discount');
-          if (couponArea) show(couponArea, false);
-          if (soldEl) show(soldEl, false);
-          if (sideCol) show(sideCol, false);
+      } else if (t) {
+        const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container);
+        if (head) show(head, false);
+        const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
+        rows.forEach((r) => r.remove());
+        const couponArea = pick('.bottom-cupon-code-cart-area, .ip-discount-code, .group-discount');
+        if (couponArea) show(couponArea, false);
+        if (soldEl) show(soldEl, false);
+        if (sideCol) show(sideCol, false);
 
-          if (!pick('.merch-empty', t.container.parentElement || t.container)) {
-            const emptyDiv = document.createElement('div');
-            emptyDiv.className = 'merch-empty text-center';
-            emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
-            emptyDiv.innerHTML = `
-              <i class="icon icon-cart text-muted mb-3 d-inline-block" style="font-size:48px;"></i>
-              <h4 style="margin-bottom:8px;font-weight:600;">Your cart is empty</h4>
-              <p style="color:#64748b;margin-bottom:20px;">Looks like you haven't added anything to your cart yet.</p>
-              <a href="${pageUrl('listing')}" class="tf-btn btn-fill radius-4" style="display:inline-block;padding:12px 28px;"><span class="text">Continue Shopping</span></a>
-            `;
-            (t.container.parentElement || t.container).prepend(emptyDiv);
-          }
+        if (!pick('.merch-empty', t.container.parentElement || t.container)) {
+          const emptyDiv = document.createElement('div');
+          emptyDiv.className = 'merch-empty text-center';
+          emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
+          emptyDiv.innerHTML = `
+            <i class="icon icon-cart text-muted mb-3 d-inline-block" style="font-size:48px;"></i>
+            <h4 style="margin-bottom:8px;font-weight:600;">Your cart is empty</h4>
+            <p style="color:#64748b;margin-bottom:20px;">Looks like you haven't added anything to your cart yet.</p>
+            <a href="${pageUrl('listing')}" class="tf-btn btn-fill radius-4" style="display:inline-block;padding:12px 28px;"><span class="text">Continue Shopping</span></a>
+          `;
+          (t.container.parentElement || t.container).prepend(emptyDiv);
         }
       }
       paintCartTotals(spec, current);
@@ -4774,7 +4773,6 @@ pages.cart = async () => {
     if (soldEl) show(soldEl, true);
     if (sideCol) show(sideCol, true);
 
-    const t = takeTemplate(spec);
     if (!t) return;
 
     // Restore left column width if previously modified
@@ -5124,9 +5122,10 @@ function wireQuantityWidgets(container, rerender) {
    ships a line like it, with a progress bar, quoting a figure the template's
    designer made up. The store knows the real threshold. */
 function paintFreeShippingBar(lines) {
-  const noteArea = pick('.cart-top-area-note, .cart-area-main-wrapper, .free-shipping, .tf-progress-msg, .notification-progress, .tf-cart-sold');
+  const noteArea = pick('.cart-top-area-note, .cart-area-main-wrapper, .free-shipping, .tf-progress-msg, .notification-progress');
+  if (!noteArea) return;
   if (!lines || !lines.length) {
-    if (noteArea) show(noteArea, false);
+    show(noteArea, false);
     return;
   }
 
@@ -5135,10 +5134,9 @@ function paintFreeShippingBar(lines) {
   const left = Math.max(0, free - subtotal);
   const pct = Math.min(100, Math.round((subtotal / free) * 100));
 
-  if (noteArea) show(noteArea, true);
+  show(noteArea, true);
 
-  const noteP = pick('.notification-progress .text, .cart-top-area-note p, .tf-progress-msg, .free-shipping p') ||
-                $$('p, span, div').find((el) => /free (shipping|delivery|ship)/i.test(el.textContent || ''));
+  const noteP = pick('.notification-progress .text, .cart-top-area-note p, .tf-progress-msg, .free-shipping p', noteArea) || pick('p, span', noteArea);
   if (noteP) {
     if (left > 0) {
       noteP.innerHTML = `Buy <span class="fw-semibold text-primary">${money(left)}</span> more to get <span class="fw-semibold">Freeship</span>`;
@@ -5147,7 +5145,7 @@ function paintFreeShippingBar(lines) {
     }
   }
 
-  const bars = $$('.progress-cart .value, .cart-top-area-note .progress-bar, .progress .bar, .tf-progress-bar > div, .progress-bar');
+  const bars = pickAll('.progress-cart .value, .cart-top-area-note .progress-bar, .progress .bar, .tf-progress-bar > div, .progress-bar', noteArea);
   bars.forEach((bar) => {
     bar.style.width = pct + '%';
     bar.setAttribute('aria-valuenow', pct);
