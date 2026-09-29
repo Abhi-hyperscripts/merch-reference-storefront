@@ -658,24 +658,32 @@
                         <button class="nav-link" id="v-pills-messages-tab" data-bs-toggle="pill" data-bs-target="#v-pills-messages" type="button" role="tab" aria-controls="v-pills-messages" aria-selected="false"><i class="fa-sharp fa-regular fa-tractor"></i> Track Your Order</button>
                         <button class="nav-link" id="v-pills-settings-tab" data-bs-toggle="pill" data-bs-target="#v-pills-settings" type="button" role="tab" aria-controls="v-pills-settings" aria-selected="false"><i class="fa-sharp fa-regular fa-location-dot"></i>My Address</button>
                         <button class="nav-link" id="v-pills-settingsa-tab" data-bs-toggle="pill" data-bs-target="#v-pills-settingsa" type="button" role="tab" aria-controls="v-pills-settingsa" aria-selected="false"><i class="fa-light fa-user"></i>Account Details</button>
-                        <button class="nav-link" id="v-pills-settingsb-tab" data-bs-toggle="pill" data-bs-target="#v-pills-settingsb" type="button" role="tab" aria-controls="v-pills-settingsb" aria-selected="false"><a href="login.html"><i class="fa-light fa-right-from-bracket"></i>log Out</a></button>
+                        <button class="nav-link account-logout-btn" id="v-pills-settingsb-tab" data-signout type="button"><i class="fa-light fa-right-from-bracket"></i>Log Out</button>
                     </div>
                 </div>
                 <div class="col-lg-9 pl--50 pl_md--10 pl_sm--10 pt_md--30 pt_sm--30">
                     <div class="tab-content" id="v-pills-tabContent">
                         <div class="tab-pane fade show active" id="v-pills-home" role="tabpanel" aria-labelledby="v-pills-home-tab" tabindex="0">
                             <div class="dashboard-account-area">
-                                <h2 class="title">Hello Raisa! (Not Raisa?) <a href="login.html">Log Out.</a></h2>
-                                <p class="disc">
-                                    From your account dashboard you can view your recent orders, manage your shipping and billing addresses, and edit your password and account details.
-                                </p>
+                                <div class="signed-in-only" data-signed-in>
+                                    <h2 class="title">Hello <span class="customer-name">User</span>! <a href="#" class="account-logout-btn" data-signout>(Not <span class="customer-name">User</span>? Log Out)</a></h2>
+                                    <p class="disc">
+                                        From your account dashboard you can view your recent orders, manage your shipping and billing addresses, and edit your password and account details.
+                                    </p>
+                                </div>
+                                <div class="signed-out-only" data-signed-out style="display: none;">
+                                    <h2 class="title">Welcome to your Account!</h2>
+                                    <p class="disc">
+                                        Please <a href="login.html" class="text-primary font-weight-bold" style="text-decoration: underline;">Sign In</a> or <a href="register.html" class="text-primary font-weight-bold" style="text-decoration: underline;">Register</a> to view your dashboard, track your orders, and manage addresses.
+                                    </p>
+                                </div>
                             </div>
                         </div>
                         <div class="tab-pane fade" id="v-pills-profile" role="tabpanel" aria-labelledby="v-pills-profile-tab" tabindex="0">
                             <div class="order-table-account">
                                 <div class="h2 title">Your Orders</div>
                                 <div class="table-responsive">
-                                    <table class="table">
+                                    <table class="table account-orders-table">
                                         <thead>
                                             <tr>
                                                 <th>Order</th>
@@ -687,28 +695,20 @@
                                         </thead>
                                         <tbody>
                                             <tr>
-                                                <td>#1357</td>
-                                                <td>March 45, 2020</td>
-                                                <td>Processing</td>
-                                                <td>$125.00 for 2 item</td>
-                                                <td><a href="#" class="btn-small d-block">View</a></td>
-                                            </tr>
-                                            <tr>
-                                                <td>#2468</td>
-                                                <td>June 29, 2020</td>
-                                                <td>Completed</td>
-                                                <td>$364.00 for 5 item</td>
-                                                <td><a href="#" class="btn-small d-block">View</a></td>
-                                            </tr>
-                                            <tr>
-                                                <td>#2366</td>
-                                                <td>August 02, 2020</td>
-                                                <td>Completed</td>
-                                                <td>$280.00 for 3 item</td>
+                                                <td>&mdash;</td>
+                                                <td>&mdash;</td>
+                                                <td>&mdash;</td>
+                                                <td>&mdash;</td>
                                                 <td><a href="#" class="btn-small d-block">View</a></td>
                                             </tr>
                                         </tbody>
                                     </table>
+                                </div>
+                                <div class="empty-state text-center" style="display: none; padding: 40px 15px;">
+                                    <i class="fa-light fa-bag-shopping" style="font-size: 48px; color: #94a3b8; margin-bottom: 16px; display: inline-block;"></i>
+                                    <h4 style="font-size: 18px; margin-bottom: 8px; color: #1e293b;">You have not placed an order yet.</h4>
+                                    <p style="color: #64748b; margin-bottom: 20px; font-size: 14px;">Once you place an order, it will show up here.</p>
+                                    <a href="shop-grid-sidebar.html" class="rts-btn btn-primary" style="padding: 10px 24px; font-size: 14px; display: inline-block;">Start Shopping</a>
                                 </div>
                             </div>
                         </div>
@@ -733,27 +733,27 @@
                         </div>
                         <div class="tab-pane fade" id="v-pills-settings" role="tabpanel" aria-labelledby="v-pills-settings-tab" tabindex="0">
                             <div class="shipping-address-billing-address-account">
-                                <div class="half">
-                                    <h2 class="title">Billing Address</h2>
-                                    <p class="address">
-                                        3522 Interstate <br>
-                                        75 Business Spur, <br>
-                                        Sault Ste. <br>
-                                        Marie, MI 49783 <br>
-                                        New York
-                                    </p>
-                                    <a href="#">Edit</a>
+                                <div class="d-flex justify-content-between align-items-center mb--20 flex-wrap gap-3">
+                                    <h2 class="title mb-0">My Addresses</h2>
+                                    <a href="addresses.html" class="rts-btn btn-primary" style="padding: 8px 18px; font-size: 13px;">Manage / Add Address</a>
                                 </div>
-                                <div class="half">
-                                    <h2 class="title">Shipping Address</h2>
-                                    <p class="address">
-                                        3522 Interstate <br>
-                                        75 Business Spur, <br>
-                                        Sault Ste. <br>
-                                        Marie, MI 49783 <br>
-                                        New York
-                                    </p>
-                                    <a href="#">Edit</a>
+                                <div class="address-list row g-4">
+                                    <div class="col-md-6 address-item">
+                                        <div class="address-card p-4 border rounded" style="background: #fafafa; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px;">
+                                            <h5 class="address-name font-weight-bold mb-2" style="font-size: 16px; color: #1e293b;">&mdash;</h5>
+                                            <p class="address-body text-muted mb-3" style="color: #64748b; font-size: 14px; min-height: 42px;">&mdash;</p>
+                                            <div class="address-actions d-flex gap-3 align-items-center">
+                                                <a href="addresses.html" class="address-edit text-primary font-weight-medium" style="font-size: 13px;">Edit</a>
+                                                <a href="#" class="address-default text-secondary" style="font-size: 13px;">Make default</a>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="empty-state text-center" style="display: none; padding: 40px 15px;">
+                                    <i class="fa-light fa-location-dot" style="font-size: 48px; color: #94a3b8; margin-bottom: 16px; display: inline-block;"></i>
+                                    <h4 style="font-size: 18px; margin-bottom: 8px; color: #1e293b;">No saved addresses yet.</h4>
+                                    <p style="color: #64748b; margin-bottom: 20px; font-size: 14px;">Add a shipping address for faster checkout.</p>
+                                    <a href="addresses.html" class="rts-btn btn-primary" style="padding: 10px 24px; font-size: 14px; display: inline-block;">Add an address</a>
                                 </div>
                             </div>
                         </div>

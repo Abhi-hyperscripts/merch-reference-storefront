@@ -2468,8 +2468,14 @@ function displayCurrencyFor(role) {
    it ships nothing, put the sentence where the grid was, unstyled. */
 function renderEmpty(container, message, spec) {
   if (!container) return;
-  const own = pick('.no-results|.empty-state|.wrap-empty_text|.cart-empty', container.parentElement || document);
-  if (own) { show(own, true); show(container, false); return; }
+  const searchRoot = container.closest?.('.order-table-account, .shipping-address-billing-address-account, .tab-pane, .table-responsive, .cart-area, .cart-section') || container.parentElement || document;
+  const own = pick('.no-results|.empty-state|.wrap-empty_text|.cart-empty', searchRoot);
+  if (own) {
+    show(own, true);
+    const hideTarget = container.closest?.('.table-responsive, table') || container;
+    show(hideTarget, false);
+    return;
+  }
 
   /* Take out the ITEMS and nothing else. Replacing everything in the
      container destroyed whatever else lived there — on the account page that
@@ -4859,6 +4865,9 @@ pages.account = async () => {
   wirePasswordChange();
   if (!token.get()) { showSignedOut(); return; }
 
+  const cachedName = localStorage.getItem('merch.shopper_name');
+  if (cachedName) pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, cachedName));
+
   let me = null;
   try { me = await api.me(); }
   catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { showSignedOut(); return; } showError(e); return; }
@@ -4936,7 +4945,11 @@ async function paintOrders() {
   const spec = { container: '.order-list|.account-orders tbody|table tbody|.tf-table-page-cart tbody', card: 'tr|.order-item' };
   const t = takeTemplate(spec);
   if (!t) return;
+  const emptyState = pick('.empty-state', t.container?.closest?.('.order-table-account, .tab-pane') || t.container?.parentElement);
   if (!orders.length) return renderEmpty(t.container, 'You have not placed an order yet.', spec);
+  if (emptyState) show(emptyState, false);
+  const tableWrapper = t.container?.closest?.('.table-responsive, table');
+  if (tableWrapper) show(tableWrapper, true);
   repeat(t, orders, (node, o) => {
     const cells = pickAll('td', node);
     const texts = [o.reference || o.id, new Date(o.createdAt).toLocaleDateString(), o.orderStatus || o.status, money(o.total ?? o.totalAmount)];
@@ -4953,7 +4966,10 @@ async function paintAddresses() {
   const spec = { container: '.address-list|.account-addresses|.list-address', card: '.address-item|.single-address|.account-address-item' };
   const t = takeTemplate(spec);
   if (!t) return;
+  const emptyState = pick('.empty-state', t.container?.closest?.('.shipping-address-billing-address-account, .tab-pane') || t.container?.parentElement);
   if (!list.length) return renderEmpty(t.container, 'No saved addresses yet.', spec);
+  if (emptyState) show(emptyState, false);
+  show(t.container, true);
   repeat(t, list, (node, a) => {
     setText(pick('.address-name|h5|h6', node), a.name || '');
     /* A saved address uses `line`, SINGULAR — the edit handler below already
