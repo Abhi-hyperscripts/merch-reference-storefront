@@ -15307,6 +15307,11 @@ body.sal-disabled [data-sal|=flip] {
   gap: 40px;
 }
 
+.header-mid-wrapper-between .nav-sm-left:last-child {
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
 .header-mid-wrapper-between .nav-sm-left .nav-h_top {
   position: relative;
 }
@@ -15324,6 +15329,8 @@ body.sal-disabled [data-sal|=flip] {
 .header-mid-wrapper-between .nav-sm-left .nav-h_top.language {
   display: flex;
   gap: 40px;
+  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .header-mid-wrapper-between .nav-sm-left .nav-h_top.language::after {

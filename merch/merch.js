@@ -2289,6 +2289,7 @@ async function paintCurrencySwitcher() {
      appended to it again — four copies of the currency list in the topbar. */
   const labels = $$('a, span, button, div, li').filter((el) => {
     if (el.dataset.merchCurrency || el.closest('[data-merch-currency]')) return false;
+    if (el.closest('.nav-h_top.language, .language')) return false;
     const t = ownText(el);
     return t && t.length <= 34 && isLabel(t);
   });
