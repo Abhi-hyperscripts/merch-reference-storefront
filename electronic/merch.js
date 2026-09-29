@@ -2089,6 +2089,20 @@ function paintHeader() {
 
   pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
 
+  // Dynamic active menu indicator for electronic header
+  try {
+    const curPath = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
+    pickAll('.box-nav-ul li.menu-item').forEach((li) => {
+      const a = li.querySelector('a.item-link');
+      if (!a) return;
+      const href = (a.getAttribute('href') || '').toLowerCase();
+      const isActive = (curPath === '' || curPath === 'index.html')
+        ? (href === 'index.html')
+        : (href && href !== 'index.html' && (curPath === href || curPath.includes(href.replace('.html', ''))));
+      li.classList.toggle('active', !!isActive);
+    });
+  } catch {}
+
   paintMiniCart();
   paintAccountHeader().catch(() => {});
 }
