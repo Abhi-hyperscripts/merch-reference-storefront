@@ -1788,6 +1788,27 @@ a:focus, a:hover {
   right: 0;
   content: "";
 }
+.tf-list-categories .list-categories-inner > ul {
+  max-height: 380px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 #f8fafc;
+}
+.tf-list-categories .list-categories-inner > ul::-webkit-scrollbar {
+  width: 6px;
+}
+.tf-list-categories .list-categories-inner > ul::-webkit-scrollbar-track {
+  background: #f8fafc;
+  border-radius: 4px;
+}
+.tf-list-categories .list-categories-inner > ul::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+.tf-list-categories .list-categories-inner > ul::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
 .tf-list-categories .categories-item {
   padding: 9px 20px;
   display: flex;
@@ -5921,18 +5942,13 @@ input.style-line-bottom::placeholder {
 }
 
 .modal-shopping-cart .modal-content {
-  max-width: 708px !important;
+  max-width: 480px !important;
   cursor: default !important;
   display: flex;
   flex-direction: row;
 }
 .modal-shopping-cart .tf-minicart-recommendations {
-  width: 228px;
-  flex-shrink: 0;
-  padding: 24px 23px 24px 24px;
-  border-right: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
+  display: none !important;
 }
 .modal-shopping-cart .tf-minicart-recommendations .title {
   margin-bottom: 12px;

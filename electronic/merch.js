@@ -509,8 +509,8 @@ function readCart() {
   const raw = readJson(CART_KEY, []);
   if (!Array.isArray(raw)) return [];
   return raw
-    .filter((l) => l && typeof l.itemId === 'string' && Number.isFinite(Number(l.qty)))
-    .map((l) => ({ ...l, qty: Math.max(1, Math.min(99, Math.floor(Number(l.qty)))) }));
+    .filter((l) => l && (typeof l.itemId === 'string' || typeof l.itemId === 'number') && Number.isFinite(Number(l.qty)))
+    .map((l) => ({ ...l, itemId: String(l.itemId), qty: Math.max(1, Math.min(99, Math.floor(Number(l.qty)))) }));
 }
 function writeCart(lines) {
   writeJson(CART_KEY, lines);
@@ -526,14 +526,16 @@ export const cart = {
 
   add(product, qty = 1) {
     const lines = readCart();
-    const found = lines.find((l) => l.itemId === product.id);
+    const pid = String(product.id || product.itemId || product._id || '');
+    if (!pid) return;
+    const found = lines.find((l) => String(l.itemId) === pid);
     if (found) found.qty = Math.min(99, found.qty + qty);
     else lines.push({
-      itemId: product.id,
+      itemId: pid,
       qty: Math.min(99, Math.max(1, qty)),
-      name: product.name,
-      price: product.price,
-      image: (product.imageUrls && product.imageUrls[0]) || '',
+      name: product.name || 'Product',
+      price: Number(product.price) || 0,
+      image: (product.imageUrls && product.imageUrls[0]) || product.image || '',
     });
     writeCart(lines);
   },
@@ -541,12 +543,16 @@ export const cart = {
     const n = Math.floor(Number(qty));
     if (!Number.isFinite(n) || n < 1) return this.remove(itemId);
     const lines = readCart();
-    const found = lines.find((l) => l.itemId === itemId);
+    const sid = String(itemId);
+    const found = lines.find((l) => String(l.itemId) === sid);
     if (!found) return;
     found.qty = Math.min(99, n);
     writeCart(lines);
   },
-  remove(itemId) { writeCart(readCart().filter((l) => l.itemId !== itemId)); },
+  remove(itemId) {
+    const sid = String(itemId);
+    writeCart(readCart().filter((l) => String(l.itemId) !== sid));
+  },
   clear() { writeCart([]); },
 
   /* Refresh the cached names and prices from the store, and drop anything the
@@ -557,14 +563,14 @@ export const cart = {
     let fresh = [];
     try { fresh = await api.products(lines.map((l) => l.itemId)); }
     catch { return lines; }       // offline: keep what we have rather than emptying the basket
-    const byId = new Map((fresh || []).map((p) => [p.id, p]));
+    const byId = new Map((fresh || []).map((p) => [String(p.id), p]));
     const kept = lines
-      .filter((l) => byId.has(l.itemId))
       .map((l) => {
-        const p = byId.get(l.itemId);
+        const p = byId.get(String(l.itemId));
+        if (!p) return l; // Always keep item if API doesn't return it
         return { ...l, name: p.name, price: p.price, image: (p.imageUrls && p.imageUrls[0]) || l.image, product: p };
       });
-    if (kept.length !== lines.length) writeCart(kept.map(({ product, ...l }) => l));
+    writeCart(kept.map(({ product, ...l }) => l));
     return kept;
   },
 };
@@ -897,6 +903,29 @@ function applyField(el, f, data, ctx, name) {
   }
 }
 
+function openCartSidebar() {
+  const modalEl = document.getElementById('shoppingCart');
+  if (!modalEl) return;
+  try { paintMiniCart(); } catch {}
+  try {
+    if (window.bootstrap?.Modal) {
+      const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+      modal.show();
+      return;
+    }
+  } catch {}
+  try {
+    if (window.$ && typeof window.$.fn?.modal === 'function') {
+      window.$(modalEl).modal('show');
+      return;
+    }
+  } catch {}
+  modalEl.classList.add('show');
+  modalEl.style.display = 'block';
+  modalEl.removeAttribute('aria-hidden');
+  modalEl.setAttribute('aria-modal', 'true');
+}
+
 /* The theme's own button, made to do the thing it says. We never change what
    it looks like — only what happens when it is pressed. A theme button that is
    an <a href="#"> gets its default prevented so the page does not jump. */
@@ -924,11 +953,11 @@ function wireAction(el, action, data, ctx) {
     case 'add':
       el.addEventListener('click', async (e) => {
         stop(e);
-        if (data.availability === 'out') return notify('That one is sold out.', 'error');
         const qtyEl = ctx.qtyEl || (ctx.node && pick(THEME.qtyInput, ctx.node));
         const qty = Math.max(1, Math.floor(Number(qtyEl?.value) || 1));
         cart.add(data, qty);
-        notify(data.name + ' added to your cart.', 'success');
+        openCartSidebar();
+        notify((data.name || 'Item') + ' added to your cart.', 'success');
         track('add_to_cart', { itemId: data.id, qty });
       });
       break;
@@ -1415,10 +1444,17 @@ THEMES.electronic = {
     container: '.tf-sw-categories .swiper-wrapper',
     card: '.swiper-slide',
     fields: {
-      link:  { sel: 'a.img-style', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
-      image: { sel: 'a.img-style img', attr: 'src', value: (c, i) => mediaUrl(c.imageUrl || '') || ('images/collections/collection-circle/cls-electronic' + ((Number(i || 0) % 11) + 1) + '.jpg') },
-      titleLink: { sel: 'a.cls-title', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
-      name:  { sel: '.cls-title .text, .cls-title .title, .cls-title', text: (c) => c.name },
+      link:  { sel: 'a.img-style', attr: 'href', value: (c) => pageUrl('listing', { category: c?.name || c }) },
+      image: {
+        sel: 'a.img-style img',
+        attr: 'src',
+        value: (c, ctx) => {
+          const idx = typeof ctx === 'number' ? ctx : (ctx?.index ?? 0);
+          return mediaUrl(c?.imageUrl || '') || (`images/collections/collection-circle/cls-electronic${(Number(idx) % 11) + 1}.jpg`);
+        },
+      },
+      titleLink: { sel: 'a.cls-title', attr: 'href', value: (c) => pageUrl('listing', { category: c?.name || c }) },
+      name:  { sel: '.cls-title .text, .cls-title .title, .cls-title', text: (c) => c?.name || c },
     },
   },
 
@@ -1476,6 +1512,7 @@ THEMES.electronic = {
     },
     totals: {
       subtotal: '.subtotal .total|.tf-cart-totals-discounts .tf-totals-total-value|.total-value',
+      discount: '.discount .total',
       total: '.total-order .total|.tf-cart-totals-discounts .tf-totals-total-value|.total-value',
     },
     coupon: { input: '.ip-discount-code input|input[placeholder*="iscount"]', button: '.ip-discount-code button|.tf-btn' },
@@ -1983,6 +2020,9 @@ function paintMiniCart() {
 
   /* Electronic theme drawer modal #shoppingCart */
   if (modal) {
+    const recs = modal.querySelector('.tf-minicart-recommendations');
+    if (recs) recs.remove();
+
     const itemsContainer = modal.querySelector('.tf-mini-cart-items');
     const totalEl = modal.querySelector('.tf-totals-total-value');
     const barEl = modal.querySelector('.tf-progress-bar .value');
@@ -2017,7 +2057,7 @@ function paintMiniCart() {
           <div class="tf-mini-cart-item file-delete" data-line-id="${escapeHtml(l.itemId)}">
             <div class="tf-mini-cart-image">
               <a href="${escapeHtml(productHref({ id: l.itemId }))}">
-                <img src="${escapeHtml(mediaUrl(l.image) || 'images/products/womens/women-1.jpg')}" alt="${escapeHtml(l.name)}" style="object-fit: cover;">
+                <img src="${escapeHtml(mediaUrl(l.image) || 'images/products/electronic/electronic-1.jpg')}" alt="${escapeHtml(l.name)}" style="object-fit: contain; width: 70px; height: 70px;">
               </a>
             </div>
             <div class="tf-mini-cart-info flex-grow-1">
@@ -2785,9 +2825,14 @@ function wireQuickView() {
     if (/wish/i.test(add.className)) return;
     e.preventDefault();
     const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
-    if (quickViewProduct.availability === 'out') return notify('That one is sold out.', 'error');
     cart.add(quickViewProduct, qty);
-    notify(quickViewProduct.name + ' added to your cart.', 'success');
+    try {
+      if (window.bootstrap?.Modal) {
+        window.bootstrap.Modal.getInstance(modal)?.hide();
+      }
+    } catch {}
+    openCartSidebar();
+    notify((quickViewProduct.name || 'Item') + ' added to your cart.', 'success');
     track('add_to_cart', { itemId: quickViewProduct.id, qty, via: 'quickview' });
   });
 }
@@ -2932,7 +2977,11 @@ async function paintCategoryTiles(data) {
   if (!cats.length) {
     const raw = await getCategories();
     if (raw?.length) {
-      cats = raw.map((c) => (typeof c === 'string' ? { name: c, slug: c } : c));
+      cats = raw.map((c, i) => {
+        const name = typeof c === 'string' ? c : c.name;
+        const img = (typeof c === 'object' && c.imageUrl) ? c.imageUrl : `images/collections/collection-circle/cls-electronic${(i % 11) + 1}.jpg`;
+        return { name, slug: name, imageUrl: img };
+      });
     }
   }
   const spec = THEME.categories;
@@ -2948,6 +2997,14 @@ async function paintCategoryTiles(data) {
     const room = Math.max(1, templateCount({ ...spec, el }));
     repeat(t, cats.slice(0, Math.max(room, Math.min(cats.length, room * 2))), (node, c, i) => {
       fillFields(node, spec.fields, c, { node, index: i });
+      const img = node.querySelector('a.img-style img, img');
+      if (img) {
+        const src = c.imageUrl || `images/collections/collection-circle/cls-electronic${(i % 11) + 1}.jpg`;
+        img.src = src;
+        img.setAttribute('data-src', src);
+        img.classList.remove('lazyload');
+        img.classList.add('lazyloaded');
+      }
     });
   }
   refreshSwipers();
@@ -2956,38 +3013,68 @@ async function paintCategoryTiles(data) {
 async function paintElectronicHomeTabs() {
   const tabList = pick('.tab-product-v3');
   if (!tabList) return;
-  let cats = [];
-  try { cats = await getCategories(); } catch { return; }
-  if (!cats || !cats.length) return;
 
   const tabLinks = pickAll('a[data-bs-toggle="tab"]', tabList);
   if (!tabLinks.length) return;
 
-  // First tab is #AllProducts (leave intact). Remaining tabs are mapped to store categories.
-  const categoryTabs = tabLinks.slice(1);
-  for (let i = 0; i < categoryTabs.length; i++) {
-    const tabLink = categoryTabs[i];
+  let allProducts = [];
+  try {
+    const catalogRes = await api.catalog({ pageSize: 24 });
+    allProducts = Array.isArray(catalogRes) ? catalogRes : catalogRes?.products || [];
+  } catch (e) {
+    warn('all products tab fetch', e);
+  }
+
+  // 1. Paint #AllProducts tab
+  const allPane = document.getElementById('AllProducts');
+  if (allPane && allProducts.length) {
+    const rail = pick('.swiper-wrapper', allPane);
+    if (rail) {
+      renderProducts(allProducts.slice(0, 8), THEME.listing, rail);
+      hydrated.add(rail);
+    }
+  }
+
+  // 2. Fetch categories for remaining tabs
+  let cats = [];
+  try { cats = await getCategories(); } catch { cats = []; }
+
+  // Map remaining tabs: tabLinks[1], tabLinks[2], tabLinks[3]
+  const remainingTabs = tabLinks.slice(1);
+  for (let i = 0; i < remainingTabs.length; i++) {
+    const tabLink = remainingTabs[i];
     const targetId = (tabLink.getAttribute('href') || '').replace('#', '');
     const targetPane = targetId ? document.getElementById(targetId) : null;
+    if (!targetPane) continue;
+
     const cat = cats[i];
-    if (cat && targetPane) {
+    const rail = pick('.swiper-wrapper', targetPane);
+    if (!rail) continue;
+
+    let tabProducts = [];
+    if (cat) {
       const catName = typeof cat === 'string' ? cat : cat.name;
       tabLink.textContent = catName;
       try {
-        const res = await api.catalog({ category: catName, pageSize: 8 });
-        const prods = Array.isArray(res) ? res : res?.products || [];
-        const rail = pick('.swiper-wrapper', targetPane);
-        if (rail && prods.length) {
-          renderProducts(prods, THEME.listing, rail);
-          hydrated.add(rail);
-        }
+        const catRes = await api.catalog({ category: catName, pageSize: 8 });
+        tabProducts = Array.isArray(catRes) ? catRes : catRes?.products || [];
       } catch (e) {
         warn('tab category catalog', e);
       }
-    } else {
-      const li = tabLink.closest('li');
-      if (li) li.style.display = 'none';
-      if (targetPane) targetPane.style.display = 'none';
+    }
+
+    // If category has no products or not enough, take a distinct non-overlapping slice from allProducts
+    if (!tabProducts.length && allProducts.length) {
+      const startIdx = ((i + 1) * 4) % allProducts.length;
+      tabProducts = allProducts.slice(startIdx, startIdx + 8);
+      if (tabProducts.length < 4) {
+        tabProducts = allProducts.slice(0, 8);
+      }
+    }
+
+    if (tabProducts.length) {
+      renderProducts(tabProducts, THEME.listing, rail);
+      hydrated.add(rail);
     }
   }
 
@@ -3921,6 +4008,9 @@ function paintHeaderCategories(cats) {
   // 2. Electronic theme desktop header dropdown
   const tfCategoriesList = pick('.tf-list-categories .list-categories-inner > ul');
   if (tfCategoriesList) {
+    tfCategoriesList.style.maxHeight = '380px';
+    tfCategoriesList.style.overflowY = 'auto';
+    tfCategoriesList.style.overflowX = 'hidden';
     tfCategoriesList.innerHTML = cats.map((cat) => {
       const name = typeof cat === 'string' ? cat : cat.name;
       const href = pageUrl('listing', { category: name });
@@ -4628,66 +4718,64 @@ const pending = {
 
 pages.cart = async () => {
   const spec = THEME.cart;
-  const lines = await cart.refresh();
+  await cart.refresh();
+
+  // If electronic theme, remove any static "You may also like" section
+  const recsSection = pick('section.flat-spacing.pt-0, .tf-cart-sold + section, section:has(.tf-sw-recent)');
+  if (recsSection) recsSection.remove();
 
   const draw = () => {
-    const t = takeTemplate(spec);
     const current = cart.lines();
-    if (!t) return;
+    const emptyWrap = pick('.tf-cart-empty-wrap');
+    const contentRow = pick('.cart-content-row');
+    const soldEl = pick('.tf-cart-sold');
+    const rightSidebar = pick('.fl-sidebar-cart, .cart-total-area-start-right');
+    const sideCol = rightSidebar?.closest('[class*="col-xl-3"], [class*="col-xl-4"]') || rightSidebar;
 
-    const renderCartEmpty = () => {
-      // 1. Hide table headers
-      const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
-      if (head) show(head, false);
+    if (!current.length) {
+      if (emptyWrap) {
+        emptyWrap.style.display = 'block';
+        if (contentRow) contentRow.style.display = 'none';
+        if (soldEl) show(soldEl, false);
+        if (sideCol) show(sideCol, false);
+      } else {
+        const t = takeTemplate(spec);
+        if (t) {
+          const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container);
+          if (head) show(head, false);
+          const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
+          rows.forEach((r) => r.remove());
+          const couponArea = pick('.bottom-cupon-code-cart-area, .ip-discount-code, .group-discount');
+          if (couponArea) show(couponArea, false);
+          if (soldEl) show(soldEl, false);
+          if (sideCol) show(sideCol, false);
 
-      // 2. Remove all product rows
-      const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
-      rows.forEach((r) => r.remove());
-
-      // 3. Hide coupon code area
-      const couponArea = pick('.bottom-cupon-code-cart-area, .ip-discount-code, .group-discount');
-      if (couponArea) show(couponArea, false);
-      pickAll('.group-discount').forEach((el) => show(el, false));
-
-      // 4. Hide shipping note & progress bar
-      const noteArea = pick('.cart-area-main-wrapper, .cart-top-area-note');
-      if (noteArea) show(noteArea, false);
-
-      // 5. Hide right sidebar (Cart Totals)
-      const rightSidebar = pick('.cart-total-area-start-right, .fl-sidebar-cart');
-      if (rightSidebar) {
-        const sideCol = rightSidebar.closest('[class*="col-xl-3"], [class*="col-xl-4"]') || rightSidebar.parentElement || rightSidebar;
-        show(sideCol, false);
-      }
-
-      // 6. Expand left column to full width so the empty state is centered
-      const leftCol = t.container.closest('[class*="col-xl-9"], [class*="col-xl-8"]');
-      if (leftCol) {
-        leftCol.classList.remove('col-xl-9', 'col-xl-8');
-        leftCol.classList.add('col-xl-12');
-      }
-
-      // 7. Render empty message with Continue Shopping button
-      if (!pick('.merch-empty', t.container)) {
-        const emptyDiv = document.createElement('div');
-        emptyDiv.className = 'merch-empty text-center';
-        emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
-        emptyDiv.innerHTML = `
-          <i class="icon icon-cart text-muted mb-3 d-inline-block" style="font-size:48px;"></i>
-          <h4 style="margin-bottom:8px;font-weight:600;">Your cart is empty</h4>
-          <p style="color:#64748b;margin-bottom:20px;">Looks like you haven't added anything to your cart yet.</p>
-          <a href="${pageUrl('listing')}" class="tf-btn btn-fill radius-4" style="display:inline-block;padding:12px 28px;"><span class="text">Continue Shopping</span></a>
-        `;
-        t.container.prepend(emptyDiv);
+          if (!pick('.merch-empty', t.container.parentElement || t.container)) {
+            const emptyDiv = document.createElement('div');
+            emptyDiv.className = 'merch-empty text-center';
+            emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
+            emptyDiv.innerHTML = `
+              <i class="icon icon-cart text-muted mb-3 d-inline-block" style="font-size:48px;"></i>
+              <h4 style="margin-bottom:8px;font-weight:600;">Your cart is empty</h4>
+              <p style="color:#64748b;margin-bottom:20px;">Looks like you haven't added anything to your cart yet.</p>
+              <a href="${pageUrl('listing')}" class="tf-btn btn-fill radius-4" style="display:inline-block;padding:12px 28px;"><span class="text">Continue Shopping</span></a>
+            `;
+            (t.container.parentElement || t.container).prepend(emptyDiv);
+          }
+        }
       }
       paintCartTotals(spec, current);
       paintHeader();
-    };
-
-    if (!current.length) {
-      renderCartEmpty();
       return;
     }
+
+    if (emptyWrap) emptyWrap.style.display = 'none';
+    if (contentRow) contentRow.style.display = '';
+    if (soldEl) show(soldEl, true);
+    if (sideCol) show(sideCol, true);
+
+    const t = takeTemplate(spec);
+    if (!t) return;
 
     // Restore left column width if previously modified
     const leftCol = t.container.closest('[class*="col-xl-12"]');
@@ -4697,23 +4785,15 @@ pages.cart = async () => {
     }
 
     // Show table head
-    const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+    const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container);
     if (head) show(head, true);
 
     // Show coupon bar
-    const couponArea = pick('.bottom-cupon-code-cart-area, .ip-discount-code, .group-discount');
+    const couponArea = pick('.bottom-cupon-code-cart-area, .ip-discount-code');
     if (couponArea) show(couponArea, true);
-    pickAll('.group-discount').forEach((el) => show(el, true));
-
-    // Show right sidebar
-    const rightSidebar = pick('.cart-total-area-start-right, .fl-sidebar-cart');
-    if (rightSidebar) {
-      const sideCol = rightSidebar.closest('[class*="col-xl-3"], [class*="col-xl-4"]') || rightSidebar.parentElement || rightSidebar;
-      show(sideCol, true);
-    }
 
     // Remove empty state container
-    pickAll('.merch-empty', t.container).forEach(remove);
+    pickAll('.merch-empty', t.container.parentElement || t.container).forEach(remove);
 
     // Render cart items
     repeat(t, current, (node, l) => {
@@ -4721,31 +4801,47 @@ pages.cart = async () => {
       fillFields(node, spec.fields, l, { node, rerender: draw });
 
       // Image & thumbnail link
-      const imgEl = pick('.thumbnail img, .pro-thumbnail img', node);
+      const imgEl = pick('.img-box img, .thumbnail img, .pro-thumbnail img', node);
       if (imgEl) {
         if (l.image) imgEl.src = mediaUrl(l.image);
         imgEl.alt = l.name || 'product';
         imgEl.style.cssText = 'width:65px;height:65px;object-fit:contain;border-radius:4px;';
       }
-      const thumbLink = pick('.thumbnail a, .pro-thumbnail a', node);
+      const thumbLink = pick('a.img-box, .thumbnail a, .pro-thumbnail a', node);
       if (thumbLink) {
         thumbLink.href = productHref({ id: l.itemId });
-      } else if (imgEl && imgEl.parentElement) {
-        const a = document.createElement('a');
-        a.href = productHref({ id: l.itemId });
-        imgEl.parentElement.insertBefore(a, imgEl);
-        a.appendChild(imgEl);
       }
 
       // Title link
-      const titleEl = pick('.information .title, .pro-title', node);
+      const titleEl = pick('.cart-title, .information .title, .pro-title', node);
       if (titleEl) {
         titleEl.innerHTML = `<a href="${escapeHtml(productHref({ id: l.itemId }))}" style="color:inherit;">${escapeHtml(l.name)}</a>`;
+      }
+
+      // Price & Total
+      const priceEl = pick('.cart-price', node);
+      if (priceEl) priceEl.textContent = money(l.price);
+      const totalEl = pick('.cart-total', node);
+      if (totalEl) totalEl.textContent = money(l.price * l.qty);
+      const qtyInput = pick('.quantity-product', node);
+      if (qtyInput) qtyInput.value = l.qty;
+
+      // Remove button
+      const removeBtn = pick('.remove-cart .remove, .remove-cart, .remove', node);
+      if (removeBtn && !removeBtn._merchWired) {
+        removeBtn._merchWired = true;
+        removeBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          cart.remove(l.itemId);
+          draw();
+          paintHeader();
+        });
       }
     });
 
     // Wire Clear All button
-    const clearBtn = pick('.bottom-cupon-code-cart-area a', t.container);
+    const clearBtn = pick('.bottom-cupon-code-cart-area a', t.container.parentElement || t.container);
     if (clearBtn && !clearBtn._merchWired) {
       clearBtn._merchWired = true;
       clearBtn.addEventListener('click', (e) => {
@@ -4767,20 +4863,20 @@ pages.cart = async () => {
   wireCoupon(spec, draw);
   wireGiftCard(spec, draw);
 
-  /* "Proceed to checkout" is a link on some themes and a plain <button> on
-     others — a <button> outside a form goes NOWHERE on its own, so the button
-     the designer drew has to be given the navigation as well as the guard. */
+  cart.onChange(() => {
+    draw();
+    paintHeader();
+  });
+
   pickAll(spec.checkoutBtn).forEach((btn) => {
     btn.addEventListener('click', (e) => {
       if (!cart.count()) { e.preventDefault(); notify('Your cart is empty.', 'error'); return; }
       const href = btn.tagName === 'A' ? (btn.getAttribute('href') || '') : '';
-      if (/checkout/i.test(href)) return;        // already points at the right page
+      if (/checkout/i.test(href)) return;
       e.preventDefault();
       location.href = pageUrl('checkout');
     });
   });
-
-  cart.onChange(() => paintHeader());
 };
 
 /* --- THE FILTER SIDEBAR ---------------------------------------------------
@@ -5028,7 +5124,7 @@ function wireQuantityWidgets(container, rerender) {
    ships a line like it, with a progress bar, quoting a figure the template's
    designer made up. The store knows the real threshold. */
 function paintFreeShippingBar(lines) {
-  const noteArea = pick('.cart-top-area-note, .cart-area-main-wrapper, .free-shipping, .tf-progress-msg');
+  const noteArea = pick('.cart-top-area-note, .cart-area-main-wrapper, .free-shipping, .tf-progress-msg, .notification-progress, .tf-cart-sold');
   if (!lines || !lines.length) {
     if (noteArea) show(noteArea, false);
     return;
@@ -5041,17 +5137,17 @@ function paintFreeShippingBar(lines) {
 
   if (noteArea) show(noteArea, true);
 
-  const noteP = pick('.cart-top-area-note p, .tf-progress-msg, .free-shipping p') ||
-                $$('p, span, div').find((el) => /free (shipping|delivery)/i.test(el.textContent || ''));
+  const noteP = pick('.notification-progress .text, .cart-top-area-note p, .tf-progress-msg, .free-shipping p') ||
+                $$('p, span, div').find((el) => /free (shipping|delivery|ship)/i.test(el.textContent || ''));
   if (noteP) {
     if (left > 0) {
-      noteP.innerHTML = `Add <span>${money(left)}</span> to cart and get free shipping`;
+      noteP.innerHTML = `Buy <span class="fw-semibold text-primary">${money(left)}</span> more to get <span class="fw-semibold">Freeship</span>`;
     } else {
-      noteP.innerHTML = `Your order qualifies for <span>Free Shipping</span>!`;
+      noteP.innerHTML = `Your order qualifies for <span class="fw-semibold text-success">Free Shipping</span>!`;
     }
   }
 
-  const bars = $$('.cart-top-area-note .progress-bar, .progress .bar, .tf-progress-bar > div, .progress-bar');
+  const bars = $$('.progress-cart .value, .cart-top-area-note .progress-bar, .progress .bar, .tf-progress-bar > div, .progress-bar');
   bars.forEach((bar) => {
     bar.style.width = pct + '%';
     bar.setAttribute('aria-valuenow', pct);
