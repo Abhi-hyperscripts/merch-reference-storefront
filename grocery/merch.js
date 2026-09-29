@@ -82,7 +82,7 @@ export const USE_STORE_APPEARANCE = {
   usps: true,           // the "free delivery / 24-7 support" strip
   social: true,         // the social icons, and hiding the ones you do not use
   banners: true,        // the hero — the merchant's artwork, headline and button
-  writtenPages: true,   // Privacy, Terms, Refunds and Shipping
+  writtenPages: false,  // Privacy, Terms, Refunds and Shipping (keep designed HTML pages intact)
   aboutPage: false,     // About — OFF by default, see below
 };
 
@@ -2916,10 +2916,12 @@ pages.listing = async () => {
     const items = Array.isArray(res) ? res : (res.products || res.items || []);
     for (const grid of pickAll(THEME.listing.container)) renderProducts(items, THEME.listing, grid);
     wireQuickView();
-    paintResultCount(items, state, pageSize);
+    const total = await paintResultCount(items, state, pageSize);
+    renderPagination(total, state, run, pageSize);
     THEME.reinit?.();
   };
 
+  wireHorizontalFilterBar(state, run, null);
   wireSearchInputs((q) => { state.q = q; state.page = 1; pushState(state); run(); });
   wireSortSelects((sort) => { state.sort = sort; state.page = 1; pushState(state); run(); });
   wireCategoryLinks();
@@ -2929,6 +2931,545 @@ pages.listing = async () => {
   await paintFilters(state, run);
   await run();
 };
+
+/* Render responsive dynamic pagination controls */
+function renderPagination(total, state, run, pageSize) {
+  const pager = pick('.pagination-area-main-wrappper, .pagination-area, .pagination');
+  if (!pager) return;
+  const ul = pager.tagName === 'UL' ? pager : pager.querySelector('ul');
+  if (!ul) return;
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(Math.max(1, state.page || 1), totalPages);
+
+  let startPage = Math.max(1, curPage - 2);
+  let endPage = Math.min(totalPages, startPage + 4);
+  if (endPage - startPage < 4) {
+    startPage = Math.max(1, endPage - 4);
+  }
+
+  let html = '';
+  html += `<li><button type="button" class="prev-page ${curPage <= 1 ? 'disabled' : ''}" ${curPage <= 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''} aria-label="Previous"><i class="fa-regular fa-chevron-left"></i></button></li>`;
+
+  if (startPage > 1) {
+    html += `<li><button type="button" class="page-num" data-page="1">1</button></li>`;
+    if (startPage > 2) {
+      html += `<li><span style="display:inline-block;padding:0 5px;color:#999;">...</span></li>`;
+    }
+  }
+
+  for (let p = startPage; p <= endPage; p++) {
+    html += `<li><button type="button" class="page-num ${p === curPage ? 'active' : ''}" data-page="${p}">${p}</button></li>`;
+  }
+
+  if (endPage < totalPages) {
+    if (endPage < totalPages - 1) {
+      html += `<li><span style="display:inline-block;padding:0 5px;color:#999;">...</span></li>`;
+    }
+    html += `<li><button type="button" class="page-num" data-page="${totalPages}">${totalPages}</button></li>`;
+  }
+
+  html += `<li><button type="button" class="next-page ${curPage >= totalPages ? 'disabled' : ''}" ${curPage >= totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''} aria-label="Next"><i class="fa-regular fa-chevron-right"></i></button></li>`;
+
+  ul.innerHTML = html;
+
+  ul.querySelectorAll('button.page-num').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const p = Number(btn.dataset.page);
+      if (p && p !== curPage) {
+        state.page = p;
+        pushState(state);
+        run();
+        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+        topEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  });
+
+  const prevBtn = ul.querySelector('button.prev-page:not(.disabled)');
+  if (prevBtn) {
+    prevBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (curPage > 1) {
+        state.page = curPage - 1;
+        pushState(state);
+        run();
+        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+        topEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  }
+
+  const nextBtn = ul.querySelector('button.next-page:not(.disabled)');
+  if (nextBtn) {
+    nextBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (curPage < totalPages) {
+        state.page = curPage + 1;
+        pushState(state);
+        run();
+        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+        topEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  }
+}
+
+/* Helper to sync horizontal filter bar with state */
+function syncHorizontalDropdownFromState(state) {
+  const bar = pick('.nice-select-area-wrapper-and-button');
+  if (!bar) return;
+
+  const types = [
+    { type: 'category', stateVal: state.category || '', defaultLabel: 'All Categories' },
+    { type: 'brand',    stateVal: state.brand || '',    defaultLabel: 'All Brands' },
+    { type: 'size',     stateVal: state.size || '',     defaultLabel: 'All Size' },
+    { type: 'weight',   stateVal: state.size || '',     defaultLabel: 'All Weight' },
+  ];
+
+  types.forEach(({ type, stateVal, defaultLabel }) => {
+    const dd = bar.querySelector(`.filter-dropdown[data-filter-type="${type}"]`);
+    if (!dd) return;
+
+    const toggle = dd.querySelector('.filter-dropdown-toggle');
+    const toggleText = dd.querySelector('.toggle-text');
+    let matchedItem = null;
+
+    dd.querySelectorAll('.filter-check').forEach((chk) => {
+      const isMatch = stateVal && (
+        chk.value.toLowerCase() === stateVal.toLowerCase() ||
+        (chk.dataset.slug && chk.dataset.slug.toLowerCase() === stateVal.toLowerCase()) ||
+        (chk.dataset.name && chk.dataset.name.toLowerCase() === stateVal.toLowerCase())
+      );
+      chk.checked = !!isMatch;
+      const itemRow = chk.closest('.filter-dropdown-item');
+      if (itemRow) {
+        if (isMatch) {
+          itemRow.classList.add('checked');
+          matchedItem = chk;
+        } else {
+          itemRow.classList.remove('checked');
+        }
+      }
+    });
+
+    if (matchedItem && stateVal) {
+      const labelText = matchedItem.closest('.filter-dropdown-item')?.querySelector('.item-text')?.textContent || stateVal;
+      if (toggleText) toggleText.textContent = labelText;
+      if (toggle) toggle.classList.add('has-value');
+    } else {
+      if (type === 'size' || type === 'weight') {
+        const hasAny = dd.querySelector('.filter-check:checked');
+        if (!hasAny) {
+          if (toggleText) toggleText.textContent = defaultLabel;
+          if (toggle) toggle.classList.remove('has-value');
+        }
+      } else {
+        if (toggleText) toggleText.textContent = defaultLabel;
+        if (toggle) toggle.classList.remove('has-value');
+      }
+    }
+  });
+}
+
+/* Helper to sync sidebar checkboxes when horizontal bar is changed */
+function syncSidebarCheckboxes(filterKey, value) {
+  const normVal = (value || '').toLowerCase().trim();
+  const rx = filterKey === 'category' ? /categor/i :
+             filterKey === 'brand' ? /brand|manufacturer/i : /size|weight/i;
+  const scope = filterGroupScope(rx);
+  if (!scope) return;
+
+  scope.querySelectorAll('input[type="checkbox"]').forEach((chk) => {
+    const row = chk.closest('label, li, .single-category') || chk.parentElement;
+    const txt = (row?.textContent || '').replace(/\(\d+\)/g, '').toLowerCase().trim();
+    if (normVal && txt === normVal) {
+      chk.checked = true;
+    } else {
+      chk.checked = false;
+    }
+  });
+}
+
+/* Wire horizontal filter bar with categories, brands, size, weight */
+function wireHorizontalFilterBar(state, run, facets) {
+  const bar = pick('.nice-select-area-wrapper-and-button');
+  if (!bar) return;
+
+  // 1. If the bar contains old <select> elements, transform them into custom .filter-dropdown structures
+  const dropdownConfigs = [
+    { type: 'category', defaultLabel: 'All Categories', searchPlaceholder: 'Search category...' },
+    { type: 'brand',    defaultLabel: 'All Brands',     searchPlaceholder: 'Search brand...' },
+    { type: 'size',     defaultLabel: 'All Size',       searchPlaceholder: 'Search size...' },
+    { type: 'weight',   defaultLabel: 'All Weight',     searchPlaceholder: 'Search weight...' },
+  ];
+
+  bar.querySelectorAll('.single-select').forEach((container, idx) => {
+    const cfg = dropdownConfigs[idx] || { type: 'filter-' + idx, defaultLabel: 'Filter', searchPlaceholder: 'Search...' };
+    if (!container.classList.contains('filter-dropdown')) {
+      container.classList.add('filter-dropdown');
+      container.setAttribute('data-filter-type', cfg.type);
+    }
+    const select = container.querySelector('select');
+    if (select && !container.querySelector('.filter-dropdown-toggle')) {
+      const options = [...select.options].filter((o) => o.value && !o.disabled);
+      let itemsHtml = '';
+      options.forEach((opt) => {
+        itemsHtml += `
+          <label class="filter-dropdown-item">
+            <input type="checkbox" class="filter-check" value="${escapeHtml(opt.value)}">
+            <span class="item-text">${escapeHtml(opt.text || opt.value)}</span>
+          </label>`;
+      });
+      container.innerHTML = `
+        <button type="button" class="filter-dropdown-toggle">
+          <span class="toggle-text">${escapeHtml(cfg.defaultLabel)}</span>
+          <i class="fa-regular fa-chevron-down"></i>
+        </button>
+        <div class="filter-dropdown-menu">
+          <div class="filter-dropdown-header-bar">
+            <input type="text" class="filter-dropdown-search" placeholder="${escapeHtml(cfg.searchPlaceholder)}">
+            <button type="button" class="btn-clear-dropdown" title="Clear filter">Clear</button>
+          </div>
+          <div class="filter-dropdown-list">
+            ${itemsHtml}
+          </div>
+        </div>`;
+    }
+  });
+
+  // 2. If facets are provided, dynamically populate/refresh the lists
+  if (facets) {
+    const catDd = bar.querySelector('.filter-dropdown[data-filter-type="category"] .filter-dropdown-list');
+    if (catDd && facets.categories && facets.categories.length) {
+      let html = '';
+      facets.categories.forEach((c) => {
+        html += `
+          <label class="filter-dropdown-item">
+            <input type="checkbox" class="filter-check" value="${escapeHtml(c.name)}">
+            <span class="item-text">${escapeHtml(c.name)}</span>
+            <span class="item-count">(${c.count})</span>
+          </label>`;
+      });
+      catDd.innerHTML = html;
+    }
+
+    const brandDd = bar.querySelector('.filter-dropdown[data-filter-type="brand"] .filter-dropdown-list');
+    if (brandDd && facets.brands && facets.brands.length) {
+      let html = '';
+      facets.brands.forEach((b) => {
+        const val = b.slug || b.name;
+        html += `
+          <label class="filter-dropdown-item">
+            <input type="checkbox" class="filter-check" value="${escapeHtml(val)}" data-name="${escapeHtml(b.name)}" data-slug="${escapeHtml(b.slug || '')}">
+            <span class="item-text">${escapeHtml(b.name)}</span>
+            <span class="item-count">(${b.count})</span>
+          </label>`;
+      });
+      brandDd.innerHTML = html;
+    }
+
+    const sizeAttr = (facets.attributes || []).find((a) => (a.key || '').toLowerCase() === 'size');
+    if (sizeAttr && sizeAttr.values && sizeAttr.values.length) {
+      const sizeDd = bar.querySelector('.filter-dropdown[data-filter-type="size"] .filter-dropdown-list');
+      if (sizeDd) {
+        let html = '';
+        const sizes = sizeAttr.values.filter((v) => !/^\d+\s*(gm|kg|ltr|ml)$/i.test(v.value.trim())).slice(0, 40);
+        const listToUse = sizes.length ? sizes : sizeAttr.values.slice(0, 40);
+        listToUse.forEach((s) => {
+          html += `
+            <label class="filter-dropdown-item">
+              <input type="checkbox" class="filter-check" value="${escapeHtml(s.value)}">
+              <span class="item-text">${escapeHtml(s.value)}</span>
+              <span class="item-count">(${s.count})</span>
+            </label>`;
+        });
+        sizeDd.innerHTML = html;
+      }
+
+      const weightDd = bar.querySelector('.filter-dropdown[data-filter-type="weight"] .filter-dropdown-list');
+      if (weightDd) {
+        const weights = sizeAttr.values.filter((v) => /gm|kg|ltr|ml/i.test(v.value)).slice(0, 40);
+        if (weights.length) {
+          let html = '';
+          weights.forEach((w) => {
+            html += `
+              <label class="filter-dropdown-item">
+                <input type="checkbox" class="filter-check" value="${escapeHtml(w.value)}">
+                <span class="item-text">${escapeHtml(w.value)}</span>
+                <span class="item-count">(${w.count})</span>
+              </label>`;
+          });
+          weightDd.innerHTML = html;
+        }
+      }
+    }
+  }
+
+  // 3. Setup event listeners on each dropdown
+  bar.querySelectorAll('.filter-dropdown').forEach((dd) => {
+    const filterType = dd.getAttribute('data-filter-type');
+    const toggle = dd.querySelector('.filter-dropdown-toggle');
+    const searchInput = dd.querySelector('.filter-dropdown-search');
+    const clearBtn = dd.querySelector('.btn-clear-dropdown');
+    const list = dd.querySelector('.filter-dropdown-list');
+
+    // Toggle open / close
+    if (toggle && !toggle.__wiredToggle) {
+      toggle.__wiredToggle = true;
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wasActive = dd.classList.contains('active');
+        bar.querySelectorAll('.filter-dropdown.active').forEach((other) => {
+          if (other !== dd) other.classList.remove('active');
+        });
+        dd.classList.toggle('active', !wasActive);
+        if (!wasActive && searchInput) {
+          setTimeout(() => searchInput.focus(), 50);
+        }
+      });
+    }
+
+    // Stop propagation inside menu
+    const menu = dd.querySelector('.filter-dropdown-menu');
+    if (menu && !menu.__wiredMenu) {
+      menu.__wiredMenu = true;
+      menu.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
+    }
+
+    // Search inside dropdown
+    if (searchInput && !searchInput.__wiredSearch) {
+      searchInput.__wiredSearch = true;
+      searchInput.addEventListener('input', () => {
+        const q = searchInput.value.toLowerCase().trim();
+        const items = list?.querySelectorAll('.filter-dropdown-item') || [];
+        let visibleCount = 0;
+        items.forEach((item) => {
+          const text = item.querySelector('.item-text')?.textContent.toLowerCase() || '';
+          const match = text.includes(q);
+          item.style.display = match ? 'flex' : 'none';
+          if (match) visibleCount++;
+        });
+
+        let emptyMsg = list?.querySelector('.filter-empty-message');
+        if (visibleCount === 0) {
+          if (!emptyMsg) {
+            emptyMsg = document.createElement('div');
+            emptyMsg.className = 'filter-empty-message';
+            emptyMsg.textContent = 'No matching options found';
+            list?.appendChild(emptyMsg);
+          }
+          emptyMsg.style.display = 'block';
+        } else if (emptyMsg) {
+          emptyMsg.style.display = 'none';
+        }
+      });
+    }
+
+    // Checkbox change event (INSTANT FILTERING ON SELECT)
+    if (list && !list.__wiredCheckChange) {
+      list.__wiredCheckChange = true;
+      list.addEventListener('change', (e) => {
+        const target = e.target;
+        if (!target || !target.classList.contains('filter-check')) return;
+
+        const isChecked = target.checked;
+        const val = target.value;
+
+        // Uncheck all other checkboxes in this dropdown
+        list.querySelectorAll('.filter-check').forEach((chk) => {
+          if (chk !== target) {
+            chk.checked = false;
+            chk.closest('.filter-dropdown-item')?.classList.remove('checked');
+          }
+        });
+
+        const row = target.closest('.filter-dropdown-item');
+        if (isChecked) {
+          row?.classList.add('checked');
+        } else {
+          row?.classList.remove('checked');
+        }
+
+        // Also if this is size or weight, uncheck the other one because state.size is shared
+        if (filterType === 'size') {
+          const weightDd = bar.querySelector('.filter-dropdown[data-filter-type="weight"]');
+          weightDd?.querySelectorAll('.filter-check').forEach((c) => {
+            c.checked = false;
+            c.closest('.filter-dropdown-item')?.classList.remove('checked');
+          });
+          const weightToggle = weightDd?.querySelector('.filter-dropdown-toggle');
+          const weightText = weightDd?.querySelector('.toggle-text');
+          if (weightText) weightText.textContent = 'All Weight';
+          weightToggle?.classList.remove('has-value');
+        } else if (filterType === 'weight') {
+          const sizeDd = bar.querySelector('.filter-dropdown[data-filter-type="size"]');
+          sizeDd?.querySelectorAll('.filter-check').forEach((c) => {
+            c.checked = false;
+            c.closest('.filter-dropdown-item')?.classList.remove('checked');
+          });
+          const sizeToggle = sizeDd?.querySelector('.filter-dropdown-toggle');
+          const sizeText = sizeDd?.querySelector('.toggle-text');
+          if (sizeText) sizeText.textContent = 'All Size';
+          sizeToggle?.classList.remove('has-value');
+        }
+
+        // Update state
+        if (filterType === 'category') {
+          state.category = isChecked ? val : '';
+        } else if (filterType === 'brand') {
+          state.brand = isChecked ? val : '';
+        } else if (filterType === 'size' || filterType === 'weight') {
+          state.size = isChecked ? val : '';
+        }
+
+        // Sync button text & highlight
+        const toggleText = dd.querySelector('.toggle-text');
+        const defaultLabel = filterType === 'category' ? 'All Categories' :
+                             filterType === 'brand' ? 'All Brands' :
+                             filterType === 'size' ? 'All Size' : 'All Weight';
+
+        if (isChecked) {
+          const labelName = row?.querySelector('.item-text')?.textContent || val;
+          if (toggleText) toggleText.textContent = labelName;
+          toggle?.classList.add('has-value');
+        } else {
+          if (toggleText) toggleText.textContent = defaultLabel;
+          toggle?.classList.remove('has-value');
+        }
+
+        // Sync sidebar checkboxes
+        syncSidebarCheckboxes(filterType, isChecked ? val : '');
+
+        // Trigger INSTANT FILTER
+        state.page = 1;
+        pushState(state);
+        run();
+      });
+    }
+
+    // Clear button inside dropdown
+    if (clearBtn && !clearBtn.__wiredClear) {
+      clearBtn.__wiredClear = true;
+      clearBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        list?.querySelectorAll('.filter-check').forEach((chk) => {
+          chk.checked = false;
+          chk.closest('.filter-dropdown-item')?.classList.remove('checked');
+        });
+
+        if (searchInput) {
+          searchInput.value = '';
+          searchInput.dispatchEvent(new Event('input'));
+        }
+
+        const defaultLabel = filterType === 'category' ? 'All Categories' :
+                             filterType === 'brand' ? 'All Brands' :
+                             filterType === 'size' ? 'All Size' : 'All Weight';
+        const toggleText = dd.querySelector('.toggle-text');
+        if (toggleText) toggleText.textContent = defaultLabel;
+        toggle?.classList.remove('has-value');
+
+        if (filterType === 'category') state.category = '';
+        else if (filterType === 'brand') state.brand = '';
+        else if (filterType === 'size' || filterType === 'weight') state.size = '';
+
+        syncSidebarCheckboxes(filterType, '');
+
+        state.page = 1;
+        pushState(state);
+        run();
+      });
+    }
+  });
+
+  // Global click outside to close open dropdowns
+  if (!window.__filterDropdownGlobalWired) {
+    window.__filterDropdownGlobalWired = true;
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.filter-dropdown')) {
+        document.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        document.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+      }
+    });
+  }
+
+  // Initial sync with state (e.g. from URL params or page reload)
+  syncHorizontalDropdownFromState(state);
+
+  // Apply Filter Button
+  const filterBtn = bar.querySelector('.btn-filter-apply, .button-area button:first-child');
+  if (filterBtn && !filterBtn.__wiredFilter) {
+    filterBtn.__wiredFilter = true;
+    filterBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      bar.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+      state.page = 1;
+      pushState(state);
+      run();
+      const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+      topEl.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
+
+  // Reset Filter Button
+  const resetBtn = bar.querySelector('.btn-filter-reset, .button-area button:last-child');
+  if (resetBtn && !resetBtn.__wiredReset) {
+    resetBtn.__wiredReset = true;
+    resetBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      bar.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+
+      // Uncheck all checkboxes in all horizontal dropdowns
+      bar.querySelectorAll('.filter-check').forEach((chk) => {
+        chk.checked = false;
+        chk.closest('.filter-dropdown-item')?.classList.remove('checked');
+      });
+
+      // Reset search inputs
+      bar.querySelectorAll('.filter-dropdown-search').forEach((s) => {
+        s.value = '';
+        s.dispatchEvent(new Event('input'));
+      });
+
+      // Reset labels & highlight classes
+      bar.querySelectorAll('.filter-dropdown').forEach((d) => {
+        const type = d.getAttribute('data-filter-type');
+        const defaultLabel = type === 'category' ? 'All Categories' :
+                             type === 'brand' ? 'All Brands' :
+                             type === 'size' ? 'All Size' : 'All Weight';
+        const txt = d.querySelector('.toggle-text');
+        if (txt) txt.textContent = defaultLabel;
+        d.querySelector('.filter-dropdown-toggle')?.classList.remove('has-value');
+      });
+
+      // Uncheck all sidebar checkboxes
+      document.querySelectorAll('.single-filter-box input[type="checkbox"]').forEach((i) => { i.checked = false; });
+
+      // Reset state
+      state.category = '';
+      state.brand = '';
+      state.size = '';
+      state.color = '';
+      state.minPrice = '';
+      state.maxPrice = '';
+      state.page = 1;
+      pushState(state);
+      run();
+      const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+      topEl.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
+}
 
 /* Every theme ships a static pager. We keep its markup and give its numbers
    meaning; a page beyond the last simply comes back empty, which the store
@@ -2956,9 +3497,9 @@ function wirePagination(state, run, pageSize) {
    up with rather than driving it, because each theme uses a different widget
    and re-implementing four of them would change how they feel. */
 function wirePriceFilter(state, run) {
-  const apply = pick('.price-filter button|.filter-btn|.button-area .rts-btn');
-  const from = pick('.price-range .from|#slider-range-value1|input[name="min_price"]');
-  const to = pick('.price-range .to|#slider-range-value2|input[name="max_price"]');
+  const apply = pick('.price-input-area button, .filter-value-min-max button, .price-filter button, .filter-btn');
+  const from = pick('.price-range .from|#slider-range-value1|input[name="min_price"]|#min');
+  const to = pick('.price-range .to|#slider-range-value2|input[name="max_price"]|#max');
   if (!apply || (!from && !to)) return;
   apply.addEventListener('click', (e) => {
     e.preventDefault();
@@ -2982,7 +3523,6 @@ async function paintResultCount(items, state, pageSize) {
   const sentence = named.length ? named : $$('*').filter(
     (el) => el.children.length === 0 && /showing\s+[\d,]+\s*[-\u2013]\s*[\d,]+\s+of\s+[\d,]+/i.test(el.textContent || ''),
   );
-  if (!sentence.length) return;
 
   let total = items.length;
   try {
@@ -2997,7 +3537,10 @@ async function paintResultCount(items, state, pageSize) {
 
   const from = items.length ? (state.page - 1) * pageSize + 1 : 0;
   const to = (state.page - 1) * pageSize + items.length;
-  sentence.forEach((el) => setText(el, 'Showing ' + from + '\u2013' + to + ' of ' + total + ' results'));
+  if (sentence.length) {
+    sentence.forEach((el) => setText(el, 'Showing ' + from + '\u2013' + to + ' of ' + total + ' results'));
+  }
+  return total;
 }
 
 function pushState(state) {
@@ -3847,6 +4390,8 @@ async function paintFilters(state, run) {
   catch { return; }
   if (!facets) return;
 
+  wireHorizontalFilterBar(state, run, facets);
+
   for (const group of FILTER_GROUPS) {
     const values = group.values(facets);
     if (!values.length) continue;
@@ -3923,6 +4468,7 @@ function paintFilterGroup(list, group, values, state, run) {
       run();
       pickAll('input', list).forEach((i) => { i.checked = false; });
       if (input && !already) input.checked = true;
+      syncHorizontalDropdownFromState(state);
     };
     (input || label).addEventListener('click', choose);
     if (input) input.addEventListener('change', choose);
