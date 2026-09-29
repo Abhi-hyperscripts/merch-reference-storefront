@@ -857,46 +857,251 @@
                         </div>
                         <div class="nice-select-area-wrapper-and-button">
                             <div class="nice-select-wrapper-1">
-                                <div class="single-select">
-                                    <select>
-                                        <option data-display="All Categories">All Categories</option>
-                                        <option value="1">Some option</option>
-                                        <option value="2">Another option</option>
-                                        <option value="3" disabled>A disabled option</option>
-                                        <option value="4">Potato</option>
-                                    </select>
+                                <div class="single-select filter-dropdown" data-filter-type="category">
+                                    <button type="button" class="filter-dropdown-toggle">
+                                        <span class="toggle-text">All Categories</span>
+                                        <i class="fa-regular fa-chevron-down"></i>
+                                    </button>
+                                    <div class="filter-dropdown-menu">
+                                        <div class="filter-dropdown-header-bar">
+                                            <input type="text" class="filter-dropdown-search" placeholder="Search category...">
+                                            <button type="button" class="btn-clear-dropdown" title="Clear filter">Clear</button>
+                                        </div>
+                                        <div class="filter-dropdown-list">
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Hair Care">
+                                                <span class="item-text">Hair Care</span>
+                                                <span class="item-count">(479)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Biscuits, Cookies & Wafers">
+                                                <span class="item-text">Biscuits, Cookies &amp; Wafers</span>
+                                                <span class="item-count">(438)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Masalas & Spices">
+                                                <span class="item-text">Masalas &amp; Spices</span>
+                                                <span class="item-count">(353)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Spreads, Sauces, Ketchup">
+                                                <span class="item-text">Spreads, Sauces, Ketchup</span>
+                                                <span class="item-count">(329)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Skin Care">
+                                                <span class="item-text">Skin Care</span>
+                                                <span class="item-count">(327)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Bathing Soaps & Body Wash">
+                                                <span class="item-text">Bathing Soaps &amp; Body Wash</span>
+                                                <span class="item-count">(229)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Fruit Juices & Drinks">
+                                                <span class="item-text">Fruit Juices &amp; Drinks</span>
+                                                <span class="item-count">(202)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Oral Care">
+                                                <span class="item-text">Oral Care</span>
+                                                <span class="item-count">(201)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Dry Fruits">
+                                                <span class="item-text">Dry Fruits</span>
+                                                <span class="item-count">(161)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Tea">
+                                                <span class="item-text">Tea</span>
+                                                <span class="item-count">(115)</span>
+                                            </label>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div class="single-select">
-                                    <select>
-                                        <option data-display="All Brands">All Brands</option>
-                                        <option value="1">Some option</option>
-                                        <option value="2">Another option</option>
-                                        <option value="3" disabled>A disabled option</option>
-                                        <option value="4">Potato</option>
-                                    </select>
+                                <div class="single-select filter-dropdown" data-filter-type="brand">
+                                    <button type="button" class="filter-dropdown-toggle">
+                                        <span class="toggle-text">All Brands</span>
+                                        <i class="fa-regular fa-chevron-down"></i>
+                                    </button>
+                                    <div class="filter-dropdown-menu">
+                                        <div class="filter-dropdown-header-bar">
+                                            <input type="text" class="filter-dropdown-search" placeholder="Search brand...">
+                                            <button type="button" class="btn-clear-dropdown" title="Clear filter">Clear</button>
+                                        </div>
+                                        <div class="filter-dropdown-list">
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Amul">
+                                                <span class="item-text">Amul</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Britannia">
+                                                <span class="item-text">Britannia</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Colgate">
+                                                <span class="item-text">Colgate</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Dabur">
+                                                <span class="item-text">Dabur</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Haldirams">
+                                                <span class="item-text">Haldirams</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Himalaya">
+                                                <span class="item-text">Himalaya</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Nestle">
+                                                <span class="item-text">Nestle</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Parle">
+                                                <span class="item-text">Parle</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Patanjali">
+                                                <span class="item-text">Patanjali</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="Tata">
+                                                <span class="item-text">Tata</span>
+                                            </label>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div class="single-select">
-                                    <select>
-                                        <option data-display="All Size">All Size </option>
-                                        <option value="1">Some option</option>
-                                        <option value="2">Another option</option>
-                                        <option value="3" disabled>A disabled option</option>
-                                        <option value="4">Potato</option>
-                                    </select>
+                                <div class="single-select filter-dropdown" data-filter-type="size">
+                                    <button type="button" class="filter-dropdown-toggle">
+                                        <span class="toggle-text">All Size</span>
+                                        <i class="fa-regular fa-chevron-down"></i>
+                                    </button>
+                                    <div class="filter-dropdown-menu">
+                                        <div class="filter-dropdown-header-bar">
+                                            <input type="text" class="filter-dropdown-search" placeholder="Search size...">
+                                            <button type="button" class="btn-clear-dropdown" title="Clear filter">Clear</button>
+                                        </div>
+                                        <div class="filter-dropdown-list">
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="1 pc">
+                                                <span class="item-text">1 pc</span>
+                                                <span class="item-count">(296)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="1 unit">
+                                                <span class="item-text">1 unit</span>
+                                                <span class="item-count">(242)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="1 pack">
+                                                <span class="item-text">1 pack</span>
+                                                <span class="item-count">(16)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="3 pcs">
+                                                <span class="item-text">3 pcs</span>
+                                                <span class="item-count">(19)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="4 pcs">
+                                                <span class="item-text">4 pcs</span>
+                                                <span class="item-count">(23)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="6 pcs">
+                                                <span class="item-text">6 pcs</span>
+                                                <span class="item-count">(18)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="1 set">
+                                                <span class="item-text">1 set</span>
+                                                <span class="item-count">(43)</span>
+                                            </label>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div class="single-select">
-                                    <select>
-                                        <option data-display="All Weight">All Weight</option>
-                                        <option value="1">Some option</option>
-                                        <option value="2">Another option</option>
-                                        <option value="3" disabled>A disabled option</option>
-                                        <option value="4">Potato</option>
-                                    </select>
+                                <div class="single-select filter-dropdown" data-filter-type="weight">
+                                    <button type="button" class="filter-dropdown-toggle">
+                                        <span class="toggle-text">All Weight</span>
+                                        <i class="fa-regular fa-chevron-down"></i>
+                                    </button>
+                                    <div class="filter-dropdown-menu">
+                                        <div class="filter-dropdown-header-bar">
+                                            <input type="text" class="filter-dropdown-search" placeholder="Search weight...">
+                                            <button type="button" class="btn-clear-dropdown" title="Clear filter">Clear</button>
+                                        </div>
+                                        <div class="filter-dropdown-list">
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="50 gm">
+                                                <span class="item-text">50 gm</span>
+                                                <span class="item-count">(182)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="100 gm">
+                                                <span class="item-text">100 gm</span>
+                                                <span class="item-count">(466)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="200 gm">
+                                                <span class="item-text">200 gm</span>
+                                                <span class="item-count">(359)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="250 gm">
+                                                <span class="item-text">250 gm</span>
+                                                <span class="item-count">(155)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="400 gm">
+                                                <span class="item-text">400 gm</span>
+                                                <span class="item-count">(225)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="500 gm">
+                                                <span class="item-text">500 gm</span>
+                                                <span class="item-count">(398)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="1 kg">
+                                                <span class="item-text">1 kg</span>
+                                                <span class="item-count">(249)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="2 kg">
+                                                <span class="item-text">2 kg</span>
+                                                <span class="item-count">(22)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="5 kg">
+                                                <span class="item-text">5 kg</span>
+                                                <span class="item-count">(28)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="200 ml">
+                                                <span class="item-text">200 ml</span>
+                                                <span class="item-count">(183)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="500 ml">
+                                                <span class="item-text">500 ml</span>
+                                                <span class="item-count">(139)</span>
+                                            </label>
+                                            <label class="filter-dropdown-item">
+                                                <input type="checkbox" class="filter-check" value="1 ltr">
+                                                <span class="item-text">1 ltr</span>
+                                                <span class="item-count">(169)</span>
+                                            </label>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                             <div class="button-area">
-                                <button class="rts-btn">Filter</button>
-                                <button class="rts-btn">Reset Filter</button>
+                                <button type="button" class="rts-btn btn-filter-apply">Filter</button>
+                                <button type="button" class="rts-btn btn-filter-reset">Reset Filter</button>
                             </div>
                         </div>
                     </div>
@@ -2520,6 +2725,19 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- pagination area start -->
+                    <div class="pagination-area-main-wrappper pagination-area mt--50">
+                        <ul class="pagination">
+                            <li><button type="button" class="prev-page" aria-label="Previous"><i class="fa-regular fa-chevron-left"></i></button></li>
+                            <li><button type="button" class="page-num active">1</button></li>
+                            <li><button type="button" class="page-num">2</button></li>
+                            <li><button type="button" class="page-num">3</button></li>
+                            <li><button type="button" class="page-num">4</button></li>
+                            <li><button type="button" class="next-page" aria-label="Next"><i class="fa-regular fa-chevron-right"></i></button></li>
+                        </ul>
+                    </div>
+                    <!-- pagination area end -->
                 </div>
             </div>
         </div>
