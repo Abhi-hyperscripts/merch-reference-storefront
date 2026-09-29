@@ -733,25 +733,40 @@
                         </div>
                         <div class="tab-pane fade" id="v-pills-settings" role="tabpanel" aria-labelledby="v-pills-settings-tab" tabindex="0">
                             <div class="shipping-address-billing-address-account">
-                                <div class="d-flex justify-content-between align-items-center mb--20 flex-wrap gap-3">
-                                    <h2 class="title mb-0">My Addresses</h2>
-                                    <a href="addresses.html" class="rts-btn btn-primary" style="padding: 8px 18px; font-size: 13px;">Manage / Add Address</a>
+                                <div class="d-flex justify-content-between align-items-center mb--25 flex-wrap gap-3">
+                                    <div>
+                                        <h2 class="title mb-1">My Addresses</h2>
+                                        <p class="text-muted mb-0" style="font-size: 13px;">Manage your delivery addresses and set your default location.</p>
+                                    </div>
+                                    <a href="addresses.html" class="rts-btn btn-primary" style="padding: 10px 20px; font-size: 13px;"><i class="fa-light fa-plus me-1"></i> Add New Address</a>
                                 </div>
                                 <div class="address-list row g-4">
                                     <div class="col-md-6 address-item">
-                                        <div class="address-card p-4 border rounded" style="background: #fafafa; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px;">
-                                            <h5 class="address-name font-weight-bold mb-2" style="font-size: 16px; color: #1e293b;">&mdash;</h5>
-                                            <p class="address-body text-muted mb-3" style="color: #64748b; font-size: 14px; min-height: 42px;">&mdash;</p>
-                                            <div class="address-actions d-flex gap-3 align-items-center">
-                                                <a href="addresses.html" class="address-edit text-primary font-weight-medium" style="font-size: 13px;">Edit</a>
-                                                <a href="#" class="address-default text-secondary" style="font-size: 13px;">Make default</a>
+                                        <div class="address-card-wrap">
+                                            <div class="address-card-header">
+                                                <div class="address-recipient">
+                                                    <div class="address-recipient-icon">
+                                                        <i class="fa-light fa-location-dot"></i>
+                                                    </div>
+                                                    <h5 class="address-name mb-0 font-weight-bold">&mdash;</h5>
+                                                </div>
+                                                <span class="badge-default-addr" style="display: none;"><i class="fa-solid fa-circle-check"></i> Default</span>
+                                            </div>
+                                            <div class="address-card-body">
+                                                <p class="address-body">&mdash;</p>
+                                                <p class="address-phone-line" style="display: none;"><i class="fa-light fa-phone"></i> <span class="phone-val"></span></p>
+                                            </div>
+                                            <div class="address-card-actions">
+                                                <button type="button" class="addr-btn addr-btn-edit address-edit"><i class="fa-light fa-pen-to-square"></i> Edit</button>
+                                                <button type="button" class="addr-btn addr-btn-default address-default"><i class="fa-light fa-star"></i> Set as Default</button>
+                                                <button type="button" class="addr-btn addr-btn-delete address-delete"><i class="fa-light fa-trash-can"></i> Delete</button>
                                             </div>
                                         </div>
                                     </div>
                                 </div>
-                                <div class="empty-state text-center" style="display: none; padding: 40px 15px;">
+                                <div class="empty-state address-empty-card" style="display: none; margin-top: 20px;">
                                     <i class="fa-light fa-location-dot" style="font-size: 48px; color: #94a3b8; margin-bottom: 16px; display: inline-block;"></i>
-                                    <h4 style="font-size: 18px; margin-bottom: 8px; color: #1e293b;">No saved addresses yet.</h4>
+                                    <h4 style="font-size: 18px; margin-bottom: 8px; color: #1e293b; font-weight: 600;">No saved addresses yet.</h4>
                                     <p style="color: #64748b; margin-bottom: 20px; font-size: 14px;">Add a shipping address for faster checkout.</p>
                                     <a href="addresses.html" class="rts-btn btn-primary" style="padding: 10px 24px; font-size: 14px; display: inline-block;">Add an address</a>
                                 </div>

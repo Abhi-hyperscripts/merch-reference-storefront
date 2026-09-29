@@ -2468,7 +2468,7 @@ function displayCurrencyFor(role) {
    it ships nothing, put the sentence where the grid was, unstyled. */
 function renderEmpty(container, message, spec) {
   if (!container) return;
-  const searchRoot = container.closest?.('.order-table-account, .shipping-address-billing-address-account, .tab-pane, .table-responsive, .cart-area, .cart-section') || container.parentElement || document;
+  const searchRoot = container.closest?.('.order-table-account, .shipping-address-billing-address-account, .saved-addresses-col, .tab-pane, .table-responsive, .cart-area, .cart-section, .col-lg-7, .col-lg-6') || container.parentElement || document;
   const own = pick('.no-results|.empty-state|.wrap-empty_text|.cart-empty', searchRoot);
   if (own) {
     show(own, true);
@@ -4215,20 +4215,77 @@ function paintCheckoutSummary(spec, lines) {
 /* Fill the address form from the account, so a signed-in shopper types nothing. */
 async function prefillCustomer(spec) {
   const f = spec.form || {};
-  const set = (key, value) => { const el = pick(f[key]); if (el && value) el.value = value; };
+  const set = (key, value) => { const el = pick(f[key]); if (el && value != null) el.value = value; };
   if (!token.get()) return;
   try {
     const [me, addresses] = await Promise.all([api.me(), api.addresses().catch(() => [])]);
-    const a = (addresses || []).find((x) => x.isDefault) || (addresses || [])[0];
     set('email', me?.email);
-    const [first, ...rest] = String(me?.name || '').split(' ');
-    set('firstName', first); set('lastName', rest.join(' ')); set('name', me?.name);
-    set('phone', me?.phone || a?.phone);
-    if (a) {
-      /* A saved address is { name, phone, line, city, state, pincode } — one
-         `line`, matching what checkout sends back. */
-      set('address1', a.line);
-      set('city', a.city); set('state', a.state); set('pincode', a.pincode);
+
+    const applyAddress = (a) => {
+      if (!a) return;
+      const [first, ...rest] = String(a.name || me?.name || '').trim().split(/\s+/);
+      set('firstName', first || '');
+      set('lastName', rest.join(' ') || '');
+      set('name', a.name || me?.name || '');
+      set('phone', a.phone || me?.phone || '');
+      set('address1', a.line || a.line1 || '');
+      set('city', a.city || '');
+      set('state', a.state || '');
+      set('pincode', a.pincode || '');
+    };
+
+    const addrSection = pick('#checkout-saved-addresses-area');
+    const cardsContainer = pick('.checkout-address-cards', addrSection);
+
+    if (addresses && addresses.length > 0 && addrSection && cardsContainer) {
+      show(addrSection, true);
+      let selectedId = (addresses.find((x) => x.isDefault) || addresses[0]).id;
+
+      cardsContainer.innerHTML = addresses.map((addr) => {
+        const isSelected = String(addr.id) === String(selectedId);
+        const formattedLine = [addr.line, addr.line1, addr.line2, addr.city, addr.state, addr.pincode, addr.country].filter(Boolean).join(', ');
+        return `
+          <div class="col-md-6 col-12">
+            <div class="checkout-addr-card ${isSelected ? 'is-selected' : ''}" data-addr-id="${escapeHtml(String(addr.id))}">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="d-flex align-items-center gap-2">
+                  <input type="radio" name="checkout_selected_address" class="addr-radio-custom" ${isSelected ? 'checked' : ''} value="${escapeHtml(String(addr.id))}">
+                  <strong class="addr-recipient-name" style="font-size: 15px; color: #1e293b;">${escapeHtml(addr.name || 'Saved Address')}</strong>
+                </div>
+                ${addr.isDefault ? '<span class="badge-default"><i class="fa-solid fa-circle-check"></i> Default</span>' : ''}
+              </div>
+              <p class="text-muted mb-1" style="font-size: 13px; line-height: 1.5; margin-left: 26px;">${escapeHtml(formattedLine)}</p>
+              ${addr.phone ? `<p class="text-muted mb-0" style="font-size: 12px; margin-left: 26px;"><i class="fa-light fa-phone me-1"></i> ${escapeHtml(addr.phone)}</p>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      pickAll('.checkout-addr-card', cardsContainer).forEach((card) => {
+        card.addEventListener('click', () => {
+          const addrId = card.dataset.addrId;
+          const chosen = addresses.find((x) => String(x.id) === String(addrId));
+          if (!chosen) return;
+          selectedId = chosen.id;
+          pickAll('.checkout-addr-card', cardsContainer).forEach((c) => {
+            const match = c === card;
+            c.classList.toggle('is-selected', match);
+            const radio = c.querySelector('input[type="radio"]');
+            if (radio) radio.checked = match;
+          });
+          applyAddress(chosen);
+          notify(`Delivery address selected: ${chosen.name || 'Address'}`, 'success');
+        });
+      });
+
+      const initialAddr = addresses.find((x) => String(x.id) === String(selectedId)) || addresses[0];
+      applyAddress(initialAddr);
+    } else {
+      const a = (addresses || []).find((x) => x.isDefault) || (addresses || [])[0];
+      const [first, ...rest] = String(me?.name || '').trim().split(/\s+/);
+      set('firstName', first || ''); set('lastName', rest.join(' ') || ''); set('name', me?.name);
+      set('phone', me?.phone || a?.phone);
+      if (a) applyAddress(a);
     }
   } catch (e) { if (!(e instanceof ApiError && e.isUnauthenticated)) warn(e); }
 }
@@ -4884,6 +4941,11 @@ pages.addresses = async () => {
   if (!token.get()) return showSignedOut();
   wireAddressForm();
   await paintAddresses();
+  const editId = new URLSearchParams(location.search).get('edit');
+  if (editId) {
+    const item = pick(`.address-item[data-address-id="${editId}"]`, document);
+    if (item) pick('.address-edit', item)?.click();
+  }
 };
 pages.orderDetail = pages.order;
 
@@ -4966,26 +5028,59 @@ async function paintAddresses() {
   const spec = { container: '.address-list|.account-addresses|.list-address', card: '.address-item|.single-address|.account-address-item' };
   const t = takeTemplate(spec);
   if (!t) return;
-  const emptyState = pick('.empty-state', t.container?.closest?.('.shipping-address-billing-address-account, .tab-pane') || t.container?.parentElement);
+  const emptyState = pick('.empty-state', t.container?.closest?.('.shipping-address-billing-address-account, .saved-addresses-col, .tab-pane, .col-lg-7, .col-lg-6') || t.container?.parentElement);
   if (!list.length) return renderEmpty(t.container, 'No saved addresses yet.', spec);
   if (emptyState) show(emptyState, false);
   show(t.container, true);
   repeat(t, list, (node, a) => {
+    node.dataset.addressId = a.id;
     setText(pick('.address-name|h5|h6', node), a.name || '');
     /* A saved address uses `line`, SINGULAR — the edit handler below already
        knew that; this line did not, so every saved address was shown without
        its street: "Noida, Uttar Pradesh, 201301" and nothing to deliver to. */
     setText(pick('.address-body|p|address', node),
       [a.line, a.line1, a.line2, a.city, a.state, a.pincode, a.country].filter(Boolean).join(', '));
+
+    // Handle Phone
+    const phoneEl = pick('.phone-val|.address-phone-number', node);
+    const phoneContainer = pick('.address-phone-line|.address-phone', node);
+    if (a.phone) {
+      if (phoneEl) setText(phoneEl, a.phone);
+      if (phoneContainer) show(phoneContainer, true);
+    } else if (phoneContainer) {
+      show(phoneContainer, false);
+    }
+
+    // Handle Default badge & button
+    const defaultBadge = pick('.badge-default-addr|.address-default-badge', node);
+    const defaultBtn = pick('.address-default|[data-default]', node);
+    const cardWrap = pick('.address-card-wrap', node);
+    if (a.isDefault) {
+      if (defaultBadge) show(defaultBadge, true);
+      if (defaultBtn) show(defaultBtn, false);
+      if (cardWrap) cardWrap.classList.add('is-default');
+    } else {
+      if (defaultBadge) show(defaultBadge, false);
+      if (defaultBtn) show(defaultBtn, true);
+      if (cardWrap) cardWrap.classList.remove('is-default');
+    }
+
     pick('.address-default|[data-default]', node)?.addEventListener('click', async (e) => {
       e.preventDefault();
-      try { await api.makeAddressDefault(a.id); notify('Default address updated.', 'success'); }
-      catch (err) { showError(err); }
+      try {
+        await api.makeAddressDefault(a.id);
+        notify('Default address updated.', 'success');
+        await paintAddresses();
+      } catch (err) { showError(err); }
     });
+
     pick('.address-edit|[data-edit]', node)?.addEventListener('click', (e) => {
       e.preventDefault();
       const form = $$('form').find((f) => f.dataset.merchAddress);
-      if (!form) return;
+      if (!form) {
+        location.href = `addresses.html?edit=${encodeURIComponent(a.id)}`;
+        return;
+      }
       form.dataset.merchEditing = a.id;
       const set = (sel, v) => { const el = pick(sel, form); if (el) el.value = v || ''; };
       set('input[placeholder*="name" i]:not([placeholder*="user" i])', a.name);
@@ -4994,12 +5089,29 @@ async function paintAddresses() {
       set('input[placeholder*="city" i]|input[placeholder*="town" i]', a.city);
       set('input[placeholder*="state" i]', a.state);
       set('input[placeholder*="zip" i]|input[placeholder*="post" i]|input[placeholder*="pin" i]', a.pincode);
+
+      const titleEl = pick('.address-form-title', form.parentElement?.parentElement || form.parentElement || document);
+      if (titleEl) setText(titleEl, 'Edit address');
+      const submitBtn = pick('button[type="submit"]', form);
+      if (submitBtn) setText(submitBtn, 'Update address');
+      const cancelBtn = pick('.cancel-edit-btn', form.parentElement?.parentElement || form.parentElement || document);
+      if (cancelBtn) show(cancelBtn, true);
+
       form.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
+
     pick('.address-delete|[data-delete]', node)?.addEventListener('click', async (e) => {
       e.preventDefault();
-      try { await api.deleteAddress(a.id); node.remove(); }
-      catch (err) { showError(err); }
+      if (!confirm('Are you sure you want to delete this address?')) return;
+      try {
+        await api.deleteAddress(a.id);
+        node.remove();
+        notify('Address deleted successfully.', 'success');
+        const remaining = pickAll(spec.card, t.container);
+        if (!remaining.length) {
+          renderEmpty(t.container, 'No saved addresses yet.', spec);
+        }
+      } catch (err) { showError(err); }
     });
   });
 }
@@ -5023,6 +5135,20 @@ function wireAddressForm() {
        Save submitted it natively. */
     if (!fields.line || !(fields.city || fields.pincode)) continue;
     form.dataset.merchAddress = '1';
+
+    const cancelBtn = pick('.cancel-edit-btn', form.parentElement?.parentElement || form.parentElement || document);
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        delete form.dataset.merchEditing;
+        form.reset();
+        const titleEl = pick('.address-form-title', form.parentElement?.parentElement || form.parentElement || document);
+        if (titleEl) setText(titleEl, 'Add an address');
+        const submitBtn = pick('button[type="submit"]', form);
+        if (submitBtn) setText(submitBtn, 'Save address');
+        show(cancelBtn, false);
+      });
+    }
 
     /* The store will not save an address without a postcode, and one of these
        templates asks only for Address and City. Give the form the boxes the
@@ -5067,6 +5193,11 @@ function wireAddressForm() {
         notify(editing ? 'Address updated.' : 'Address saved.', 'success');
         delete form.dataset.merchEditing;
         form.reset();
+        const titleEl = pick('.address-form-title', form.parentElement?.parentElement || form.parentElement || document);
+        if (titleEl) setText(titleEl, 'Add an address');
+        const submitBtn = pick('button[type="submit"]', form);
+        if (submitBtn) setText(submitBtn, 'Save address');
+        if (cancelBtn) show(cancelBtn, false);
         await paintAddresses();
       } catch (err) { showError(err); }
     });

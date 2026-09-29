@@ -28,7 +28,7 @@
                             <div class="discount-area">
                                 <p class="disc">FREE delivery & 40% Discount for next 3 orders! Place your 1st order in.</p>
                                 <div class="countdown">
-                                    <div class="countDown">10/05/2025 10:20:00</div>
+                                    <div class="countDown">10/05/2025 10:30:00</div>
                                 </div>
                             </div>
                             <div class="contact-number-area">
@@ -41,6 +41,8 @@
                 </div>
             </div>
         </div>
+
+
         <div class="header-mid-one-wrapper">
             <div class="container">
                 <div class="row">
@@ -639,29 +641,62 @@
     <div class="section-seperator bg_light-1"><div class="container"><hr class="section-seperator"></div></div>
 <div class="rts-section-gap bg_light-1"><div class="container">
 
-      <div class="row">
-        <div class="col-lg-6">
-          <h3 class="title">Add an address</h3>
-          <div class="rts-billing-details-area"><form class="merch-address-form">
-            <div class="single-input"><label for="addr-name">Full name*</label><input id="addr-name" type="text" placeholder="Recipient name"></div>
-            <div class="single-input"><label for="addr-phone">Phone</label><input id="addr-phone" type="tel" placeholder="Mobile number"></div>
-            <div class="single-input"><label for="addr-street">Street address*</label><input id="addr-street" type="text" placeholder="House, street"></div>
-            <div class="single-input"><label for="addr-city">Town / City*</label><input id="addr-city" type="text" placeholder="City"></div>
-            <div class="single-input"><label for="addr-state">State*</label><input id="addr-state" type="text" placeholder="State"></div>
-            <div class="single-input"><label for="addr-zip">Postal code*</label><input id="addr-zip" type="text" placeholder="ZIP"></div>
-            <button type="submit" class="rts-btn btn-primary">Save address</button>
-          </form></div>
-        </div>
-        <div class="col-lg-6">
-          <h3 class="title">Saved addresses</h3>
-          <div class="address-list">
-            <div class="address-item">
-              <h6 class="address-name">&mdash;</h6>
-              <p class="address-body">&mdash;</p>
-              <a href="#" class="address-edit">Edit</a>
-              <a href="#" class="address-default">Make default</a>
-              <a href="#" class="address-delete">Remove</a>
+      <div class="row g-5">
+        <div class="col-lg-5">
+          <div class="address-form-box">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h3 class="title address-form-title mb-0" style="font-size: 20px; font-weight: 700; color: #1e293b;">Add an address</h3>
+              <button type="button" class="btn btn-sm btn-outline-secondary cancel-edit-btn" style="display: none; font-size: 12px; border-radius: 6px; padding: 4px 12px;">
+                <i class="fa-light fa-xmark"></i> Cancel Edit
+              </button>
             </div>
+            <p class="address-form-subtitle text-muted mb-4" style="font-size: 13px;">Save shipping or billing addresses for faster checkout.</p>
+            <form class="merch-address-form">
+              <div class="single-input"><label for="addr-name">Full name*</label><input id="addr-name" type="text" placeholder="Recipient name" required></div>
+              <div class="single-input"><label for="addr-phone">Phone</label><input id="addr-phone" type="tel" placeholder="Mobile number"></div>
+              <div class="single-input"><label for="addr-street">Street address*</label><input id="addr-street" type="text" placeholder="House number, street name" required></div>
+              <div class="row g-3">
+                <div class="col-md-6 single-input"><label for="addr-city">Town / City*</label><input id="addr-city" type="text" placeholder="City" required></div>
+                <div class="col-md-6 single-input"><label for="addr-state">State*</label><input id="addr-state" type="text" placeholder="State" required></div>
+              </div>
+              <div class="single-input"><label for="addr-zip">Postal code*</label><input id="addr-zip" type="text" placeholder="ZIP / PIN Code" required></div>
+              <button type="submit" class="rts-btn btn-primary w-100 address-submit-btn" style="padding: 12px; font-size: 15px; font-weight: 600; border-radius: 6px; text-align: center; justify-content: center; max-width: 100%;">Save address</button>
+            </form>
+          </div>
+        </div>
+        <div class="col-lg-7 saved-addresses-col">
+          <div class="mb-4">
+            <h3 class="title mb-1" style="font-size: 22px; font-weight: 700; color: #1e293b;">Saved addresses</h3>
+            <p class="text-muted mb-0" style="font-size: 13px;">Manage your delivery addresses and set your default location.</p>
+          </div>
+          <div class="address-list row g-3">
+            <div class="col-12 col-md-6 address-item">
+              <div class="address-card-wrap">
+                <div class="address-card-header">
+                  <div class="address-recipient">
+                    <div class="address-recipient-icon">
+                      <i class="fa-light fa-location-dot"></i>
+                    </div>
+                    <h5 class="address-name">&mdash;</h5>
+                  </div>
+                  <span class="badge-default-addr" style="display: none;"><i class="fa-solid fa-circle-check"></i> Default</span>
+                </div>
+                <div class="address-card-body">
+                  <p class="address-body">&mdash;</p>
+                  <p class="address-phone-line" style="display: none;"><i class="fa-light fa-phone"></i> <span class="phone-val"></span></p>
+                </div>
+                <div class="address-card-actions">
+                  <button type="button" class="addr-btn addr-btn-edit address-edit"><i class="fa-light fa-pen-to-square"></i> Edit</button>
+                  <button type="button" class="addr-btn addr-btn-default address-default"><i class="fa-light fa-star"></i> Set as Default</button>
+                  <button type="button" class="addr-btn addr-btn-delete address-delete"><i class="fa-light fa-trash-can"></i> Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="empty-state address-empty-card" style="display: none;">
+            <i class="fa-light fa-location-dot" style="font-size: 48px; color: #94a3b8; margin-bottom: 14px; display: inline-block;"></i>
+            <h4 style="font-size: 18px; color: #1e293b; margin-bottom: 6px; font-weight: 600;">No saved addresses yet</h4>
+            <p style="font-size: 14px; color: #64748b; margin-bottom: 0;">Add an address on the left to get started with faster checkout.</p>
           </div>
         </div>
       </div>

@@ -28858,4 +28858,276 @@ header.header-three .sub-dropdown .submenu.third-lvl.base {
   vertical-align: middle;
 }
 
+/* ==========================================================================
+   Saved Address Cards & Form Styling
+   ========================================================================== */
+.address-card-wrap {
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 22px;
+  position: relative;
+  transition: all 0.25s ease-in-out;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
+}
+
+.address-card-wrap:hover {
+  border-color: #629D23;
+  box-shadow: 0 8px 24px rgba(98, 157, 35, 0.12);
+  transform: translateY(-3px);
+}
+
+.address-card-wrap.is-default {
+  border-color: #629D23;
+  background: #fbfdf9;
+  box-shadow: 0 2px 8px rgba(98, 157, 35, 0.08);
+}
+
+.address-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.address-recipient {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.address-recipient-icon {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 8px;
+  background: rgba(98, 157, 35, 0.1);
+  color: #629D23;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+}
+
+.address-card-wrap .address-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge-default-addr {
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #c8e6c9;
+  white-space: nowrap;
+}
+
+.address-card-body {
+  flex-grow: 1;
+  margin-bottom: 16px;
+}
+
+.address-card-wrap .address-body {
+  color: #475569;
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+
+.address-phone-line {
+  color: #64748b;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-weight: 500;
+}
+
+.address-phone-line i {
+  color: #94a3b8;
+}
+
+.address-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.addr-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  text-decoration: none !important;
+  border: 1px solid transparent;
+  line-height: 1;
+}
+
+.addr-btn-edit {
+  background: #f0fdf4;
+  color: #166534;
+  border-color: #bbf7d0;
+}
+.addr-btn-edit:hover {
+  background: #629D23;
+  color: #ffffff !important;
+  border-color: #629D23;
+}
+
+.addr-btn-default {
+  background: #f8fafc;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+.addr-btn-default:hover {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+
+.addr-btn-delete {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fecaca;
+  margin-left: auto;
+}
+.addr-btn-delete:hover {
+  background: #dc2626;
+  color: #ffffff !important;
+  border-color: #dc2626;
+}
+
+/* Address Form Styling */
+.address-form-box {
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 26px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.address-form-box .single-input {
+  margin-bottom: 16px;
+}
+
+.address-form-box .single-input label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 6px;
+  display: block;
+}
+
+.address-form-box .single-input input,
+.address-form-box .single-input textarea {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  padding: 10px 14px;
+  font-size: 14px;
+  background: #ffffff;
+  transition: border-color 0.2s ease;
+}
+
+.address-form-box .single-input input:focus,
+.address-form-box .single-input textarea:focus {
+  border-color: #629D23;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(98, 157, 35, 0.15);
+}
+
+.address-empty-card {
+  padding: 45px 20px;
+  background: #ffffff;
+  border-radius: 12px;
+  border: 1.5px dashed #cbd5e1;
+  text-align: center;
+}
+
+/* ==========================================================================
+   Checkout Saved Address Selector Styling
+   ========================================================================== */
+.checkout-saved-addresses-area {
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.checkout-addr-card {
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 16px;
+  background: #ffffff;
+  transition: all 0.2s ease-in-out;
+  cursor: pointer;
+  position: relative;
+  height: 100%;
+}
+
+.checkout-addr-card:hover {
+  border-color: #629D23;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(98, 157, 35, 0.08);
+}
+
+.checkout-addr-card.is-selected {
+  border-color: #629D23 !important;
+  background: #fbfdf9 !important;
+  box-shadow: 0 4px 16px rgba(98, 157, 35, 0.15) !important;
+}
+
+.checkout-addr-card .addr-radio-custom {
+  width: 18px;
+  height: 18px;
+  accent-color: #629D23;
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.checkout-addr-card .badge-default {
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 20px;
+  border: 1px solid #c8e6c9;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /*# sourceMappingURL=../maps/style.css.map */
