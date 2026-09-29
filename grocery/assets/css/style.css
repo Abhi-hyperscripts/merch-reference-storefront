@@ -28720,4 +28720,142 @@ header.header-three .sub-dropdown .submenu.third-lvl.base {
   right: 0;
 }
 
+/* ==========================================================================
+   Account Header Dropdown Menu
+   ========================================================================== */
+.btn-border-only.account {
+  position: relative;
+  cursor: pointer;
+}
+
+.btn-border-only.account.category-hover-header:hover {
+  background: var(--color-primary) !important;
+  color: #fff !important;
+}
+
+.btn-border-only.account.category-hover-header:hover > i,
+.btn-border-only.account.category-hover-header:hover > span {
+  color: #fff !important;
+}
+
+.btn-border-only.account .category-sub-menu.account-dropdown-menu {
+  right: 0 !important;
+  left: auto !important;
+  top: 100% !important;
+  margin-top: 10px;
+  min-width: 210px;
+  padding: 8px 0;
+  border-radius: 8px;
+  background: #ffffff !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12) !important;
+  border: 1px solid #eaeaea;
+  z-index: 999 !important;
+}
+
+.btn-border-only.account .category-sub-menu.account-dropdown-menu::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  right: 25px;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-left: 1px solid #eaeaea;
+  border-top: 1px solid #eaeaea;
+  transform: rotate(45deg);
+  z-index: 1;
+}
+
+.btn-border-only.account .account-menu-header {
+  padding: 10px 18px 12px 18px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 6px;
+  text-align: left;
+}
+
+.btn-border-only.account .account-welcome-sub {
+  font-size: 11px;
+  color: #888888;
+  display: block;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  line-height: 1.2;
+}
+
+.btn-border-only.account .account-user-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f1f25;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 3px;
+}
+
+.btn-border-only.account .account-dropdown-menu .menu-item {
+  display: flex !important;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px !important;
+  font-size: 14px !important;
+  font-weight: 500;
+  color: #374151 !important;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  background: transparent !important;
+  border: none !important;
+  text-align: left;
+}
+
+.btn-border-only.account .account-dropdown-menu .menu-item i {
+  font-size: 15px;
+  width: 18px;
+  color: #6b7280 !important;
+  transition: color 0.2s ease;
+  text-align: center;
+}
+
+.btn-border-only.account .account-dropdown-menu .menu-item span {
+  color: #374151 !important;
+  transition: color 0.2s ease;
+}
+
+.btn-border-only.account .account-dropdown-menu .menu-item:hover {
+  background: #f8fafc !important;
+}
+
+.btn-border-only.account .account-dropdown-menu .menu-item:hover i,
+.btn-border-only.account .account-dropdown-menu .menu-item:hover span {
+  color: var(--color-primary) !important;
+}
+
+.btn-border-only.account .account-dropdown-menu .account-logout-btn {
+  border-top: 1px solid #f0f0f0 !important;
+  margin-top: 4px;
+}
+
+.btn-border-only.account .account-dropdown-menu .account-logout-btn i,
+.btn-border-only.account .account-dropdown-menu .account-logout-btn span {
+  color: #ef4444 !important;
+}
+
+.btn-border-only.account .account-dropdown-menu .account-logout-btn:hover {
+  background: #fef2f2 !important;
+}
+
+.btn-border-only.account .account-dropdown-menu .account-logout-btn:hover i,
+.btn-border-only.account .account-dropdown-menu .account-logout-btn:hover span {
+  color: #dc2626 !important;
+}
+
+.btn-border-only.account .account-btn-text {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+}
+
 /*# sourceMappingURL=../maps/style.css.map */

@@ -320,6 +320,8 @@ export const token = {
   set: (t) => { try { localStorage.setItem(TOKEN_KEY, t); } catch { /* ignore */ } },
   clear: () => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } },
 };
+let STORE_ME = null;
+let STORE_ADDRESS = null;
 
 function qs(obj) {
   if (!obj) return '';
@@ -2005,6 +2007,97 @@ function paintHeader() {
   pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
 
   paintMiniCart();
+  paintAccountHeader().catch(() => {});
+}
+
+async function paintAccountHeader() {
+  const accountBtns = $$('.btn-border-only.account');
+  const mobileAuthBottom = pick('.button-area-main-wrapper-menuy-sidebar .buton-area-bottom');
+
+  const t = token.get();
+  if (!t) {
+    accountBtns.forEach((btn) => {
+      const textEl = btn.querySelector('.account-btn-text');
+      if (textEl) textEl.textContent = 'Account';
+      const guestMenu = btn.querySelector('.account-guest-menu');
+      const userMenu = btn.querySelector('.account-user-menu');
+      if (guestMenu) guestMenu.style.display = 'block';
+      if (userMenu) userMenu.style.display = 'none';
+    });
+    if (mobileAuthBottom) {
+      mobileAuthBottom.innerHTML = '<a href="login.html" class="rts-btn btn-primary">Sign In</a><a href="register.html" class="rts-btn btn-secondary">Register</a>';
+    }
+    wireAccountBtnClick();
+    return;
+  }
+
+  // Signed in - update immediately from cache
+  let cachedName = null;
+  let cachedEmail = null;
+  try {
+    cachedName = localStorage.getItem('merch.shopper_name');
+    cachedEmail = localStorage.getItem('merch.shopper_email');
+  } catch {}
+
+  if (cachedName || cachedEmail) {
+    applyShopperHeader(cachedName || cachedEmail.split('@')[0], cachedEmail);
+  }
+
+  // Fresh load if not in memory
+  try {
+    const me = STORE_ME || await api.me();
+    STORE_ME = me;
+    const name = me?.name || (me?.email ? me.email.split('@')[0] : 'Account');
+    try {
+      localStorage.setItem('merch.shopper_name', name);
+      if (me?.email) localStorage.setItem('merch.shopper_email', me.email);
+    } catch {}
+    applyShopperHeader(name, me?.email);
+  } catch (e) {
+    if (e instanceof ApiError && e.isUnauthenticated) {
+      token.clear();
+      try {
+        localStorage.removeItem('merch.shopper_name');
+        localStorage.removeItem('merch.shopper_email');
+      } catch {}
+      paintAccountHeader();
+    }
+  }
+}
+
+function applyShopperHeader(name, email) {
+  const accountBtns = $$('.btn-border-only.account');
+  accountBtns.forEach((btn) => {
+    const textEl = btn.querySelector('.account-btn-text');
+    if (textEl) textEl.textContent = name;
+    const guestMenu = btn.querySelector('.account-guest-menu');
+    const userMenu = btn.querySelector('.account-user-menu');
+    if (guestMenu) guestMenu.style.display = 'none';
+    if (userMenu) {
+      userMenu.style.display = 'block';
+      const nameEl = userMenu.querySelector('.account-user-name');
+      if (nameEl) nameEl.textContent = name || email || 'User';
+    }
+  });
+
+  const mobileAuthBottom = pick('.button-area-main-wrapper-menuy-sidebar .buton-area-bottom');
+  if (mobileAuthBottom) {
+    mobileAuthBottom.innerHTML = '<a href="account.html" class="rts-btn btn-primary">My Account</a><a href="#" class="rts-btn btn-secondary account-logout-btn" data-signout>Logout</a>';
+  }
+
+  wireAccountBtnClick();
+  wireSignOut();
+}
+
+function wireAccountBtnClick() {
+  $$('.btn-border-only.account').forEach((btn) => {
+    if (btn.__wiredClick) return;
+    btn.__wiredClick = true;
+    btn.addEventListener('click', (e) => {
+      if (e.target.closest('.category-sub-menu')) return;
+      location.href = token.get() ? pageUrl('account') : pageUrl('login');
+    });
+  });
 }
 
 /* --- The shop's own identity -------------------------------------------------
@@ -4795,6 +4888,11 @@ function showSignedIn(me) {
   pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, me.name || me.email));
   pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, me.email));
   fillAccountDetails(me);
+  try {
+    if (me.name) localStorage.setItem('merch.shopper_name', me.name);
+    if (me.email) localStorage.setItem('merch.shopper_email', me.email);
+  } catch {}
+  paintAccountHeader().catch(() => {});
 }
 
 /* None of these themes ships a "you are signed in" element, so the classes
@@ -4963,14 +5061,20 @@ function wireSignOut() {
   /* Matched on href before, but these themes point Logout at `login.html` and
      only the WORDS say what it does. */
   const links = new Set([
-    ...$$('a[href*="logout"], a[href*="sign-out"], .sign-out, [data-signout]'),
+    ...$$('a[href*="logout"], a[href*="sign-out"], .sign-out, [data-signout], .account-logout-btn'),
     ...$$('a, button').filter((el) => /^(log ?out|sign ?out)$/i.test((el.textContent || '').trim())),
   ]);
   links.forEach((a) => {
+    if (a.__wiredSignOut) return;
+    a.__wiredSignOut = true;
     a.addEventListener('click', async (e) => {
       e.preventDefault();
       try { await api.signOutEverywhere(); } catch { /* the local token goes either way */ }
       token.clear();
+      try {
+        localStorage.removeItem('merch.shopper_name');
+        localStorage.removeItem('merch.shopper_email');
+      } catch {}
       location.href = pageUrl('home');
     });
   });
@@ -5050,6 +5154,13 @@ function wireLoginForm(form, email, password) {
     try {
       const res = await api.login(email.value.trim(), password.value);
       token.set(res.token);
+      const name = res?.shopper?.name || res?.user?.name || res?.name || email.value.trim().split('@')[0];
+      try {
+        localStorage.setItem('merch.shopper_name', name);
+        if (res?.shopper?.email || res?.user?.email || email.value.trim()) {
+          localStorage.setItem('merch.shopper_email', res?.shopper?.email || res?.user?.email || email.value.trim());
+        }
+      } catch {}
       await wishlist.sync();
       notify('Signed in.', 'success');
       location.href = param('next') || pageUrl('account');
@@ -5068,6 +5179,11 @@ function wireRegisterForm(form, email, password, nameEl) {
     try {
       const res = await api.register(email.value.trim(), password.value, nameEl?.value.trim() || '', phoneEl?.value.trim() || '');
       if (res?.token) token.set(res.token);
+      const name = nameEl?.value.trim() || res?.shopper?.name || email.value.trim().split('@')[0];
+      try {
+        localStorage.setItem('merch.shopper_name', name);
+        if (email.value.trim()) localStorage.setItem('merch.shopper_email', email.value.trim());
+      } catch {}
       notify('Welcome. Your account is ready.', 'success');
       location.href = pageUrl('account');
     } catch (err) { showError(err); }
@@ -5648,8 +5764,6 @@ function readSubscriber() {
     pincode: a.pincode || '',
   };
 }
-let STORE_ME = null;
-let STORE_ADDRESS = null;
 
 /* --- COLLECTIONS ---------------------------------------------------------- */
 pages.collections = async () => {
