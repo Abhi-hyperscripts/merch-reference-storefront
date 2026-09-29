@@ -82,7 +82,7 @@ export const USE_STORE_APPEARANCE = {
   usps: true,           // the "free delivery / 24-7 support" strip
   social: true,         // the social icons, and hiding the ones you do not use
   banners: true,        // the hero — the merchant's artwork, headline and button
-  writtenPages: true,   // Privacy, Terms, Refunds and Shipping
+  writtenPages: false,  // Privacy, Terms, Refunds and Shipping (keep designed HTML pages intact)
   aboutPage: false,     // About — OFF by default, see below
 };
 
