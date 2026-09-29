@@ -2849,6 +2849,8 @@ pages.home = async () => {
   let data = null;
   try { data = await api.homepage(); } catch (e) { warn('homepage', e); }
 
+  try { await paintBanners(data); } catch (e) { warn('paintBanners', e); }
+
   /* Look up the containers AFTER the fetch, never before it.
 
      A theme whose main.js runs at parse time (jewellery's does — there is no
@@ -2903,7 +2905,6 @@ pages.home = async () => {
     } catch (e) { warn(e); }
   }
 
-  paintBanners(data);
   await paintCategoryTiles(data);
   if (THEME?.name === 'electronic') {
     await paintElectronicHomeTabs();
@@ -2936,7 +2937,7 @@ function setSectionHeading(container, title) {
 
    Left alone, a hero is the loudest lie on the page: full-width demo artwork
    reading "Get up to 30% off on your first $150 purchase". */
-function paintBanners(data) {
+async function paintBanners(data) {
   /* The hero is the loudest thing on the page, so it follows the flag: with
      the template owning the look, its own artwork stays. */
   if (!useStore('banners')) return;
@@ -2956,6 +2957,135 @@ function paintBanners(data) {
     }];
   }
 
+  // Fallback: If still no banners configured, dynamically generate from catalog products
+  if (!banners.length) {
+    try {
+      const cat = await api.catalog({ pageSize: 3 });
+      const prods = Array.isArray(cat) ? cat : cat?.products || [];
+      if (prods.length) {
+        banners = prods.slice(0, 3).map((prod) => ({
+          title: prod.name,
+          subtitle: prod.category || 'FEATURED',
+          imageUrl: (prod.imageUrls || [])[0] || prod.image || '',
+          link: productHref(prod),
+          alt: prod.name,
+        }));
+      }
+    } catch (_) {}
+  }
+
+  if (THEME?.name === 'electronic') {
+    const swSlideshow = pick('.tf-sw-slideshow');
+    const container = pick('.tf-sw-slideshow .swiper-wrapper, .tf-slideshow .swiper-wrapper');
+    if (container && banners.length) {
+      const sample = pick('.swiper-slide', container);
+      if (sample) {
+        const template = sample.cloneNode(true);
+        container.replaceChildren();
+
+        banners.forEach((b) => {
+          const slide = template.cloneNode(true);
+          const imgUrl = mediaUrl(b.imageUrl || b.imageMobileUrl || b.image || '');
+
+          // Image
+          const img = pick('.wrap-slider > img, img', slide);
+          if (img && imgUrl) {
+            img.src = imgUrl;
+            img.setAttribute('data-src', imgUrl);
+            img.removeAttribute('srcset');
+            img.classList.remove('lazyload', 'lazyloading');
+            img.classList.add('lazyloaded');
+            if (b.alt || b.title) img.alt = b.alt || b.title;
+          }
+
+          // Text fields
+          const titleText = b.title || (b.alt && b.alt !== 'This is banner' ? b.alt : '');
+          const subText = b.subtitle || b.subtext || '';
+          const descText = b.description || b.desc || '';
+          const linkUrl = storeLink(b.link);
+
+          const titleEl = pick('.title-display, .heading', slide);
+          if (titleEl) {
+            if (titleText) {
+              setText(titleEl, titleText);
+              show(titleEl, true);
+            } else {
+              show(titleEl, false);
+            }
+          }
+
+          const subEl = pick('.subtitle', slide);
+          if (subEl) {
+            if (subText) {
+              setText(subEl, subText);
+              show(subEl, true);
+            } else {
+              show(subEl, false);
+            }
+          }
+
+          const descEl = pick('.subheading', slide);
+          if (descEl) {
+            if (descText) {
+              setText(descEl, descText);
+              show(descEl, true);
+            } else {
+              show(descEl, false);
+            }
+          }
+
+          const btnEl = pick('.box-btn-slider a', slide);
+          const btnBox = pick('.box-btn-slider', slide);
+          if (btnEl) {
+            if (b.link && linkUrl !== '#') {
+              btnEl.setAttribute('href', linkUrl);
+              if (btnBox) show(btnBox, true);
+            } else if (titleText) {
+              btnEl.setAttribute('href', pageUrl('listing'));
+              if (btnBox) show(btnBox, true);
+            } else {
+              if (btnBox) show(btnBox, false);
+            }
+          }
+
+          const boxContent = pick('.box-content', slide);
+          if (boxContent) {
+            if (!titleText && !subText && !descText && (!b.link || linkUrl === '#')) {
+              show(boxContent, false);
+            } else {
+              show(boxContent, true);
+            }
+          }
+
+          const wrap = pick('.wrap-slider', slide);
+          if (wrap && b.link && linkUrl !== '#') {
+            wrap.style.cursor = 'pointer';
+            wrap.onclick = (e) => {
+              if (e.target.closest('a')) return;
+              location.href = linkUrl;
+            };
+          }
+
+          container.appendChild(slide);
+        });
+
+        refreshSwipers();
+        if (swSlideshow?.swiper) {
+          try {
+            if (typeof swSlideshow.swiper.loopDestroy === 'function') {
+              swSlideshow.swiper.loopDestroy();
+              swSlideshow.swiper.update();
+              if (typeof swSlideshow.swiper.loopCreate === 'function') swSlideshow.swiper.loopCreate();
+            } else {
+              swSlideshow.swiper.update();
+            }
+          } catch (_) {}
+        }
+        return;
+      }
+    }
+  }
+
   const spec = THEME.banners;
   if (!spec) return;
   const t = takeTemplate(spec);
@@ -2967,6 +3097,7 @@ function paintBanners(data) {
     return;
   }
   repeat(t, banners, (node, b) => fillFields(node, spec.fields, b, { node }));
+  refreshSwipers();
 }
 
 /* "Browse categories" — { slug, name, count, imageUrl }. Every theme ships a
@@ -4144,6 +4275,7 @@ pages.product = async () => {
   await paintVariants(spec, p);
   paintProductUniques(p);
   paintProductTabs(p);
+  paintStickyAtcBar(p);
   await paintReviews(p);
   await paintRelated(p);
 
@@ -4153,8 +4285,127 @@ pages.product = async () => {
   api.recordView(p.id, sessionId()).catch(() => {});
   track('product_view', { itemId: p.id });
   THEME.reinit?.();
-  onThemeReady(() => paintPriceButtons(p));
+  onThemeReady(() => {
+    paintPriceButtons(p);
+    paintStickyAtcBar(p);
+  });
 };
+
+function paintStickyAtcBar(p) {
+  const bar = pick('.tf-sticky-btn-atc');
+  if (!bar || !p) return;
+
+  // 1. Product Image
+  const img = pick('.tf-sticky-atc-product .image img', bar);
+  if (img) {
+    const src = mediaUrl((p.imageUrls || [])[0] || p.image || '');
+    if (src) {
+      img.src = src;
+      img.setAttribute('data-src', src);
+      img.removeAttribute('srcset');
+      img.classList.remove('lazyload', 'lazyloading');
+      img.classList.add('lazyloaded');
+    }
+    img.alt = p.name || '';
+  }
+
+  // 2. Title & Meta & Price
+  const titleEl = pick('.tf-sticky-atc-title, .tf-sticky-atc-product .content .text-title:first-child', bar);
+  if (titleEl) setText(titleEl, p.name || '');
+
+  const metaEl = pick('.tf-sticky-atc-meta, .tf-sticky-atc-product .content .text-caption-1', bar);
+  if (metaEl) setText(metaEl, p.category || '');
+
+  const priceEl = pick('.tf-sticky-atc-price, .tf-sticky-atc-product .content .text-title:last-child', bar);
+  if (priceEl && priceEl !== titleEl) setText(priceEl, money(p.price));
+
+  // 3. Size dropdown / variants
+  const sizeBox = pick('.tf-sticky-atc-size', bar);
+  let selectedVariant = null;
+  const hasVariants = Array.isArray(p.variants) && p.variants.length > 1;
+
+  if (sizeBox) {
+    if (!hasVariants) {
+      show(sizeBox, false);
+      sizeBox.style.setProperty('display', 'none', 'important');
+    } else {
+      show(sizeBox, true);
+      sizeBox.style.display = '';
+      const valLabel = pick('.text-sort-value', sizeBox);
+      const menu = pick('.dropdown-menu', sizeBox);
+      if (menu) {
+        menu.replaceChildren();
+        p.variants.forEach((v, idx) => {
+          const item = document.createElement('div');
+          item.className = 'select-item' + (idx === 0 ? ' active' : '');
+          const label = v.title || v.name || ('Option ' + (idx + 1));
+          item.innerHTML = `<span class="text-value-item">${escapeHtml(label)}</span>`;
+          item.addEventListener('click', (e) => {
+            e.preventDefault();
+            selectedVariant = v;
+            if (valLabel) setText(valLabel, label);
+            pickAll('.select-item', menu).forEach((si) => si.classList.remove('active'));
+            item.classList.add('active');
+            if (v.price != null && priceEl && priceEl !== titleEl) setText(priceEl, money(v.price));
+            if (v.imageUrl && img) {
+              const vsrc = mediaUrl(v.imageUrl);
+              img.src = vsrc;
+              img.setAttribute('data-src', vsrc);
+            }
+          });
+          menu.appendChild(item);
+        });
+        if (p.variants[0]) {
+          selectedVariant = p.variants[0];
+          if (valLabel) setText(valLabel, p.variants[0].title || p.variants[0].name || '');
+        }
+      }
+    }
+  }
+
+  // 4. Quantity Stepper
+  const qtyInput = pick('.tf-sticky-atc-quantity input', bar);
+  if (qtyInput) {
+    if (!qtyInput.value || qtyInput.value === '0') qtyInput.value = '1';
+    const minusBtn = pick('.tf-sticky-atc-quantity .minus-btn', bar);
+    const plusBtn = pick('.tf-sticky-atc-quantity .plus-btn', bar);
+    if (minusBtn && !minusBtn._merchStickyQtyWired) {
+      minusBtn._merchStickyQtyWired = true;
+      minusBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const cur = Math.max(1, (parseInt(qtyInput.value, 10) || 1) - 1);
+        qtyInput.value = cur;
+      });
+    }
+    if (plusBtn && !plusBtn._merchStickyQtyWired) {
+      plusBtn._merchStickyQtyWired = true;
+      plusBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const cur = (parseInt(qtyInput.value, 10) || 1) + 1;
+        qtyInput.value = cur;
+      });
+    }
+  }
+
+  // 5. Add to Cart button
+  const addBtn = pick('.tf-sticky-atc-btns .btn-add-to-cart, .tf-sticky-atc-btns a', bar);
+  if (addBtn) {
+    addBtn.setAttribute('data-merch-action', 'add');
+    addBtn.setAttribute('data-merch-item', p.id || '');
+    addBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const qty = Math.max(1, parseInt(qtyInput?.value, 10) || 1);
+      const toAdd = selectedVariant ? { ...p, price: selectedVariant.price ?? p.price, variant: selectedVariant } : p;
+      cart.add(toAdd, qty);
+      openCartSidebar();
+      notify((p.name || 'Item') + ' added to your cart.', 'success');
+      track('add_to_cart', { itemId: p.id, qty });
+    };
+  }
+}
 
 function paintBreadcrumbs(p) {
   const wrapper = pick('.tf-breadcrumb-list, .navigator-breadcrumb-wrapper, .breadcrumbs');
@@ -4190,6 +4441,7 @@ function paintPriceButtons(p) {
     $$(sel).forEach((el) => buttons.add(el));
   }
   for (const btn of buttons) {
+    if (btn.closest('.tf-sticky-btn-atc')) continue;
     if (!/add to (cart|bag)/i.test(btn.textContent || '')) continue;
     setText(btn, 'Add to cart' + (p.availability === 'out' ? '' : ' - ' + money(p.price)));
     wireAction(btn, 'add', p, { node: document });
