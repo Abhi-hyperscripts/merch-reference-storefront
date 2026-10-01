@@ -637,14 +637,16 @@
                 updateTotalPrice(newPrice, productItem);
             });
 
-            productItem.find(".btn-increase").on("click", function () {
-                var currentQuantity = parseInt(quantityInput.val());
+            productItem.find(".btn-increase").off("click").on("click", function () {
+                if ($(this).closest(".tf-product-info-wrap").length) return;
+                var currentQuantity = parseInt(quantityInput.val()) || 1;
                 quantityInput.val(currentQuantity + 1);
                 updateTotalPrice(null, productItem);
             });
 
-            productItem.find(".btn-decrease").on("click", function () {
-                var currentQuantity = parseInt(quantityInput.val());
+            productItem.find(".btn-decrease").off("click").on("click", function () {
+                if ($(this).closest(".tf-product-info-wrap").length) return;
+                var currentQuantity = parseInt(quantityInput.val()) || 1;
                 if (currentQuantity > 1) {
                     quantityInput.val(currentQuantity - 1);
                     updateTotalPrice(null, productItem);
