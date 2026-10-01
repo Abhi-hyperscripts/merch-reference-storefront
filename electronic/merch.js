@@ -1443,7 +1443,7 @@ THEMES.electronic = {
   },
   categories: {
     container: '.tf-sw-categories .swiper-wrapper',
-    card: '.swiper-slide',
+    card: '.collection-circle',
     fields: {
       link:  { sel: 'a.img-style', attr: 'href', value: (c) => pageUrl('listing', { category: c?.name || c }) },
       image: {
@@ -1813,7 +1813,7 @@ function detectTheme() {
   if ($('.single-shopping-card-one, .rts-cart-list-area')) return THEMES.grocery;
   if ($('.product-item .product-thumb, .cart-calculator-wrapper')) return THEMES.jewellery;
   if ($('.card-product_wrapper, tr.tf-cart_item')) return THEMES.fashion;
-  if ($('.card-product-wrapper, tr.tf-cart-item')) return THEMES.electronic;
+  if ($('.slider-electronic, .card-product-wrapper, tr.tf-cart-item')) return THEMES.electronic;
   return null;
 }
 
@@ -3118,10 +3118,8 @@ async function paintCategoryTiles(data) {
   }
   const spec = THEME.categories;
   if (!spec || !cats.length) return;
-  /* A home page often carries the SAME strip twice (a compact one in the
-     header band and a full one below). Filling only the first leaves the
-     other insisting the shop sells Organic Vegetable. */
-  for (const el of productContainers(spec)) {
+  const targetContainers = spec.container ? pickAll(spec.container) : productContainers(spec);
+  for (const el of targetContainers) {
     const t = takeTemplate({ ...spec, el });
     if (!t) continue;
     /* Never more tiles than the strip was laid out for: these sit on one row,
