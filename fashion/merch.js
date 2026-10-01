@@ -524,9 +524,9 @@ export const cart = {
   localSubtotal: () => readCart().reduce((n, l) => n + (Number(l.price) || 0) * l.qty, 0),
   onChange: (fn) => { cartListeners.add(fn); return () => cartListeners.delete(fn); },
 
-  add(product, qty = 1) {
+  add(product, qty = 1, variantLabel = '') {
     const lines = readCart();
-    const found = lines.find((l) => l.itemId === product.id);
+    const found = lines.find((l) => l.itemId === product.id && (l.variantLabel || '') === variantLabel);
     if (found) found.qty = Math.min(99, found.qty + qty);
     else lines.push({
       itemId: product.id,
@@ -534,6 +534,7 @@ export const cart = {
       name: product.name,
       price: product.price,
       image: (product.imageUrls && product.imageUrls[0]) || '',
+      ...(variantLabel ? { variantLabel } : {}),
     });
     writeCart(lines);
   },
@@ -917,18 +918,28 @@ function wireAction(el, action, data, ctx) {
     case 'add':
       el.addEventListener('click', async (e) => {
         stop(e);
-        if (data.availability === 'out') return notify('That one is sold out.', 'error');
+        let item = data;
+        let variantLabel = '';
+        if (THEME?.name === 'fashion' && ctx.node === document && PDP_VARIANT_REQUIRED) {
+          if (!PDP_SELECTED_VARIANT) return notify('Please select a size first.', 'error');
+          item = PDP_SELECTED_VARIANT.product;
+          variantLabel = PDP_SELECTED_VARIANT.label;
+        }
+        if (item.availability === 'out') return notify('That one is sold out.', 'error');
         const qtyEl = ctx.qtyEl || (ctx.node && pick(THEME.qtyInput, ctx.node));
         const qty = Math.max(1, Math.floor(Number(qtyEl?.value) || 1));
-        cart.add(data, qty);
-        notify(data.name + ' added to your cart.', 'success');
-        track('add_to_cart', { itemId: data.id, qty });
+        cart.add(item, qty, variantLabel);
+        notify(item.name + ' added to your cart.', 'success');
+        track('add_to_cart', { itemId: item.id, qty });
       });
       break;
     case 'buy':
       el.addEventListener('click', (e) => {
         stop(e);
-        cart.add(data, 1);
+        if (THEME?.name === 'fashion' && ctx.node === document && PDP_VARIANT_REQUIRED) {
+          if (!PDP_SELECTED_VARIANT) return notify('Please select a size first.', 'error');
+          cart.add(PDP_SELECTED_VARIANT.product, 1, PDP_SELECTED_VARIANT.label);
+        } else cart.add(data, 1);
         location.href = pageUrl('checkout');
       });
       break;
@@ -1550,11 +1561,12 @@ THEMES.fashion = {
     },
   },
   categories: {
-    container: null,
+    container: '.swiper-wrapper:has(.category-v01)',
     card: 'a.category-v01',
     fields: {
       link:  { sel: 'a.category-v01', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
-      image: { sel: '.cate-image img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
+      image: { sel: '.cate-image img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || ''), hideWhen: (c) => !c.imageUrl },
+      imageShell: { sel: '.cate-image', dropWhen: (c) => !c.imageUrl },
       name:  { sel: '.cate-name', text: (c) => c.name },
     },
   },
@@ -1586,12 +1598,12 @@ THEMES.fashion = {
   product: {
     fields: {
       title:    { sel: '.product-infor-name', text: (p) => p.name },
-      category: { sel: '.product-infor-cate', text: (p) => p.category || '' },
-      desc:     { sel: '.product-infor-desc', text: (p) => p.description || '' },
+      category: { sel: '.product-infor-cate', text: (p) => p.category || '', dropWhen: (p) => !p.category },
+      desc:     { sel: '.product-infor-desc', text: (p) => p.description || '', dropWhen: (p) => !p.description },
       price:    { sel: '.product-infor-price .price-on-sale', text: priceText },
       mrp:      { sel: '.product-infor-price .text-decoration-line-through', text: mrpText, hideWhen: hasNoMrp },
       badge:    { sel: '.product-infor-price .badge-sale', text: discountText, hideWhen: hasNoMrp },
-      code:     { sel: '.meta_prd_code', text: (p) => p.unit ? 'Unit: ' + p.unit : '' },
+      code:     { sel: '.meta_prd_code', text: (p) => p.unit ? 'Unit: ' + p.unit : '', dropWhen: (p) => !p.unit },
       sold:     { sel: '.meta_sold', dropWhen: () => true },
       reality:  { sel: '.product-infor-reality', dropWhen: () => true },
       qty:      { sel: '.quantity-product', value: () => 1 },
@@ -1600,6 +1612,10 @@ THEMES.fashion = {
          shopper presses, and wiring only the second left the main one inert. */
       add:      { sel: '.btn-action-price', action: 'add' },
       addSticky:{ sel: '.btn-add-to-cart', action: 'add' },
+      stickyTitle: { sel: '.tf-sticky-atc-product .name__prd', text: (p) => p.name },
+      stickyPrice: { sel: '.tf-sticky-atc-product .price__prd', text: priceText },
+      stickyImage: { sel: '.tf-sticky-atc-product .prd_img img', attr: 'src', value: (p) => mediaUrl(p.imageUrls?.[0] || '') },
+      stickyVariant: { sel: '.tf-sticky-atc-product .distribute__prd', text: () => '' },
       buy:      { sel: 'a[href*="checkout"].tf-btn', action: 'buy' },
     },
     variants: { container: '.tf-product-variant', group: '.variant-picker-item' },
@@ -1627,7 +1643,6 @@ THEMES.fashion = {
       image:    { sel: '.img-prd img', attr: 'src', value: (l) => mediaUrl(l.image) },
       imageLink:{ sel: 'a.img-prd', attr: 'href', value: (l) => productHref({ id: l.itemId }) },
       title:    { sel: '.prd_name', text: (l) => l.name, attr: 'href', value: (l) => productHref({ id: l.itemId }) },
-      variants: { sel: '.prd_select', dropWhen: () => true, all: true },
       price:    { sel: '.cart_price', text: (l) => money(l.price) },
       qty:      { sel: '.quantity-product', value: (l) => l.qty },
       subtotal: { sel: '.cart_total', text: (l) => money(l.price * l.qty) },
@@ -1636,6 +1651,19 @@ THEMES.fashion = {
     totals: { subtotal: '.each-subtotal|.tf-totals-total-value', total: '.total-price|.tf-totals-total-value' },
     coupon: { input: 'input[placeholder*="iscount"]', button: '.ip-discount-code button' },
     checkoutBtn: 'a[href*="checkout"]',
+  },
+  checkout: {
+    ...THEMES.electronic.checkout,
+    summary: {
+      container: '.list-order-product',
+      card: '.order-item',
+      fields: {
+        image: { sel: '.img-prd img', attr: 'src', value: (l) => mediaUrl(l.image) },
+        imageLink: { sel: 'a.img-prd', attr: 'href', value: (l) => productHref({ id: l.itemId }) },
+        title: { sel: '.prd_name', text: (l) => l.name, attr: 'href', value: (l) => productHref({ id: l.itemId }) },
+        price: { sel: '.quantity-price', text: (l) => money(l.price * l.qty) },
+      },
+    },
   },
 };
 
@@ -1863,6 +1891,52 @@ function paintHeader() {
   pickAll(h.cartCount).forEach((el) => setText(el, count));
   pickAll(h.wishCount).forEach((el) => setText(el, wishlist.ids().length));
   pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
+}
+
+/* Keep the fashion offcanvas basket in step with the actual basket. Its HTML
+   ships with demo rows, including demo sizes and prices, so use one row only
+   as a visual template and rebuild the contents from local cart data. */
+function paintFashionMiniCart() {
+  if (THEME?.name !== 'fashion') return;
+  const host = pick('.popup-shopping-cart .tf-mini-cart-items');
+  if (!host) return;
+  const rows = pickAll('.tf-mini-cart-item', host);
+  if (!FASHION_MINI_CART_TEMPLATE && rows[0]) FASHION_MINI_CART_TEMPLATE = rows[0].cloneNode(true);
+  rows.forEach(remove);
+  const lines = cart.lines();
+  const empty = pick('.box-text_empty', host);
+  show(empty, !lines.length);
+  host.classList.toggle('list-empty', !lines.length);
+  if (lines.length && FASHION_MINI_CART_TEMPLATE) {
+    const frag = document.createDocumentFragment();
+    lines.forEach((line) => {
+      const row = FASHION_MINI_CART_TEMPLATE.cloneNode(true);
+      row.dataset.merchId = line.itemId;
+      const img = pick('.tf-mini-cart-image img', row);
+      if (line.image) {
+        setAttr(img, 'src', mediaUrl(line.image));
+        img?.removeAttribute('data-src');
+      } else remove(img);
+      const name = pick('.tf-mini-cart-info .name', row);
+      setText(name, line.name);
+      setAttr(name, 'href', productHref({ id: line.itemId }));
+      pickAll('.tf-prd-select', row).forEach(remove);
+      if (line.variantLabel) {
+        const variant = document.createElement('div');
+        variant.className = 'tf-prd-select text-caption-01';
+        setText(variant, line.variantLabel);
+        pick('.tf-mini-cart-info', row)?.appendChild(variant);
+      }
+      setText(pick('.tf-mini-cart-price .number', row), line.qty);
+      setText(pick('.tf-mini-card-price', row), money(line.price));
+      pick('.tf-mini-cart-price .remove', row)?.addEventListener('click', () => cart.remove(line.itemId));
+      frag.appendChild(row);
+    });
+    host.appendChild(frag);
+  }
+  pickAll('.popup-shopping-cart .tf-mini-cart-total .total-price').forEach((el) =>
+    setText(el, money(cart.localSubtotal())),
+  );
 }
 
 /* --- The shop's own identity -------------------------------------------------
@@ -2326,8 +2400,18 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
    swatch reading "Beige" and a size run of S/M/L/XL. The pictures come from
    the product; the pickers are the template's clothing demo and come off. */
 function paintQuickViewExtras(panel, p) {
+  const miniImage = pick('.product-mini-view .img-product', panel);
+  if (miniImage && p.imageUrls?.[0]) setAttr(miniImage, 'src', mediaUrl(p.imageUrls[0]));
+  setText(pick('.product-mini-view .prd-name', panel), p.name);
+  const miniPrice = pick('.product-mini-view .price-new', panel);
+  if (miniPrice) setText(miniPrice, money(p.price));
+  const miniMrp = pick('.product-mini-view .price-old', panel);
+  if (miniMrp) {
+    setText(miniMrp, p.mrp == null ? '' : money(p.mrp));
+    show(miniMrp, p.mrp != null);
+  }
   const imgs = (p.imageUrls || []).filter(Boolean);
-  const items = pickAll('.quickView-item|.tf-quick-view-image .item|.tf-quick-view-image .swiper-slide', panel);
+  const items = pickAll('.mini-quick-image .item-scroll-quickview|.quickView-item|.tf-quick-view-image .item|.tf-quick-view-image .swiper-slide', panel);
   if (items.length && imgs.length) {
     items.forEach((item, i) => {
       if (i >= imgs.length) { remove(item); return; }     // six slots, two photos
@@ -2340,10 +2424,90 @@ function paintQuickViewExtras(panel, p) {
       img.classList.remove('lazyload', 'lazyloading');
       img.classList.add('lazyloaded');
     });
-  }
-  /* Static swatches and sizes, hard-coded by the template. They describe a
-     dress, and nothing in the store backs them. */
+  } else if (!imgs.length) items.forEach(remove);
+  const quickAddButton = pick('.btn-action-price', panel);
+  if (quickAddButton) setText(quickAddButton, 'Add to cart');
+  /* The generic quick-view variant controls are separate from fashion's
+     quick pickers; remove them and paint the store's actual options below. */
   pickAll('.tf-product-info-choose-option|.tf-product-info-variant-picker', panel).forEach(remove);
+}
+
+async function paintQuickVariants(panel, p) {
+  let group = null;
+  try { group = await api.variants(p.id); } catch { /* remove demo controls below */ }
+  const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
+  pickAll('.quick-variant-picker, .tf-product-variant .variant-picker-item', panel).forEach(remove);
+  panel._merchSelectedVariant = null;
+  panel.dataset.merchSizeRequired = 'false';
+  if (!options.length) return;
+
+  const optionName = (o) => o.label || o.name || o.value || o.title || '';
+  const looksLikeSize = options.every((o) => /^(XXS|XS|S|M|L|XL|XXL|XXXL|EXTRA SMALL|SMALL|MEDIUM|LARGE|EXTRA LARGE|\d{1,2}(?:\.\d+)?(?:\s?(?:US|UK|EU))?)$/i.test(String(optionName(o)).trim()));
+  const rawTitle = String(group?.title || options[0]?.groupTitle || options[0]?.optionType || '');
+  const title = !rawTitle || /^(options?|variants?)$/i.test(rawTitle) ? (looksLikeSize ? 'Size' : rawTitle || 'Options') : rawTitle;
+  const isSize = /size/i.test(title) || (!/colou?r/i.test(title) && looksLikeSize);
+  const isColor = /colou?r/i.test(title);
+  panel.dataset.merchSizeRequired = isSize ? 'true' : 'false';
+  const type = isSize ? 'Size' : isColor ? 'Color' : title;
+  const target = document.createElement('div');
+  target.className = 'quick-variant-picker picker_' + (isColor ? 'color' : 'size');
+  const label = document.createElement('div');
+  label.className = 'variant-picker_label mb-12';
+  const titleBox = document.createElement('div');
+  titleBox.append(document.createTextNode(type + ': '));
+  const valueLabel = document.createElement('span');
+  valueLabel.className = 'variant__value text-capitalize fw-medium';
+  valueLabel.textContent = 'Select ' + type.toLowerCase();
+  titleBox.appendChild(valueLabel);
+  label.appendChild(titleBox);
+  target.appendChild(label);
+  const values = document.createElement('div');
+  values.className = 'variant-picker_values';
+  target.appendChild(values);
+  const nodes = [];
+  options.forEach((option) => {
+    const node = document.createElement(isColor ? 'div' : 'span');
+    node.className = isColor ? 'hover-tooltip tooltip-bot color_btn style-image' : 'size_btn';
+    node.dataset.variantId = String(option.id);
+    if (isSize) node.dataset.quickSize = optionName(option);
+    if (isColor) {
+      const swatch = document.createElement('span');
+      swatch.className = 'img';
+      const color = option.color || option.colorCode || option.hex || '';
+      if (color && window.CSS?.supports?.('color', color)) swatch.style.backgroundColor = color;
+      else if (window.CSS?.supports?.('color', optionName(option))) swatch.style.backgroundColor = optionName(option);
+      node.appendChild(swatch);
+      const tooltip = document.createElement('span');
+      tooltip.className = 'tooltip color__label';
+      tooltip.textContent = optionName(option);
+      node.appendChild(tooltip);
+    } else node.textContent = optionName(option);
+    if (option.availability === 'out') node.classList.add('disabled');
+    values.appendChild(node);
+    nodes.push(node);
+  });
+  target.dataset.merchVariantGroup = title;
+  const host = pick('.tf-product-variant', panel) || pick('.tf-product-quick_add, .tf-product-quick_view', panel) || panel;
+  const quantity = pick('.tf-product-total-quantity, .product-total-quantity', host);
+  if (quantity) host.insertBefore(target, quantity);
+  else host.appendChild(target);
+
+  const select = async (option) => {
+    if (option.availability === 'out') return notify('That option is sold out.', 'error');
+    try {
+      const product = await api.product(option.id);
+      const label = (isSize ? 'Size' : isColor ? 'Color' : title) + ': ' + optionName(option);
+      panel._merchSelectedVariant = { product, label };
+      setText(pick('.product-infor-name|.prd-name', panel), product.name);
+      paintQuickViewExtras(panel, product);
+      if (valueLabel) setText(valueLabel, optionName(option));
+      nodes.forEach((node) => node.classList.toggle('active', node.dataset.variantId === String(option.id)));
+      const price = money(product.price);
+      const newPrice = pick('.price-on-sale|.price-new', panel);
+      if (newPrice) setText(newPrice, price);
+    } catch (err) { showError(err); }
+  };
+  options.forEach((option, i) => nodes[i].addEventListener('click', (e) => { e.preventDefault(); select(option); }));
 }
 
 let quickViewProduct = null;
@@ -2384,21 +2548,27 @@ function wireQuickView() {
         fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
         paintGalleryIn(panel, THEME.product?.gallery, p);
         paintQuickViewExtras(panel, p);
+        await paintQuickVariants(panel, p);
       }
     } catch (err) { showError(err); }
   }, true);                                 // capture, so we fill BEFORE the theme opens it
 
   /* One handler for the panels' own buttons, reading whatever is showing. */
   for (const modal of panels) modal.addEventListener('click', (e) => {
-    const add = e.target.closest('.btn-add-to-cart, .btn-action-price, .btn-cart2, .btn-cart, .rts-btn.btn-primary, .tf-btn');
+    const add = e.target.closest(THEME?.name === 'fashion'
+      ? '.btn-add-to-cart, .btn-action-price'
+      : '.btn-add-to-cart, .btn-action-price, .btn-cart2, .btn-cart, .rts-btn.btn-primary, .tf-btn');
     if (!add || !quickViewProduct) return;
     if (/wish/i.test(add.className)) return;
     e.preventDefault();
+    const selected = modal._merchSelectedVariant;
+    if (modal.dataset.merchSizeRequired === 'true' && !selected) return notify('Please select a size first.', 'error');
+    const item = selected?.product || quickViewProduct;
+    if (item.availability === 'out') return notify('That option is sold out.', 'error');
     const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
-    if (quickViewProduct.availability === 'out') return notify('That one is sold out.', 'error');
-    cart.add(quickViewProduct, qty);
-    notify(quickViewProduct.name + ' added to your cart.', 'success');
-    track('add_to_cart', { itemId: quickViewProduct.id, qty, via: 'quickview' });
+    cart.add(item, qty, selected?.label || '');
+    notify(item.name + ' added to your cart.', 'success');
+    track('add_to_cart', { itemId: item.id, qty, via: 'quickview' });
   });
 }
 
@@ -2468,7 +2638,7 @@ pages.home = async () => {
   }
 
   paintBanners(data);
-  paintCategoryTiles(data);
+  await paintCategoryTiles(data);
   await renderRecentlyViewed(rails[rails.length - 1]);
   wireQuickView();
 };
@@ -2531,16 +2701,30 @@ function paintBanners(data) {
 
 /* "Browse categories" — { slug, name, count, imageUrl }. Every theme ships a
    strip of these pointing at demo pages; each one becomes a real filter. */
-function paintCategoryTiles(data) {
-  const cats = (data?.sections || [])
+async function paintCategoryTiles(data) {
+  let cats = (data?.sections || [])
     .filter((x) => x.type === 'browseCategories')
     .flatMap((x) => x.categories || []);
   const spec = THEME.categories;
-  if (!spec || !cats.length) return;
+  if (!spec) return;
+  if (!cats.length) {
+    try {
+      const response = await api.categories();
+      cats = (Array.isArray(response) ? response : response?.categories || []).map((c) =>
+        typeof c === 'string' ? { name: c } : c,
+      );
+    } catch { /* hide the demo category tiles if the store cannot answer */ }
+  }
+  const containers = productContainers(spec);
+  if (!cats.length) {
+    containers.forEach((el) => show(el.closest('section') || el, false));
+    return;
+  }
   /* A home page often carries the SAME strip twice (a compact one in the
      header band and a full one below). Filling only the first leaves the
      other insisting the shop sells Organic Vegetable. */
-  for (const el of productContainers(spec)) {
+  for (const el of containers) {
+    show(el.closest('section') || el, true);
     const t = takeTemplate({ ...spec, el });
     if (!t) continue;
     /* Never more tiles than the strip was laid out for: these sit on one row,
@@ -2834,7 +3018,7 @@ function paintPriceButtons(p) {
   }
   for (const btn of buttons) {
     if (!/add to (cart|bag)/i.test(btn.textContent || '')) continue;
-    setText(btn, 'Add to cart' + (p.availability === 'out' ? '' : ' - ' + money(p.price)));
+    setText(btn, 'Add to cart');
     wireAction(btn, 'add', p, { node: document });
   }
 }
@@ -2884,67 +3068,107 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
 
 /* Variants. Where a theme has a picker we relabel its options; where it has
    none we leave the page alone and the add button sends the base item. */
-/* Variants are not option combinations to be assembled: the store answers
-   { groupId, title, options: [{ id, name, label, price, availability, current }] }
-   and every option IS a product in its own right. Choosing one is therefore a
-   navigation, not a state change — which is also why the price never has to be
-   recomputed here. */
+/* Variant options are returned as products. A selected size/color therefore
+   supplies the product id and price used by both cart views. */
+let PDP_VARIANT_REQUIRED = false;
+let PDP_SELECTED_VARIANT = null;
+let FASHION_MINI_CART_TEMPLATE = null;
+
 async function paintVariants(spec, p) {
   if (!spec.variants) return;
+  PDP_VARIANT_REQUIRED = false;
+  PDP_SELECTED_VARIANT = null;
+  remove(pick('.tf-sticky-atc-variant-price'));
   /* `variantCount` stays 0 even for a product that IS in one of the store's
      own variant groups — the catalogue projection does not carry them — so
      gating on it meant the selector never appeared for any product. The
      endpoint answers 200 with an empty list when there is no group, so the
      honest thing is to ask, once, on the product page. */
   let group = null;
-  try { group = await api.variants(p.id); } catch { return; }
-  const options = group?.options || [];
-  if (options.length < 2) return;
-
+  try { group = await api.variants(p.id); } catch { group = null; }
+  const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
   const container = pick(spec.variants.container);
   if (!container) return;
-  const picker = pickAll(spec.variants.group, container)[0];
-  if (!picker) return;
-  /* Hide the theme's other pickers: it ships one per option type (colour,
-     size) and this store has exactly one axis. */
-  pickAll(spec.variants.group, container).slice(1).forEach((el) => show(el, false));
-
-  setText(pick('.variant-picker-label|.option-title|h6', picker), (group.title || 'Options') + ':');
-  const values = pick('.variant-picker-values|select|ul', picker);
+  const optionName = (o) => o.label || o.name || o.value || o.title || '';
+  const looksLikeSize = options.length > 0 && options.every((o) =>
+    /^(XXS|XS|S|M|L|XL|XXL|XXXL|EXTRA SMALL|SMALL|MEDIUM|LARGE|EXTRA LARGE|\d{1,2}(?:\.\d+)?(?:\s?(?:US|UK|EU))?)$/i.test(String(optionName(o)).trim()),
+  );
+  const rawTitle = String(group?.title || options[0]?.groupTitle || options[0]?.optionType || '');
+  const title = !rawTitle || /^(options?|variants?)$/i.test(rawTitle) ? (looksLikeSize ? 'Size' : rawTitle || 'Options') : rawTitle;
+  const isSize = /size/i.test(title) || (!/colou?r/i.test(title) && looksLikeSize);
+  const groups = pickAll(spec.variants.group, container);
+  const sample = groups.find((el) => el.classList.contains(isSize ? 'variant-size' : 'variant-color')) || groups[0];
+  /* Remove all template color/size choices first; only store options may be
+     shown. An empty response means this product has no selectable variants. */
+  pickAll(spec.variants.group, container).forEach(remove);
+  if (!options.length) { remove(container); return; }
+  PDP_VARIANT_REQUIRED = isSize;
+  PDP_SELECTED_VARIANT = null;
+  if (!sample) return;
+  const target = sample.cloneNode(true);
+  const label = pick('.variant-picker-label|.option-title|h6', target);
+  const values = pick('.variant-picker-values|select|ul', target);
   if (!values) return;
-
-  if (values.tagName === 'SELECT') {
-    values.replaceChildren(...options.map((o) => {
-      const el = document.createElement('option');
-      el.value = o.id; el.textContent = o.label || o.name;
-      el.selected = !!o.current;
-      return el;
-    }));
-    values.addEventListener('change', () => { location.href = productHref({ id: values.value }); });
-    return;
+  const titleText = label?.querySelector('.variant-picker-label-value');
+  if (label) {
+    [...label.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).forEach((n) => { n.textContent = ''; });
+    if (titleText) setText(titleText, '');
+    else setText(label, title + ':');
   }
-
-  /* Clone the theme's own swatch — input + label, or whatever single node it
-     uses — once per option. */
-  const unit = [...values.children].slice(0, values.firstElementChild?.tagName === 'INPUT' ? 2 : 1);
-  if (!unit.length) return;
-  values.replaceChildren();
-  options.forEach((o, i) => {
-    const id = 'merch-variant-' + i;
-    for (const proto of unit) {
-      const node = proto.cloneNode(true);
-      if (node.tagName === 'INPUT') { node.id = id; node.value = o.id; node.name = 'merch-variant'; node.checked = !!o.current; }
-      else {
-        if (node.tagName === 'LABEL') node.setAttribute('for', id);
-        node.dataset.value = o.label || o.name;
-        const t = pick('.text-title|.tooltip|span', node);
-        setText(t || node, o.label || o.name);
-        if (o.availability === 'out') node.classList.add('disabled');
-      }
-      node.addEventListener('click', () => { if (!o.current) location.href = productHref({ id: o.id }); });
+  const cleanTitle = title.replace(/s$/i, '');
+  target.className = 'variant-picker-item variant-' + (isSize ? 'size' : /colou?r/i.test(title) ? 'color' : 'option');
+  const titleContainer = label?.querySelector('div');
+  if (titleContainer) titleContainer.insertBefore(document.createTextNode(cleanTitle + ': '), titleText || null);
+  const currentLabel = titleText || label?.querySelector('span');
+  if (currentLabel) setText(currentLabel, 'Select ' + cleanTitle.toLowerCase());
+  const guide = label?.querySelector('a');
+  if (guide) remove(guide);
+  container.appendChild(target);
+  const nodes = [];
+  if (values.tagName === 'SELECT') {
+    values.replaceChildren(new Option('Select ' + cleanTitle.toLowerCase(), ''));
+    options.forEach((o) => values.add(new Option(optionName(o), o.id)));
+  } else {
+    const proto = values.firstElementChild;
+    values.replaceChildren();
+    options.forEach((o, i) => {
+      const node = proto ? proto.cloneNode(true) : document.createElement('button');
+      node.removeAttribute('data-price');
+      node.removeAttribute('data-color');
+      node.classList.remove('active', 'disabled');
+      node.dataset.variantId = o.id;
+      remove(node.querySelector('.img'));
+      setText(node.querySelector('.tooltip') || node, optionName(o));
+      if (o.availability === 'out') node.classList.add('disabled');
       values.appendChild(node);
-    }
-  });
+      nodes.push(node);
+    });
+  }
+  const selectOption = async (option) => {
+    if (option.availability === 'out') return notify('That option is sold out.', 'error');
+    try {
+      const product = await api.product(option.id);
+      PDP_SELECTED_VARIANT = { product, label: cleanTitle + ': ' + optionName(option) };
+      if (currentLabel) setText(currentLabel, optionName(option));
+      nodes.forEach((n) => n.classList.toggle('active', n.dataset.variantId === String(option.id)));
+      $$('.btn-action-price, .btn-add-to-cart').forEach((btn) => setText(btn, 'Add to cart'));
+      const detailPrice = pick('.product-infor-price .price-on-sale');
+      if (detailPrice) setText(detailPrice, money(product.price));
+      const stickyVariant = pick('.tf-sticky-atc-product .distribute__prd');
+      if (stickyVariant) setText(stickyVariant, PDP_SELECTED_VARIANT.label);
+      const stickyPrice = pick('.tf-sticky-atc-product .price__prd');
+      if (stickyPrice) setText(stickyPrice, money(product.price));
+    } catch (e) { showError(e); }
+  };
+  if (values.tagName === 'SELECT') {
+    values.addEventListener('change', () => {
+      const option = options.find((o) => o.id === values.value);
+      if (option) selectOption(option);
+    });
+  } else options.forEach((option, i) => nodes[i].addEventListener('click', (e) => {
+    e.preventDefault(); selectOption(option);
+  }));
+  return;
 }
 
 async function paintReviews(p) {
@@ -3045,6 +3269,12 @@ pages.cart = async () => {
     repeat(t, current, (node, l) => {
       node.dataset.merchId = l.itemId;
       fillFields(node, spec.fields, l, { node, rerender: draw });
+      if (THEME?.name === 'fashion') {
+        const variantRows = pickAll('.prd_select', node);
+        if (l.variantLabel && variantRows[0]) setText(variantRows[0], l.variantLabel);
+        else if (!l.variantLabel) variantRows.forEach(remove);
+        variantRows.slice(1).forEach(remove);
+      }
     });
     wireQuantityWidgets(t.container, draw);
     paintCartTotals(spec, current);
@@ -3435,7 +3665,15 @@ pages.checkout = async () => {
 function paintCheckoutSummary(spec, lines) {
   const s = spec.summary;
   const t = takeTemplate(s);
-  if (t) repeat(t, lines, (node, l) => fillFields(node, s.fields, l, { node }));
+  if (t) repeat(t, lines, (node, l) => {
+    fillFields(node, s.fields, l, { node });
+    if (THEME?.name === 'fashion') {
+      const metaRows = pickAll('.infor-prd .text-caption-01', node);
+      const label = l.variantLabel || (l.qty > 1 ? 'Qty ' + l.qty : '');
+      if (label && metaRows[0]) setText(metaRows[0], label);
+      metaRows.slice(label ? 1 : 0).forEach(remove);
+    }
+  });
 
   const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
   const p = pending.get();
@@ -5000,6 +5238,9 @@ async function boot() {
     return;
   }
   PAGE = detectRole();
+  if (THEME.name === 'fashion') {
+    $$('.tf-minicart-recommendations, .tf-cart-notification').forEach(remove);
+  }
   log('theme=' + THEME.name, 'page=' + PAGE);
 
   /* The currency has to be right before anything is priced, so this one call
@@ -5026,7 +5267,8 @@ async function boot() {
   }
 
   paintHeader();
-  cart.onChange(paintHeader);
+  cart.onChange(() => { paintHeader(); paintFashionMiniCart(); });
+  paintFashionMiniCart();
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
   try { paintUsps(STORE); } catch (e) { warn('usps', e); }
