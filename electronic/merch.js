@@ -4292,7 +4292,7 @@ pages.product = async () => {
   });
 };
 
-function paintStickyAtcBar(p) {
+async function paintStickyAtcBar(p) {
   const bar = pick('.tf-sticky-btn-atc');
   if (!bar || !p) return;
 
@@ -4323,7 +4323,18 @@ function paintStickyAtcBar(p) {
   // 3. Size dropdown / variants
   const sizeBox = pick('.tf-sticky-atc-size', bar);
   let selectedVariant = null;
-  const hasVariants = Array.isArray(p.variants) && p.variants.length > 1;
+  /* ⭐ The options come from /api/products/{id}/variants — they are NOT on the product. This gated on
+     `p.variants`, a field the catalogue has never returned, so `hasVariants` was false for every
+     product and the sticky bar's size dropdown was hidden on the whole catalogue. The main product
+     painter had been calling the endpoint all along; this one simply never did. */
+  let variants = Array.isArray(p.variants) ? p.variants : [];
+  if (!variants.length) {
+    try {
+      const group = await api.variants(p.id);
+      variants = group?.options || [];
+    } catch { variants = []; }
+  }
+  const hasVariants = variants.length > 1;
 
   if (sizeBox) {
     if (!hasVariants) {
@@ -4336,10 +4347,10 @@ function paintStickyAtcBar(p) {
       const menu = pick('.dropdown-menu', sizeBox);
       if (menu) {
         menu.replaceChildren();
-        p.variants.forEach((v, idx) => {
+        variants.forEach((v, idx) => {
           const item = document.createElement('div');
           item.className = 'select-item' + (idx === 0 ? ' active' : '');
-          const label = v.title || v.name || ('Option ' + (idx + 1));
+          const label = v.label || v.title || v.name || ('Option ' + (idx + 1));
           item.innerHTML = `<span class="text-value-item">${escapeHtml(label)}</span>`;
           item.addEventListener('click', (e) => {
             e.preventDefault();
@@ -4357,10 +4368,11 @@ function paintStickyAtcBar(p) {
           });
           menu.appendChild(item);
         });
-        if (p.variants[0]) {
-          selectedVariant = p.variants[0];
-          p._selectedVariant = p.variants[0];
-          if (valLabel) setText(valLabel, p.variants[0].title || p.variants[0].name || '');
+        const cur = variants.find((v) => v.current) || variants[0];
+        if (cur) {
+          selectedVariant = cur;
+          p._selectedVariant = cur;
+          if (valLabel) setText(valLabel, cur.label || cur.title || cur.name || '');
         }
       }
     }
