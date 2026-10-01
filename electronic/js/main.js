@@ -69,7 +69,7 @@
     var btnQuantity = function () {
         $(".minus-btn").off("click").on("click", function (e) {
             e.preventDefault();
-            if ($(this).closest(".tf-sticky-atc-quantity").length) return;
+            if ($(this).closest(".tf-sticky-atc-quantity, .tf-product-info-quantity, .tf-product-info-wrap").length) return;
             var $this = $(this);
             var $input = $this.closest("div").find("input");
             var value = parseInt($input.val()) || 1;
@@ -82,7 +82,7 @@
 
         $(".plus-btn").off("click").on("click", function (e) {
             e.preventDefault();
-            if ($(this).closest(".tf-sticky-atc-quantity").length) return;
+            if ($(this).closest(".tf-sticky-atc-quantity, .tf-product-info-quantity, .tf-product-info-wrap").length) return;
             var $this = $(this);
             var $input = $this.closest("div").find("input");
             var value = parseInt($input.val()) || 1;
@@ -614,6 +614,7 @@
     var totalPriceVariant = function () {
         $(".tf-product-info-list").each(function () {
             var productItem = $(this);
+            if (productItem.closest(".tf-product-info-wrap").length) return;
             var basePrice =
                 parseFloat(
                     productItem.find(".price-on-sale").data("base-price")

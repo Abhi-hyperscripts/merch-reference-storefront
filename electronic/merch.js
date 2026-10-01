@@ -4377,19 +4377,19 @@ function wireProductDetailCartFlow(p) {
   const stickyQtyBox = bar ? pick('.tf-sticky-atc-quantity', bar) : null;
 
   // Quantity inputs and buttons
-  let mainQtyInput = pick('.tf-product-info-quantity .quantity-product, .tf-product-info-quantity input', wrap);
-  let mainMinus = pick('.tf-product-info-quantity .btn-decrease', wrap);
-  let mainPlus = pick('.tf-product-info-quantity .btn-increase', wrap);
-  let stickyQtyInput = bar ? pick('.tf-sticky-atc-quantity input', bar) : null;
-  let stickyMinus = bar ? pick('.tf-sticky-atc-quantity .minus-btn', bar) : null;
-  let stickyPlus = bar ? pick('.tf-sticky-atc-quantity .plus-btn', bar) : null;
+  const mainQtyInput = pick('.tf-product-info-quantity .quantity-product, .tf-product-info-quantity input', wrap);
+  const mainMinus = pick('.tf-product-info-quantity .btn-decrease, .tf-product-info-quantity .minus-btn, .tf-product-info-quantity .btn-quantity:first-child', wrap);
+  const mainPlus = pick('.tf-product-info-quantity .btn-increase, .tf-product-info-quantity .plus-btn, .tf-product-info-quantity .btn-quantity:last-child', wrap);
+  const stickyQtyInput = bar ? pick('.tf-sticky-atc-quantity input', bar) : null;
+  const stickyMinus = bar ? pick('.tf-sticky-atc-quantity .minus-btn, .tf-sticky-atc-quantity .btn-decrease, .tf-sticky-atc-quantity .btn-quantity:first-child', bar) : null;
+  const stickyPlus = bar ? pick('.tf-sticky-atc-quantity .plus-btn, .tf-sticky-atc-quantity .btn-increase, .tf-sticky-atc-quantity .btn-quantity:last-child', bar) : null;
 
   // Main action buttons
-  let mainBtn = pick('.tf-product-info-by-btn .btn-add-to-cart, .tf-product-info-by-btn .btn-style-2, .tf-product-info-by-btn a', wrap);
-  let secondaryBuyBtn = pick('.btn-style-3', wrap.parentElement || wrap || document);
+  const mainBtn = pick('.tf-product-info-by-btn .btn-add-to-cart, .tf-product-info-by-btn .btn-style-2', wrap);
+  const secondaryBuyBtn = pick('.tf-product-info-by-btn .btn-buy-now, .tf-product-info-by-btn .btn-style-3, .btn-buy-now', wrap);
 
   // Sticky action buttons
-  let stickyAddBtn = bar ? pick('.tf-sticky-atc-btns .btn-add-to-cart', bar) : null;
+  const stickyAddBtn = bar ? pick('.tf-sticky-atc-btns .btn-add-to-cart', bar) : null;
   let stickyBuyBtn = bar ? pick('.tf-sticky-atc-btns .btn-sticky-buy', bar) : null;
 
   // If stickyBuyBtn does not exist yet, create it dynamically
@@ -4405,56 +4405,6 @@ function wireProductDetailCartFlow(p) {
     }
   }
 
-  // Clone buttons and stepper spans once to strip any pre-existing listeners
-  if (mainBtn && !mainBtn._merchPdpReplaced) {
-    const clone = mainBtn.cloneNode(true);
-    clone._merchPdpReplaced = true;
-    mainBtn.parentNode.replaceChild(clone, mainBtn);
-    mainBtn = clone;
-  }
-  if (secondaryBuyBtn && !secondaryBuyBtn._merchPdpReplaced) {
-    const clone = secondaryBuyBtn.cloneNode(true);
-    clone._merchPdpReplaced = true;
-    secondaryBuyBtn.parentNode.replaceChild(clone, secondaryBuyBtn);
-    secondaryBuyBtn = clone;
-  }
-  if (stickyAddBtn && !stickyAddBtn._merchPdpReplaced) {
-    const clone = stickyAddBtn.cloneNode(true);
-    clone._merchPdpReplaced = true;
-    stickyAddBtn.parentNode.replaceChild(clone, stickyAddBtn);
-    stickyAddBtn = clone;
-  }
-  if (stickyBuyBtn && !stickyBuyBtn._merchPdpReplaced) {
-    const clone = stickyBuyBtn.cloneNode(true);
-    clone._merchPdpReplaced = true;
-    stickyBuyBtn.parentNode.replaceChild(clone, stickyBuyBtn);
-    stickyBuyBtn = clone;
-  }
-  if (mainPlus && !mainPlus._merchPdpReplaced) {
-    const clone = mainPlus.cloneNode(true);
-    clone._merchPdpReplaced = true;
-    mainPlus.parentNode.replaceChild(clone, mainPlus);
-    mainPlus = clone;
-  }
-  if (mainMinus && !mainMinus._merchPdpReplaced) {
-    const clone = mainMinus.cloneNode(true);
-    clone._merchPdpReplaced = true;
-    mainMinus.parentNode.replaceChild(clone, mainMinus);
-    mainMinus = clone;
-  }
-  if (stickyPlus && !stickyPlus._merchPdpReplaced) {
-    const clone = stickyPlus.cloneNode(true);
-    clone._merchPdpReplaced = true;
-    stickyPlus.parentNode.replaceChild(clone, stickyPlus);
-    stickyPlus = clone;
-  }
-  if (stickyMinus && !stickyMinus._merchPdpReplaced) {
-    const clone = stickyMinus.cloneNode(true);
-    clone._merchPdpReplaced = true;
-    stickyMinus.parentNode.replaceChild(clone, stickyMinus);
-    stickyMinus = clone;
-  }
-
   // Remove Bootstrap modal triggers to prevent unexpected popups
   [mainBtn, secondaryBuyBtn, stickyAddBtn, stickyBuyBtn].forEach((btn) => {
     if (btn) {
@@ -4463,14 +4413,35 @@ function wireProductDetailCartFlow(p) {
     }
   });
 
+  // Detach jQuery click handlers if present
   if (window.$) {
-    if (mainPlus) window.$(mainPlus).off('click');
-    if (mainMinus) window.$(mainMinus).off('click');
-    if (stickyPlus) window.$(stickyPlus).off('click');
-    if (stickyMinus) window.$(stickyMinus).off('click');
+    if (mainQtyBox) window.$(mainQtyBox).find('.btn-quantity, .btn-decrease, .btn-increase, input').off('click change input');
+    if (stickyQtyBox) window.$(stickyQtyBox).find('.btn-quantity, .minus-btn, .plus-btn, input').off('click change input');
+    if (mainBtn) window.$(mainBtn).off('click');
+    if (secondaryBuyBtn) window.$(secondaryBuyBtn).off('click');
+    if (stickyAddBtn) window.$(stickyAddBtn).off('click');
+    if (stickyBuyBtn) window.$(stickyBuyBtn).off('click');
   }
 
-  const getLine = () => cart.lines().find((l) => String(l.itemId) === String(p.id));
+  const getLine = () => {
+    const lines = cart.lines();
+    const pid = String(p?.id || p?.itemId || p?._id || '');
+    if (pid) {
+      const found = lines.find((l) => String(l.itemId) === pid);
+      if (found) return found;
+    }
+    if (p?.name) {
+      const found = lines.find((l) => l.name && l.name.toLowerCase() === p.name.toLowerCase());
+      if (found) return found;
+    }
+    return null;
+  };
+
+  const getItemId = () => {
+    const line = getLine();
+    if (line && line.itemId) return String(line.itemId);
+    return String(p?.id || p?.itemId || p?._id || '');
+  };
 
   function getProductToAdd() {
     return p._selectedVariant ? { ...p, price: p._selectedVariant.price ?? p.price, variant: p._selectedVariant } : p;
@@ -4489,20 +4460,39 @@ function wireProductDetailCartFlow(p) {
     const line = getLine();
     const inCart = !!line;
     const toAdd = getProductToAdd();
-    const unitPrice = Number(toAdd.price) || 0;
 
     if (inCart) {
       // --- IN CART STATE ---
+      const cartQty = Number(line.qty) || 1;
+
       // 1. Show Steppers synced with cart quantity
-      const cartQty = line.qty;
-      if (mainQtyBox) mainQtyBox.style.display = '';
-      if (stickyQtyBox) stickyQtyBox.style.display = 'flex';
+      if (mainQtyBox) {
+        mainQtyBox.style.removeProperty('display');
+        mainQtyBox.style.setProperty('display', 'block', 'important');
+      }
+      if (stickyQtyBox) {
+        stickyQtyBox.style.removeProperty('display');
+        stickyQtyBox.style.setProperty('display', 'flex', 'important');
+      }
       if (mainQtyInput) mainQtyInput.value = cartQty;
       if (stickyQtyInput) stickyQtyInput.value = cartQty;
       updatePriceDisplay(cartQty);
 
-      // 2. Main Button becomes "Buy Now"
-      if (mainBtn) {
+      // 2. Hide "Add to cart", Show "Buy Now"
+      if (secondaryBuyBtn) {
+        if (mainBtn) mainBtn.style.setProperty('display', 'none', 'important');
+        secondaryBuyBtn.style.removeProperty('display');
+        secondaryBuyBtn.style.display = '';
+        secondaryBuyBtn.style.flex = '1';
+        secondaryBuyBtn.innerHTML = `<span class="text">Buy Now</span>`;
+        secondaryBuyBtn.setAttribute('href', pageUrl('checkout'));
+        secondaryBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        };
+      } else if (mainBtn) {
+        mainBtn.style.removeProperty('display');
         mainBtn.style.display = '';
         mainBtn.style.flex = '1';
         mainBtn.innerHTML = `<span class="text">Buy Now</span>`;
@@ -4514,19 +4504,16 @@ function wireProductDetailCartFlow(p) {
         };
       }
 
-      // 3. Hide secondary Buy It Now button (main button is already Buy Now)
-      if (secondaryBuyBtn) {
-        secondaryBuyBtn.style.display = 'none';
-      }
-
-      // 4. Sticky Bar: Hide Add to Cart, Show Buy Now full width
+      // 3. Sticky Bar: Hide Add to Cart, Show Buy Now full width
       if (stickyAddBtn) {
-        stickyAddBtn.style.display = 'none';
+        stickyAddBtn.style.setProperty('display', 'none', 'important');
       }
       if (stickyBuyBtn) {
+        stickyBuyBtn.style.removeProperty('display');
         stickyBuyBtn.style.display = '';
         stickyBuyBtn.classList.remove('flex-grow-1');
         stickyBuyBtn.classList.add('w-100');
+        stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
         stickyBuyBtn.setAttribute('href', pageUrl('checkout'));
         stickyBuyBtn.onclick = (e) => {
           e.preventDefault();
@@ -4545,6 +4532,7 @@ function wireProductDetailCartFlow(p) {
 
       // 2. Main Button is "Add to cart"
       if (mainBtn) {
+        mainBtn.style.removeProperty('display');
         mainBtn.style.display = '';
         mainBtn.style.flex = '1';
         mainBtn.innerHTML = `<span class="text">Add to cart</span>`;
@@ -4557,11 +4545,13 @@ function wireProductDetailCartFlow(p) {
           openCartSidebar();
           notify((itemToAdd.name || 'Item') + ' added to your cart.', 'success');
           track('add_to_cart', { itemId: itemToAdd.id, qty: 1 });
+          syncUI();
         };
       }
 
       // 3. Secondary Button is "Buy Now" -> adds 1 and goes directly to checkout
       if (secondaryBuyBtn) {
+        secondaryBuyBtn.style.removeProperty('display');
         secondaryBuyBtn.style.display = '';
         secondaryBuyBtn.style.flex = '1';
         secondaryBuyBtn.innerHTML = `<span class="text">Buy Now</span>`;
@@ -4575,8 +4565,9 @@ function wireProductDetailCartFlow(p) {
         };
       }
 
-      // 4. Sticky Bar: Show Add to Cart AND Buy Now
+      // 4. Sticky Bar: Show Add to Cart AND Buy Now side by side
       if (stickyAddBtn) {
+        stickyAddBtn.style.removeProperty('display');
         stickyAddBtn.style.display = '';
         stickyAddBtn.classList.remove('w-100');
         stickyAddBtn.classList.add('flex-grow-1');
@@ -4590,12 +4581,15 @@ function wireProductDetailCartFlow(p) {
           openCartSidebar();
           notify((itemToAdd.name || 'Item') + ' added to your cart.', 'success');
           track('add_to_cart', { itemId: itemToAdd.id, qty: 1 });
+          syncUI();
         };
       }
       if (stickyBuyBtn) {
+        stickyBuyBtn.style.removeProperty('display');
         stickyBuyBtn.style.display = '';
         stickyBuyBtn.classList.remove('w-100');
         stickyBuyBtn.classList.add('flex-grow-1');
+        stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
         stickyBuyBtn.setAttribute('href', pageUrl('checkout'));
         stickyBuyBtn.onclick = (e) => {
           e.preventDefault();
@@ -4609,64 +4603,106 @@ function wireProductDetailCartFlow(p) {
   }
 
   function handleIncrease(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    }
     const line = getLine();
-    const currentQty = line ? line.qty : 1;
-    cart.setQty(p.id, currentQty + 1);
+    const itemId = getItemId();
+    if (!itemId) return;
+
+    if (line) {
+      const cur = Number(line.qty) || 1;
+      cart.setQty(itemId, Math.min(99, cur + 1));
+    } else {
+      const toAdd = getProductToAdd();
+      cart.add(toAdd, 1);
+    }
+    syncUI();
   }
 
   function handleDecrease(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
-    const line = getLine();
-    if (line) {
-      if (line.qty > 1) {
-        cart.setQty(p.id, line.qty - 1);
-      } else {
-        cart.remove(p.id);
-        notify((p.name || 'Item') + ' removed from your cart.', 'info');
-      }
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
     }
+    const line = getLine();
+    const itemId = getItemId();
+    if (!itemId) return;
+
+    const cur = line ? (Number(line.qty) || 1) : 1;
+    if (cur > 1) {
+      cart.setQty(itemId, cur - 1);
+    } else {
+      // Dropping to 0 -> remove from cart and notify
+      cart.remove(itemId);
+      notify((p.name || line?.name || 'Item') + ' removed from your cart.', 'info');
+    }
+    syncUI();
   }
 
   function handleInputChange(e) {
-    const val = Math.max(1, Math.min(99, parseInt(e.target.value, 10) || 1));
-    e.target.value = val;
-    const line = getLine();
-    if (line) {
-      cart.setQty(p.id, val);
+    const val = parseInt(e.target.value, 10);
+    const itemId = getItemId();
+    if (!itemId) return;
+    if (isNaN(val) || val <= 0) {
+      cart.remove(itemId);
+      notify((p.name || 'Item') + ' removed from your cart.', 'info');
+      syncUI();
+    } else {
+      const clamped = Math.min(99, val);
+      e.target.value = clamped;
+      cart.setQty(itemId, clamped);
+      syncUI();
     }
   }
 
-  if (mainPlus && !mainPlus._merchHandlerBound) {
-    mainPlus._merchHandlerBound = true;
-    mainPlus.addEventListener('click', handleIncrease, true);
-  }
-  if (mainMinus && !mainMinus._merchHandlerBound) {
-    mainMinus._merchHandlerBound = true;
-    mainMinus.addEventListener('click', handleDecrease, true);
-  }
-  if (stickyPlus && !stickyPlus._merchHandlerBound) {
-    stickyPlus._merchHandlerBound = true;
-    stickyPlus.addEventListener('click', handleIncrease, true);
-  }
-  if (stickyMinus && !stickyMinus._merchHandlerBound) {
-    stickyMinus._merchHandlerBound = true;
-    stickyMinus.addEventListener('click', handleDecrease, true);
+  // Bind direct onclick on buttons
+  if (mainMinus) mainMinus.onclick = handleDecrease;
+  if (mainPlus) mainPlus.onclick = handleIncrease;
+  if (stickyMinus) stickyMinus.onclick = handleDecrease;
+  if (stickyPlus) stickyPlus.onclick = handleIncrease;
+
+  // Bind delegated onclick on containers
+  if (mainQtyBox) {
+    mainQtyBox.onclick = (e) => {
+      const dec = e.target.closest('.btn-decrease, .minus-btn, .btn-quantity:first-child');
+      if (dec && (dec.textContent.trim() === '-' || dec.classList.contains('btn-decrease') || dec.classList.contains('minus-btn'))) {
+        handleDecrease(e);
+        return;
+      }
+      const inc = e.target.closest('.btn-increase, .plus-btn, .btn-quantity:last-child');
+      if (inc && (inc.textContent.trim() === '+' || inc.classList.contains('btn-increase') || inc.classList.contains('plus-btn'))) {
+        handleIncrease(e);
+        return;
+      }
+    };
   }
 
-  if (mainQtyInput && !mainQtyInput._merchInputBound) {
-    mainQtyInput._merchInputBound = true;
-    mainQtyInput.addEventListener('change', handleInputChange);
-    mainQtyInput.addEventListener('input', handleInputChange);
+  if (stickyQtyBox) {
+    stickyQtyBox.onclick = (e) => {
+      const dec = e.target.closest('.minus-btn, .btn-decrease, .btn-quantity:first-child');
+      if (dec && (dec.textContent.trim() === '-' || dec.classList.contains('minus-btn') || dec.classList.contains('btn-decrease'))) {
+        handleDecrease(e);
+        return;
+      }
+      const inc = e.target.closest('.plus-btn, .btn-increase, .btn-quantity:last-child');
+      if (inc && (inc.textContent.trim() === '+' || inc.classList.contains('plus-btn') || inc.classList.contains('btn-increase'))) {
+        handleIncrease(e);
+        return;
+      }
+    };
   }
-  if (stickyQtyInput && !stickyQtyInput._merchInputBound) {
-    stickyQtyInput._merchInputBound = true;
-    stickyQtyInput.addEventListener('change', handleInputChange);
-    stickyQtyInput.addEventListener('input', handleInputChange);
+
+  if (mainQtyInput) {
+    mainQtyInput.oninput = handleInputChange;
+    mainQtyInput.onchange = handleInputChange;
+  }
+  if (stickyQtyInput) {
+    stickyQtyInput.oninput = handleInputChange;
+    stickyQtyInput.onchange = handleInputChange;
   }
 
   if (!p._merchPdpCartListenerWired) {
