@@ -2504,7 +2504,13 @@ async function paintQuickVariants(panel, p) {
     const newPrice = pick('.price-on-sale|.price-new', panel);
     if (newPrice) setText(newPrice, money(product.price));
   };
-  options.forEach((option, i) => nodes[i].addEventListener('click', (e) => { e.preventDefault(); select(option); }));
+  values.addEventListener('click', (e) => {
+    const button = e.target.closest('[data-variant-id]');
+    if (!button || !values.contains(button)) return;
+    e.preventDefault();
+    const option = options.find((item) => String(item.id) === button.dataset.variantId);
+    if (option) select(option);
+  });
 }
 
 let quickViewProduct = null;
@@ -3173,9 +3179,13 @@ async function paintVariants(spec, p) {
       const option = options.find((o) => o.id === values.value);
       if (option) selectOption(option);
     });
-  } else options.forEach((option, i) => nodes[i].addEventListener('click', (e) => {
-    e.preventDefault(); selectOption(option);
-  }));
+  } else values.addEventListener('click', (e) => {
+    const button = e.target.closest('[data-variant-id]');
+    if (!button || !values.contains(button)) return;
+    e.preventDefault();
+    const option = options.find((item) => String(item.id) === button.dataset.variantId);
+    if (option) selectOption(option);
+  });
   return;
 }
 

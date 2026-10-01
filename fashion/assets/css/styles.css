@@ -23838,3 +23838,17 @@ html:not([dir=rtl]) .noUi-horizontal .noUi-handle {
 }
 
 /*# sourceMappingURL=styles.css.map */
+.tf-product-variant .variant-size .size-btn[data-variant-id]:not(.disabled),
+.quick-variant-picker.picker_size .size_btn[data-variant-id]:not(.disabled) {
+  color: #000;
+  background: #fff;
+  border: 1px solid #000;
+  cursor: pointer;
+}
+
+.tf-product-variant .variant-size .size-btn[data-variant-id].active,
+.quick-variant-picker.picker_size .size_btn[data-variant-id].active {
+  color: #fff;
+  background: #000;
+  border-color: #000;
+}
