@@ -4372,6 +4372,7 @@ function paintStickyAtcBar(p) {
       minusBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        e.stopImmediatePropagation();
         const cur = Math.max(1, (parseInt(qtyInput.value, 10) || 1) - 1);
         qtyInput.value = cur;
       });
@@ -4381,6 +4382,7 @@ function paintStickyAtcBar(p) {
       plusBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        e.stopImmediatePropagation();
         const cur = (parseInt(qtyInput.value, 10) || 1) + 1;
         qtyInput.value = cur;
       });
@@ -4439,7 +4441,7 @@ function paintPriceButtons(p) {
     $$(sel).forEach((el) => buttons.add(el));
   }
   for (const btn of buttons) {
-    if (btn.closest('.tf-sticky-btn-atc')) continue;
+    if (btn.closest('.tf-sticky-btn-atc, #quickView, #quick_view, #quickAdd, .modal-quick-view, .tf-minicart-recommendations')) continue;
     if (!/add to (cart|bag)/i.test(btn.textContent || '')) continue;
     setText(btn, 'Add to cart' + (p.availability === 'out' ? '' : ' - ' + money(p.price)));
     wireAction(btn, 'add', p, { node: document });
@@ -5074,6 +5076,43 @@ pages.cart = async () => {
       const qtyInput = pick('.quantity-product', node);
       if (qtyInput) qtyInput.value = l.qty;
 
+      // Quantity stepper buttons
+      const decBtn = pick('.btn-decrease, .minus-btn, .btn-quantity:first-child', node);
+      const incBtn = pick('.btn-increase, .plus-btn, .btn-quantity:last-child', node);
+      if (decBtn && !decBtn._merchWired) {
+        decBtn._merchWired = true;
+        decBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const cur = Number(l.qty) || 1;
+          const next = Math.max(1, cur - 1);
+          cart.setQty(l.itemId, next);
+          draw();
+          paintHeader();
+        });
+      }
+      if (incBtn && !incBtn._merchWired) {
+        incBtn._merchWired = true;
+        incBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const cur = Number(l.qty) || 1;
+          const next = Math.min(99, cur + 1);
+          cart.setQty(l.itemId, next);
+          draw();
+          paintHeader();
+        });
+      }
+      if (qtyInput && !qtyInput._merchWired) {
+        qtyInput._merchWired = true;
+        qtyInput.addEventListener('change', (e) => {
+          const val = Math.max(1, Math.min(99, parseInt(qtyInput.value, 10) || 1));
+          cart.setQty(l.itemId, val);
+          draw();
+          paintHeader();
+        });
+      }
+
       // Remove button
       const removeBtn = pick('.remove-cart .remove, .remove-cart, .remove', node);
       if (removeBtn && !removeBtn._merchWired) {
@@ -5319,6 +5358,9 @@ function wireStockFilter(state, run) {
    listen to the input and let the theme do the pressing. The click handler
    reads the value AFTER the theme's own handler has run. */
 function wireQuantityWidgets(container, rerender) {
+  if (!container || container._merchQtyWired) return;
+  container._merchQtyWired = true;
+
   const idOf = (el) => el.closest('[data-merch-id]')?.dataset.merchId;
 
   container.addEventListener('change', (e) => {
@@ -5326,11 +5368,13 @@ function wireQuantityWidgets(container, rerender) {
     if (!input) return;
     const id = idOf(input);
     if (!id) return;
-    cart.setQty(id, input.value);
-    rerender();
+    const val = Math.max(1, Math.min(99, parseInt(input.value, 10) || 1));
+    cart.setQty(id, val);
+    rerender?.();
   });
 
   container.addEventListener('click', (e) => {
+    if (e.defaultPrevented) return;
     const btn = e.target.closest('button, .btn-quantity, .qtybtn, .button, .quantity-button');
     if (!btn) return;
     const box = btn.closest('.quantity-edit, .wg-quantity, .pro-qty, .quantity, .cart-counter-action');
@@ -5339,6 +5383,9 @@ function wireQuantityWidgets(container, rerender) {
     const id = idOf(input);
     if (!id) return;
 
+    e.preventDefault();
+    e.stopPropagation();
+
     /* Which way this button goes. Themes say it with a class, a data attribute
        or just the character on the face of the button. */
     const label = (btn.className + ' ' + (btn.dataset.action || '') + ' ' + btn.textContent).toLowerCase();
@@ -5346,25 +5393,14 @@ function wireQuantityWidgets(container, rerender) {
       : /minus|decrease|decrement|\bdown\b|-/.test(label) ? -1
       : 0;
 
-    const before = Number(input.value) || 1;
+    if (!delta) return;
 
-    /* The theme's own stepper handler was bound to the nodes that were on the
-       page when its main.js ran — which we have since replaced. So the button
-       it drew is now inert, and reading the input after the click reads the
-       same number back. Give the theme a tick to prove it still works, and
-       step the value ourselves only when it did not.
-
-       Doing it unconditionally would double every press on a theme whose
-       handler IS still live (anything loaded with type="text/merch-deferred",
-       or delegated from document). */
-    setTimeout(() => {
-      let next = Number(input.value) || before;
-      if (next === before && delta) {
-        next = Math.max(1, Math.min(99, before + delta));
-        input.value = next;
-      }
-      if (next !== before) { cart.setQty(id, next); rerender(); }
-    }, 0);
+    const line = cart.lines().find((l) => String(l.itemId) === String(id));
+    const cur = line ? line.qty : (parseInt(input.value, 10) || 1);
+    const next = Math.max(1, Math.min(99, cur + delta));
+    input.value = next;
+    cart.setQty(id, next);
+    rerender?.();
   });
 }
 

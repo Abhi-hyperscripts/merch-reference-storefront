@@ -67,28 +67,30 @@
     /* Button Quantity
   -------------------------------------------------------------------------------------*/
     var btnQuantity = function () {
-        $(".minus-btn").on("click", function (e) {
+        $(".minus-btn").off("click").on("click", function (e) {
             e.preventDefault();
+            if ($(this).closest(".tf-sticky-atc-quantity").length) return;
             var $this = $(this);
             var $input = $this.closest("div").find("input");
-            var value = parseInt($input.val());
+            var value = parseInt($input.val()) || 1;
 
             if (value > 1) {
                 value = value - 1;
             }
-            $input.val(value);
+            $input.val(value).trigger("change");
         });
 
-        $(".plus-btn").on("click", function (e) {
+        $(".plus-btn").off("click").on("click", function (e) {
             e.preventDefault();
+            if ($(this).closest(".tf-sticky-atc-quantity").length) return;
             var $this = $(this);
             var $input = $this.closest("div").find("input");
-            var value = parseInt($input.val());
+            var value = parseInt($input.val()) || 1;
 
             if (value > -1) {
                 value = value + 1;
             }
-            $input.val(value);
+            $input.val(value).trigger("change");
         });
     };
 
@@ -610,7 +612,7 @@
     /* Total Price Variant
   ------------------------------------------------------------------------------------- */
     var totalPriceVariant = function () {
-        $(".tf-product-info-list,.tf-cart-item").each(function () {
+        $(".tf-product-info-list").each(function () {
             var productItem = $(this);
             var basePrice =
                 parseFloat(
