@@ -2492,20 +2492,17 @@ async function paintQuickVariants(panel, p) {
   if (quantity) host.insertBefore(target, quantity);
   else host.appendChild(target);
 
-  const select = async (option) => {
+  const select = (option) => {
     if (option.availability === 'out') return notify('That option is sold out.', 'error');
-    try {
-      const product = await api.product(option.id);
-      const label = (isSize ? 'Size' : isColor ? 'Color' : title) + ': ' + optionName(option);
-      panel._merchSelectedVariant = { product, label };
-      setText(pick('.product-infor-name|.prd-name', panel), product.name);
-      paintQuickViewExtras(panel, product);
-      if (valueLabel) setText(valueLabel, optionName(option));
-      nodes.forEach((node) => node.classList.toggle('active', node.dataset.variantId === String(option.id)));
-      const price = money(product.price);
-      const newPrice = pick('.price-on-sale|.price-new', panel);
-      if (newPrice) setText(newPrice, price);
-    } catch (err) { showError(err); }
+    const product = variantProduct(option, p);
+    const label = (isSize ? 'Size' : isColor ? 'Color' : title) + ': ' + optionName(option);
+    panel._merchSelectedVariant = { product, label };
+    setText(pick('.product-infor-name|.prd-name', panel), product.name);
+    paintQuickViewExtras(panel, product);
+    if (valueLabel) setText(valueLabel, optionName(option));
+    nodes.forEach((node) => node.classList.toggle('active', node.dataset.variantId === String(option.id)));
+    const newPrice = pick('.price-on-sale|.price-new', panel);
+    if (newPrice) setText(newPrice, money(product.price));
   };
   options.forEach((option, i) => nodes[i].addEventListener('click', (e) => { e.preventDefault(); select(option); }));
 }
@@ -3074,6 +3071,19 @@ let PDP_VARIANT_REQUIRED = false;
 let PDP_SELECTED_VARIANT = null;
 let FASHION_MINI_CART_TEMPLATE = null;
 
+function variantProduct(option, base) {
+  const detail = option.product && typeof option.product === 'object' ? option.product : {};
+  return {
+    ...base,
+    ...detail,
+    id: option.id ?? detail.id ?? base.id,
+    name: detail.name || option.productName || base.name,
+    price: option.price ?? detail.price ?? base.price,
+    availability: option.availability || detail.availability || base.availability,
+    imageUrls: detail.imageUrls || option.imageUrls || base.imageUrls,
+  };
+}
+
 async function paintVariants(spec, p) {
   if (!spec.variants) return;
   PDP_VARIANT_REQUIRED = false;
@@ -3144,21 +3154,19 @@ async function paintVariants(spec, p) {
       nodes.push(node);
     });
   }
-  const selectOption = async (option) => {
+  const selectOption = (option) => {
     if (option.availability === 'out') return notify('That option is sold out.', 'error');
-    try {
-      const product = await api.product(option.id);
-      PDP_SELECTED_VARIANT = { product, label: cleanTitle + ': ' + optionName(option) };
-      if (currentLabel) setText(currentLabel, optionName(option));
-      nodes.forEach((n) => n.classList.toggle('active', n.dataset.variantId === String(option.id)));
-      $$('.btn-action-price, .btn-add-to-cart').forEach((btn) => setText(btn, 'Add to cart'));
-      const detailPrice = pick('.product-infor-price .price-on-sale');
-      if (detailPrice) setText(detailPrice, money(product.price));
-      const stickyVariant = pick('.tf-sticky-atc-product .distribute__prd');
-      if (stickyVariant) setText(stickyVariant, PDP_SELECTED_VARIANT.label);
-      const stickyPrice = pick('.tf-sticky-atc-product .price__prd');
-      if (stickyPrice) setText(stickyPrice, money(product.price));
-    } catch (e) { showError(e); }
+    const product = variantProduct(option, p);
+    PDP_SELECTED_VARIANT = { product, label: cleanTitle + ': ' + optionName(option) };
+    if (currentLabel) setText(currentLabel, optionName(option));
+    nodes.forEach((n) => n.classList.toggle('active', n.dataset.variantId === String(option.id)));
+    $$('.btn-action-price, .btn-add-to-cart').forEach((btn) => setText(btn, 'Add to cart'));
+    const detailPrice = pick('.product-infor-price .price-on-sale');
+    if (detailPrice) setText(detailPrice, money(product.price));
+    const stickyVariant = pick('.tf-sticky-atc-product .distribute__prd');
+    if (stickyVariant) setText(stickyVariant, PDP_SELECTED_VARIANT.label);
+    const stickyPrice = pick('.tf-sticky-atc-product .price__prd');
+    if (stickyPrice) setText(stickyPrice, money(product.price));
   };
   if (values.tagName === 'SELECT') {
     values.addEventListener('change', () => {
