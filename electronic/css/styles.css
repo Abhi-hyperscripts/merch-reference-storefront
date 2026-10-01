@@ -14957,6 +14957,10 @@ ul.list-text.type-number {
   }
 }
 @media (min-width: 992px) {
+  .line-separation {
+    width: 1px;
+    height: 100%;
+  }
   .news-item-2 {
     gap: 40px;
   }
