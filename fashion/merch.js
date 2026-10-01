@@ -3902,10 +3902,32 @@ function labelColour(label) {
    found by its HEADING — the one thing they agree on, because the words are
    the designer's statement of intent — and each option row is cloned from the
    theme's own. */
+/* ⭐ A SIZE LADDER IS NOT ALPHABETICAL AND NOT BY POPULARITY. The facet arrives
+   ordered by count, so the sidebar read "S, L, XL, M, 2XL, 3XL, 4XL, 5XL, XS" —
+   every size present, in an order that makes the filter look broken. Sorted on
+   the client rather than server-side because `size` is the merchant's own
+   vocabulary: a shoe shop sends numbers, a pharmacy sends strengths, and
+   neither belongs in this ladder. A value the ladder does not know keeps its
+   incoming position, behind the ones it does. */
+const SIZE_ORDER = ['XXS', 'XS', 'S', 'S/M', 'M', 'L', 'L/XL', 'XL', 'XXL',
+                    '2XL', '3XL', '4XL', '5XL', '6XL', '7XL'];
+
+function sizeFacetRank(v) {
+  const i = SIZE_ORDER.indexOf(String(v || '').trim().toUpperCase());
+  return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+}
+
+function orderSizes(values) {
+  return values
+    .map((v, i) => ({ v, i }))
+    .sort((a, b) => sizeFacetRank(a.v.value) - sizeFacetRank(b.v.value) || a.i - b.i)
+    .map((x) => x.v);
+}
+
 const FILTER_GROUPS = [
   { key: 'category', rx: /categor/i,            values: (f) => (f.categories || []).map((c) => ({ value: c.name, label: c.name, count: c.count })) },
   { key: 'brand',    rx: /brand|manufacturer/i, values: (f) => (f.brands || []).map((b) => ({ value: b.slug || b.name, label: b.name, count: b.count })) },
-  { key: 'size',     rx: /size|weight/i,        values: (f) => attrValues(f, 'size') },
+  { key: 'size',     rx: /size|weight/i,        values: (f) => orderSizes(attrValues(f, 'size')) },
   { key: 'color',    rx: /colou?r/i,            values: (f) => attrValues(f, 'color') },
 ];
 
