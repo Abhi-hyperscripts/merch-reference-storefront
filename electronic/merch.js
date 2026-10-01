@@ -5928,10 +5928,24 @@ function paintCheckoutSummary(spec, lines) {
 async function prefillCustomer(spec) {
   const f = spec.form || {};
   const set = (key, value) => { const el = pick(f[key]); if (el && value != null) el.value = value; };
+
+  const savedFirst = localStorage.getItem('merch.shopper_first_name');
+  const savedLast = localStorage.getItem('merch.shopper_last_name');
+  const savedPhone = localStorage.getItem('merch.shopper_phone');
+  const savedEmail = localStorage.getItem('merch.shopper_email');
+  const savedName = localStorage.getItem('merch.shopper_name');
+  const savedState = localStorage.getItem('merch.shopper_state');
+  if (savedFirst) set('firstName', savedFirst);
+  if (savedLast) set('lastName', savedLast);
+  if (savedName) set('name', savedName);
+  if (savedEmail) set('email', savedEmail);
+  if (savedPhone) set('phone', savedPhone);
+  if (savedState && savedState !== 'Choose State') set('state', savedState);
+
   if (!token.get()) return;
   try {
     const [me, addresses] = await Promise.all([api.me(), api.addresses().catch(() => [])]);
-    set('email', me?.email);
+    if (me?.email) set('email', me.email);
 
     const applyAddress = (a) => {
       if (!a) return;
@@ -5994,9 +6008,14 @@ async function prefillCustomer(spec) {
       applyAddress(initialAddr);
     } else {
       const a = (addresses || []).find((x) => x.isDefault) || (addresses || [])[0];
-      const [first, ...rest] = String(me?.name || '').trim().split(/\s+/);
-      set('firstName', first || ''); set('lastName', rest.join(' ') || ''); set('name', me?.name);
-      set('phone', me?.phone || a?.phone);
+      const savedFirst = localStorage.getItem('merch.shopper_first_name');
+      const savedLast = localStorage.getItem('merch.shopper_last_name');
+      const savedPhone = localStorage.getItem('merch.shopper_phone');
+      const [first, ...rest] = String(me?.name || localStorage.getItem('merch.shopper_name') || '').trim().split(/\s+/);
+      const fName = savedFirst || first || '';
+      const lName = savedLast || rest.join(' ') || '';
+      set('firstName', fName); set('lastName', lName); set('name', [fName, lName].filter(Boolean).join(' ') || me?.name);
+      set('phone', savedPhone || me?.phone || a?.phone);
       if (a) applyAddress(a);
     }
   } catch (e) { if (!(e instanceof ApiError && e.isUnauthenticated)) warn(e); }
@@ -6632,10 +6651,22 @@ pages.track = async () => {
 pages.account = async () => {
   wireAuthForms();
   wirePasswordChange();
+  wireAccountDetailsForm();
   if (!token.get()) { showSignedOut(); return; }
 
   const cachedName = localStorage.getItem('merch.shopper_name');
-  if (cachedName) pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, cachedName));
+  const cachedFirst = localStorage.getItem('merch.shopper_first_name');
+  const cachedLast = localStorage.getItem('merch.shopper_last_name');
+  const cachedEmail = localStorage.getItem('merch.shopper_email');
+  const cachedPhone = localStorage.getItem('merch.shopper_phone');
+
+  if (cachedName || cachedFirst || cachedLast || cachedEmail) {
+    const fullName = cachedName || [cachedFirst, cachedLast].filter(Boolean).join(' ') || cachedEmail?.split('@')[0] || '';
+    pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, fullName));
+    if (cachedEmail) pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, cachedEmail));
+    updateAvatarInitials(cachedFirst, cachedLast, fullName, cachedEmail);
+    fillAccountDetails({ name: fullName, email: cachedEmail, phone: cachedPhone });
+  }
 
   let me = null;
   try { me = await api.me(); }
@@ -6648,9 +6679,23 @@ pages.account = async () => {
   wireAddressForm();
   wireSignOut();
 };
-pages.orders = async () => { if (token.get()) await paintOrders(); else showSignedOut(); };
+pages.orders = async () => {
+  if (token.get()) {
+    const cachedFirst = localStorage.getItem('merch.shopper_first_name');
+    const cachedLast = localStorage.getItem('merch.shopper_last_name');
+    const cachedName = localStorage.getItem('merch.shopper_name');
+    const cachedEmail = localStorage.getItem('merch.shopper_email');
+    updateAvatarInitials(cachedFirst, cachedLast, cachedName, cachedEmail);
+    await paintOrders();
+  } else showSignedOut();
+};
 pages.addresses = async () => {
   if (!token.get()) return showSignedOut();
+  const cachedFirst = localStorage.getItem('merch.shopper_first_name');
+  const cachedLast = localStorage.getItem('merch.shopper_last_name');
+  const cachedName = localStorage.getItem('merch.shopper_name');
+  const cachedEmail = localStorage.getItem('merch.shopper_email');
+  updateAvatarInitials(cachedFirst, cachedLast, cachedName, cachedEmail);
   wireAddressForm();
   await paintAddresses();
   const editId = new URLSearchParams(location.search).get('edit');
@@ -6668,30 +6713,128 @@ function showSignedOut() {
 function showSignedIn(me) {
   pickAll('.signed-out-only|[data-signed-out]').forEach((el) => show(el, false));
   pickAll('.signed-in-only|[data-signed-in]').forEach((el) => show(el, true));
-  pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, me.name || me.email));
-  pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, me.email));
+
+  const savedFirst = localStorage.getItem('merch.shopper_first_name');
+  const savedLast = localStorage.getItem('merch.shopper_last_name');
+  const savedEmail = localStorage.getItem('merch.shopper_email') || me?.email || '';
+  const fullName = me?.name || localStorage.getItem('merch.shopper_name') || [savedFirst, savedLast].filter(Boolean).join(' ') || savedEmail.split('@')[0];
+
+  pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, fullName));
+  pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, savedEmail));
   fillAccountDetails(me);
+  updateAvatarInitials(savedFirst, savedLast, fullName, savedEmail);
   try {
-    if (me.name) localStorage.setItem('merch.shopper_name', me.name);
-    if (me.email) localStorage.setItem('merch.shopper_email', me.email);
+    if (fullName) localStorage.setItem('merch.shopper_name', fullName);
+    if (savedEmail) localStorage.setItem('merch.shopper_email', savedEmail);
   } catch {}
   paintAccountHeader().catch(() => {});
 }
 
-/* None of these themes ships a "you are signed in" element, so the classes
-   above match nothing and the account page said nothing about who was on it.
-   Every theme does ship an account-details form, and one of them ships it
-   filled in with the demo person — a signed-in shopper was shown "Tony
-   Nguyen / themesflat@gmail.com" as their own details. Put the real account
-   into the theme's own boxes; nothing is added and nothing moves. */
+function updateAvatarInitials(first, last, fullName, email) {
+  let f = (first || '').trim().charAt(0);
+  let l = (last || '').trim().charAt(0);
+  if (!f && !l && fullName) {
+    const parts = fullName.trim().split(/\s+/).filter(Boolean);
+    if (parts.length > 0) f = parts[0].charAt(0);
+    if (parts.length > 1) l = parts[parts.length - 1].charAt(0);
+  }
+  if (!f && email) f = email.trim().charAt(0);
+  const initials = ((f + l) || 'U').toUpperCase();
+
+  const avatarWraps = pickAll('.account-avatar');
+  avatarWraps.forEach((wrap) => {
+    let initEl = wrap.querySelector('.avatar-initials');
+    if (!initEl) {
+      const imgWrap = wrap.querySelector('.image');
+      if (imgWrap) imgWrap.style.display = 'none';
+      initEl = document.createElement('div');
+      initEl.className = 'avatar-initials';
+      initEl.style.cssText = 'width: 80px; height: 80px; border-radius: 50%; background: #181818; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; margin: 0 auto 16px; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);';
+      wrap.insertBefore(initEl, wrap.firstChild);
+    }
+    initEl.textContent = initials;
+
+    const nameEl = wrap.querySelector('h6, .customer-name, .account-name');
+    if (nameEl) nameEl.textContent = fullName || 'Account';
+    const emailEl = wrap.querySelector('.body-text-1, .customer-email, .account-email');
+    if (emailEl) emailEl.textContent = email || '';
+  });
+}
+
+function wireAccountDetailsForm() {
+  const form = pick('form.form-account-details') || $$('form').find((f) => {
+    return pick('input[placeholder*="first" i]', f) && pick('input[placeholder*="last" i]', f) && pick('input[type="email"]', f);
+  });
+  if (!form || form._merchDetailsWired) return;
+  form._merchDetailsWired = true;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const fn = pick('input[placeholder*="first" i]|input[name*="first" i]', form)?.value.trim() || '';
+    const ln = pick('input[placeholder*="last" i]|input[name*="last" i]', form)?.value.trim() || '';
+    const em = pick('input[type="email"]|input[placeholder*="email address" i]', form)?.value.trim() || '';
+    const ph = pick('input[type="tel"]|input[placeholder*="phone" i]|input[name*="phone" i]|input[placeholder*="mobile" i]', form)?.value.trim() || '';
+    const stateEl = pick('#account-state, select[name*="state"]', form);
+    const stateVal = stateEl?.value || '';
+
+    const fullName = [fn, ln].filter(Boolean).join(' ') || em.split('@')[0] || '';
+
+    try {
+      if (fn) localStorage.setItem('merch.shopper_first_name', fn);
+      if (ln) localStorage.setItem('merch.shopper_last_name', ln);
+      if (fullName) localStorage.setItem('merch.shopper_name', fullName);
+      if (em) localStorage.setItem('merch.shopper_email', em);
+      if (ph) localStorage.setItem('merch.shopper_phone', ph);
+      if (stateVal && stateVal !== 'Choose State') localStorage.setItem('merch.shopper_state', stateVal);
+    } catch {}
+
+    updateAvatarInitials(fn, ln, fullName, em);
+    pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, fullName));
+    pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, em));
+    applyShopperHeader(fullName, em);
+
+    const currentPw = pick('input[placeholder*="current" i][type="password"], .account-password input[placeholder*="password*" i]', form);
+    const newPw = pick('input[placeholder*="new" i][type="password"]', form);
+    const confirmPw = pick('input[placeholder*="confirm" i][type="password"]', form);
+
+    if (currentPw?.value || newPw?.value || confirmPw?.value) {
+      if (!currentPw?.value || !newPw?.value) {
+        return notify('Please fill both current and new password to change password.', 'error');
+      }
+      if (confirmPw && confirmPw.value !== newPw.value) {
+        return notify('The two new passwords do not match.', 'error');
+      }
+      try {
+        await api.changePassword(currentPw.value, newPw.value);
+        currentPw.value = '';
+        newPw.value = '';
+        if (confirmPw) confirmPw.value = '';
+        notify('Account information and password updated successfully.', 'success');
+      } catch (err) {
+        showError(err);
+      }
+    } else {
+      notify('Account information updated successfully.', 'success');
+    }
+  });
+}
+
 function fillAccountDetails(me) {
-  const parts = String(me.name || '').trim().split(/\s+/).filter(Boolean);
-  const first = parts[0] || '';
-  const last = parts.slice(1).join(' ');
+  const savedFirst = localStorage.getItem('merch.shopper_first_name');
+  const savedLast = localStorage.getItem('merch.shopper_last_name');
+  const savedPhone = localStorage.getItem('merch.shopper_phone');
+  const savedEmail = localStorage.getItem('merch.shopper_email');
+  const savedState = localStorage.getItem('merch.shopper_state');
+
+  const parts = String(me?.name || localStorage.getItem('merch.shopper_name') || '').trim().split(/\s+/).filter(Boolean);
+  const first = savedFirst || parts[0] || '';
+  const last = savedLast || parts.slice(1).join(' ');
+  const email = me?.email || savedEmail || '';
+  const phone = me?.phone || savedPhone || '';
+
   for (const form of $$('form')) {
-    /* Never the sign-in, search, newsletter or contact forms — they ask for
-       an email too, and filling them would put the shopper's address into a
-       box they did not choose to complete. */
     if (form.closest('footer, .offcanvas, .modal, .tf-topbar')) continue;
     if (/newsletter|search|log|contact|subscribe/i.test(form.className || '')) continue;
     if (pick('input[name="remember"]|input[type="checkbox"][name*="remember" i]', form)) continue;
@@ -6704,12 +6847,14 @@ function fillAccountDetails(me) {
 
     if (fn && fn.type === 'text') fn.value = first;
     if (ln && ln.type === 'text') ln.value = last;
-    if (dn && dn.type === 'text') dn.value = me.name || me.email;
-    em.value = me.email;
-    /* The demo phone is presented as the shopper's own and would be SAVED as
-       theirs. An empty box is honest; a stranger's number is not. */
-    const ph = pick('input[type="tel"]|input[placeholder*="phone" i]|input[name*="phone" i]', form);
-    if (ph) ph.value = me.phone || '';
+    if (dn && dn.type === 'text') dn.value = [first, last].filter(Boolean).join(' ') || email;
+    if (em) em.value = email;
+
+    const ph = pick('input[type="tel"]|input[placeholder*="phone" i]|input[name*="phone" i]|input[placeholder*="mobile" i]', form);
+    if (ph) ph.value = phone;
+
+    const stateSelect = pick('#account-state, select[name*="state"]', form);
+    if (stateSelect && savedState) stateSelect.value = savedState;
   }
 }
 
@@ -6964,6 +7109,7 @@ function wirePasswordChange() {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (!current.value && !next.value && !confirmEl?.value) return;
     if (!current.value || !next.value) return notify('Please fill in your current and new password.', 'error');
     if (confirmEl && confirmEl.value !== next.value) return notify('The two new passwords do not match.', 'error');
     try {
@@ -6990,7 +7136,7 @@ function wireAuthForms() {
 
     if (pw.length === 0) { if (looksLikeForgot(form)) wireForgotForm(form, email); continue; }
     /* Two password boxes (or a name field) means registration. */
-    const nameEl = pick('input[placeholder*="name" i]:not([placeholder*="user" i])', form);
+    const nameEl = pick('input[placeholder*="name" i]:not([placeholder*="user" i])|input[name*="first" i]', form);
     if (pw.length >= 2 || nameEl) wireRegisterForm(form, email, pw[0], nameEl);
     else wireLoginForm(form, email, pw[0]);
   }
@@ -7014,10 +7160,18 @@ function wireLoginForm(form, email, password) {
       const res = await api.login(email.value.trim(), password.value);
       token.set(res.token);
       const name = res?.shopper?.name || res?.user?.name || res?.name || email.value.trim().split('@')[0];
+      const em = res?.shopper?.email || res?.user?.email || email.value.trim();
+      const ph = res?.shopper?.phone || res?.user?.phone || '';
       try {
         localStorage.setItem('merch.shopper_name', name);
-        if (res?.shopper?.email || res?.user?.email || email.value.trim()) {
-          localStorage.setItem('merch.shopper_email', res?.shopper?.email || res?.user?.email || email.value.trim());
+        if (em) localStorage.setItem('merch.shopper_email', em);
+        if (ph) localStorage.setItem('merch.shopper_phone', ph);
+        const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+        if (parts.length > 0 && !localStorage.getItem('merch.shopper_first_name')) {
+          localStorage.setItem('merch.shopper_first_name', parts[0]);
+          if (parts.length > 1) {
+            localStorage.setItem('merch.shopper_last_name', parts.slice(1).join(' '));
+          }
         }
       } catch {}
       await wishlist.sync();
@@ -7034,14 +7188,24 @@ function wireRegisterForm(form, email, password, nameEl) {
     if (boxes.length >= 2 && boxes[0].value !== boxes[1].value) {
       return notify('The two passwords do not match.', 'error');
     }
-    const phoneEl = pick('input[type="tel"]|input[placeholder*="phone" i]', form);
+    const phoneEl = pick('input[type="tel"]|input[placeholder*="phone" i]|input[name*="phone" i]|input[placeholder*="mobile" i]', form);
+    const firstNameEl = pick('input[name*="first" i]|input[placeholder*="first" i]', form);
+    const lastNameEl = pick('input[name*="last" i]|input[placeholder*="last" i]', form);
+    const fn = firstNameEl?.value.trim() || '';
+    const ln = lastNameEl?.value.trim() || '';
+    const ph = phoneEl?.value.trim() || '';
+    const em = email.value.trim();
+    const fullName = [fn, ln].filter(Boolean).join(' ') || nameEl?.value.trim() || em.split('@')[0];
+
     try {
-      const res = await api.register(email.value.trim(), password.value, nameEl?.value.trim() || '', phoneEl?.value.trim() || '');
+      const res = await api.register(em, password.value, fullName, ph);
       if (res?.token) token.set(res.token);
-      const name = nameEl?.value.trim() || res?.shopper?.name || email.value.trim().split('@')[0];
       try {
-        localStorage.setItem('merch.shopper_name', name);
-        if (email.value.trim()) localStorage.setItem('merch.shopper_email', email.value.trim());
+        if (fn) localStorage.setItem('merch.shopper_first_name', fn);
+        if (ln) localStorage.setItem('merch.shopper_last_name', ln);
+        if (fullName) localStorage.setItem('merch.shopper_name', fullName);
+        if (em) localStorage.setItem('merch.shopper_email', em);
+        if (ph) localStorage.setItem('merch.shopper_phone', ph);
       } catch {}
       notify('Welcome. Your account is ready.', 'success');
       location.href = pageUrl('account');
