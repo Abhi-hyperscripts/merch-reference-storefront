@@ -23838,17 +23838,155 @@ html:not([dir=rtl]) .noUi-horizontal .noUi-handle {
 }
 
 /*# sourceMappingURL=styles.css.map */
-.tf-product-variant .variant-size .size-btn[data-variant-id]:not(.disabled),
-.quick-variant-picker.picker_size .size_btn[data-variant-id]:not(.disabled) {
-  color: #000;
-  background: #fff;
-  border: 1px solid #000;
-  cursor: pointer;
+.tf-product-variant .variant-color,
+.quick-variant-picker.picker_color {
+  margin-bottom: 20px;
 }
 
-.tf-product-variant .variant-size .size-btn[data-variant-id].active,
-.quick-variant-picker.picker_size .size_btn[data-variant-id].active {
-  color: #fff;
-  background: #000;
+.tf-product-variant .variant-color .variant-picker-label,
+.quick-variant-picker.picker_color .variant-picker_label {
+  font-size: 14px;
+  color: #111;
+  margin-bottom: 12px;
+}
+
+.tf-product-variant .variant-color .variant-picker-label-value,
+.quick-variant-picker.picker_color .variant__value {
+  font-weight: 600;
+  color: #000;
+  margin-left: 4px;
+}
+
+.tf-product-variant .variant-color .variant-picker-values,
+.quick-variant-picker.picker_color .variant-picker_values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.tf-product-variant .variant-color .color-btn,
+.quick-variant-picker.picker_color .color_btn {
+  position: relative;
+  width: 58px;
+  height: 58px;
+  padding: 2px;
+  border-radius: 6px;
+  border: 1px solid #e5e5e5;
+  background: #f7f7f7;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  overflow: visible;
+  flex-shrink: 0;
+}
+
+.tf-product-variant .variant-color .color-btn:hover:not(.active),
+.quick-variant-picker.picker_color .color_btn:hover:not(.active) {
+  border-color: #888;
+}
+
+.tf-product-variant .variant-color .color-btn.active,
+.quick-variant-picker.picker_color .color_btn.active {
+  border: 2px solid #000 !important;
+  background: #fff;
+}
+
+.tf-product-variant .variant-color .color-btn .img,
+.quick-variant-picker.picker_color .color_btn .img {
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #eee;
+  position: relative;
+}
+
+.tf-product-variant .variant-color .color-btn .img img,
+.quick-variant-picker.picker_color .color_btn .img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.tf-product-variant .variant-color .color-btn .tooltip,
+.quick-variant-picker.picker_color .color_btn .tooltip {
+  pointer-events: none;
+  z-index: 1000;
+  white-space: nowrap;
+}
+
+.tf-product-variant .variant-size,
+.quick-variant-picker.picker_size {
+  margin-bottom: 20px;
+}
+
+.tf-product-variant .variant-size .variant-picker-label,
+.quick-variant-picker.picker_size .variant-picker_label {
+  font-size: 14px;
+  color: #111;
+  margin-bottom: 12px;
+}
+
+.tf-product-variant .variant-size .variant-picker-label-value,
+.quick-variant-picker.picker_size .variant__value {
+  font-weight: 600;
+  color: #000;
+  margin-left: 4px;
+}
+
+.tf-product-variant .variant-size .variant-picker-values,
+.quick-variant-picker.picker_size .variant-picker_values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.tf-product-variant .variant-size .size-btn,
+.quick-variant-picker.picker_size .size_btn {
+  min-width: 44px;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 4px;
+  border: 1px solid #e0e0e0;
+  background: #fff;
+  color: #000;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 14px;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.tf-product-variant .variant-size .size-btn:hover:not(.disabled):not(.active),
+.quick-variant-picker.picker_size .size_btn:hover:not(.disabled):not(.active) {
   border-color: #000;
 }
+
+.tf-product-variant .variant-size .size-btn.active,
+.quick-variant-picker.picker_size .size_btn.active {
+  color: #fff !important;
+  background: #000 !important;
+  border-color: #000 !important;
+}
+
+.tf-product-variant .variant-size .size-btn.disabled,
+.quick-variant-picker.picker_size .size_btn.disabled {
+  opacity: 0.3 !important;
+  background: #fafafa !important;
+  border-color: #eee !important;
+  color: #bbb !important;
+  cursor: not-allowed !important;
+  pointer-events: none;
+}
+

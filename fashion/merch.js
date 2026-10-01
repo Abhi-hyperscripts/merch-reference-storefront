@@ -2432,6 +2432,455 @@ function paintQuickViewExtras(panel, p) {
   pickAll('.tf-product-info-choose-option|.tf-product-info-variant-picker', panel).forEach(remove);
 }
 
+/* --- Fashion Color & Size Variant Swatch Engine --- */
+const COLOR_IMAGE_CACHE = new Map();
+const COLOR_PRODUCT_CACHE = new Map();
+
+const COLOR_PALETTE = {
+  black: '#111111',
+  white: '#ffffff',
+  grey: '#808080',
+  gray: '#808080',
+  charcoal: '#36454f',
+  mustard: '#e1ad01',
+  teal: '#008080',
+  maroon: '#800000',
+  olive: '#808000',
+  navy: '#000080',
+  sage: '#9caf88',
+  beige: '#f5f5dc',
+  rust: '#b7410e',
+  blue: '#2563eb',
+  red: '#dc2626',
+  green: '#16a34a',
+  yellow: '#eab308',
+  orange: '#ea580c',
+  purple: '#9333ea',
+  pink: '#ec4899',
+  brown: '#78350f',
+  cream: '#fffdd0',
+  khaki: '#c3b091',
+  neon: '#39ff14',
+  lavender: '#e6e6fa',
+  burgundy: '#800020',
+};
+
+function resolveColorSwatch(colorName) {
+  if (!colorName) return '#e5e5e5';
+  const clean = String(colorName).trim().toLowerCase();
+  if (COLOR_PALETTE[clean]) return COLOR_PALETTE[clean];
+  if (window.CSS?.supports?.('color', colorName)) return colorName;
+  const parts = clean.split(/\s+/);
+  if (parts.length > 1 && COLOR_PALETTE[parts[parts.length - 1]]) {
+    return COLOR_PALETTE[parts[parts.length - 1]];
+  }
+  return '#eee';
+}
+
+function isSizeString(str) {
+  if (!str) return false;
+  const clean = String(str).trim();
+  return /^(\d{1,2}\s*XL|XXS|XS|S|M|L|XL|XXL|XXXL|EXTRA\s*SMALL|SMALL|MEDIUM|LARGE|EXTRA\s*LARGE|ONE\s*SIZE|FREE\s*SIZE|OS|\d{1,2}(?:\.\d+)?(?:\s?(?:US|UK|EU))?)$/i.test(clean);
+}
+
+function parseVariantOption(option, baseProduct) {
+  let color = '';
+  let size = '';
+
+  const attrs = option?.attributes || option?.product?.attributes || [];
+  const colorAttr = attrs.find((a) => /^colou?r$/i.test(a.key || a.name))?.value;
+  const sizeAttr = attrs.find((a) => /^size$/i.test(a.key || a.name))?.value;
+  if (colorAttr) color = String(colorAttr).trim();
+  if (sizeAttr) size = String(sizeAttr).trim();
+
+  let text = String(option?.label || option?.name || option?.title || '').trim();
+  if (text.includes('—')) text = text.split('—').pop().trim();
+  else if (text.includes(' - ') && !text.includes(' / ')) {
+    const parts = text.split(' - ');
+    if (parts.length > 1 && (parts[1].includes('/') || isSizeString(parts[1]))) {
+      text = parts.slice(1).join(' - ').trim();
+    }
+  }
+
+  if ((!color || !size) && text.includes(' / ')) {
+    const parts = text.split(' / ').map((s) => s.trim());
+    if (parts.length >= 2) {
+      if (isSizeString(parts[0]) && !isSizeString(parts[1])) {
+        if (!size) size = parts[0];
+        if (!color) color = parts[1];
+      } else {
+        if (!color) color = parts[0];
+        if (!size) size = parts[1];
+      }
+    }
+  } else if (!color && !size && text) {
+    if (isSizeString(text)) size = text;
+    else color = text;
+  }
+
+  return { color, size, option };
+}
+
+function variantProduct(option, base) {
+  const detail = option.product && typeof option.product === 'object' ? option.product : {};
+  return {
+    ...base,
+    ...detail,
+    id: option.id ?? detail.id ?? base.id,
+    name: detail.name || option.productName || base.name,
+    price: option.price ?? detail.price ?? base.price,
+    availability: option.availability || detail.availability || base.availability,
+    imageUrls: detail.imageUrls || option.imageUrls || base.imageUrls,
+  };
+}
+
+function updateContainerImages(root, imageUrls) {
+  if (!imageUrls || !imageUrls.length) return;
+  const urls = imageUrls.map(mediaUrl);
+  const targets = pickAll(
+    '.tf-product-media-main img, .tf-product-media-thumbs img, .thumbs-slider img, ' +
+    '.mini-quick-image img, .item-scroll-quickview img, .quickView-item img, ' +
+    '.prd-image img, .img-product',
+    root || document
+  );
+  if (targets.length) {
+    targets.forEach((img, i) => {
+      const url = urls[i % urls.length];
+      setAttr(img, 'src', url);
+      if (img.hasAttribute('data-src')) setAttr(img, 'data-src', url);
+      img.removeAttribute('srcset');
+    });
+  }
+  pickAll('.tf-zoom-main, .drift-zoom-pane', root || document).forEach((pane) => {
+    if (urls[0]) pane.style.backgroundImage = 'url("' + urls[0] + '")';
+  });
+  const stickyImg = pick('.tf-sticky-atc-product .prd_img img');
+  if (stickyImg && urls[0]) {
+    setAttr(stickyImg, 'src', urls[0]);
+    if (stickyImg.hasAttribute('data-src')) setAttr(stickyImg, 'data-src', urls[0]);
+  }
+}
+
+async function loadSampleColorImages(parsedList, baseProduct, onLoaded) {
+  const missingIds = [];
+  const colorToOption = new Map();
+  for (const item of parsedList) {
+    if (!item.color) continue;
+    const key = item.color.toLowerCase();
+    if (!COLOR_IMAGE_CACHE.has(key) && !colorToOption.has(key)) {
+      colorToOption.set(key, item.option);
+      if (item.option?.id) missingIds.push(item.option.id);
+    }
+  }
+
+  const baseColor = (baseProduct?.attributes?.find((a) => /^colou?r$/i.test(a.key || a.name))?.value)
+    || parseVariantOption({ name: baseProduct?.name }, baseProduct).color;
+  if (baseColor && baseProduct?.imageUrls?.length) {
+    const key = baseColor.toLowerCase();
+    if (!COLOR_IMAGE_CACHE.has(key)) {
+      COLOR_IMAGE_CACHE.set(key, baseProduct.imageUrls[0]);
+      COLOR_PRODUCT_CACHE.set(key, baseProduct);
+    }
+  }
+
+  if (missingIds.length) {
+    try {
+      const res = await api.products(missingIds);
+      const items = Array.isArray(res) ? res : (res?.items || []);
+      for (const prod of items) {
+        const parsed = parseVariantOption({ name: prod.name, attributes: prod.attributes }, prod);
+        const c = parsed.color || '';
+        if (c && prod.imageUrls?.length) {
+          const key = c.toLowerCase();
+          COLOR_IMAGE_CACHE.set(key, prod.imageUrls[0]);
+          COLOR_PRODUCT_CACHE.set(key, prod);
+        }
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  if (onLoaded) onLoaded();
+}
+
+function renderVariantPickers({
+  host,
+  p,
+  options,
+  isQuick = false,
+  onSelect,
+  onClear,
+}) {
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const uniqueColors = [...new Set(parsedList.map((x) => x.color).filter(Boolean))];
+  const uniqueSizes = [...new Set(parsedList.map((x) => x.size).filter(Boolean))];
+
+  if (!uniqueColors.length && !uniqueSizes.length) {
+    const rawTitle = String(options[0]?.groupTitle || options[0]?.optionType || 'Options');
+    const optTarget = document.createElement('div');
+    optTarget.className = 'variant-picker-item variant-option quick-variant-picker';
+    const optLabel = document.createElement('div');
+    optLabel.className = 'variant-picker-label variant-picker_label mb-12';
+    optLabel.append(document.createTextNode(rawTitle + ': '));
+    const optValSpan = document.createElement('span');
+    optValSpan.className = 'variant-picker-label-value variant__value fw-medium';
+    optValSpan.textContent = 'Select option';
+    optLabel.appendChild(optValSpan);
+    optTarget.appendChild(optLabel);
+
+    const optValues = document.createElement('div');
+    optValues.className = 'variant-picker-values variant-picker_values';
+    optTarget.appendChild(optValues);
+
+    options.forEach((opt) => {
+      const btn = document.createElement('span');
+      btn.className = 'size-btn size_btn';
+      btn.dataset.variantId = String(opt.id);
+      const name = opt.label || opt.name || opt.title || '';
+      btn.textContent = name;
+      if (opt.availability === 'out') btn.classList.add('disabled');
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (opt.availability === 'out') return notify('That option is sold out.', 'error');
+        optValues.querySelectorAll('.size-btn, .size_btn').forEach((n) => n.classList.remove('active'));
+        btn.classList.add('active');
+        setText(optValSpan, name);
+        const variant = variantProduct(opt, p);
+        if (onSelect) onSelect(variant, rawTitle + ': ' + name, opt);
+      });
+      optValues.appendChild(btn);
+    });
+
+    if (isQuick) {
+      const quantity = pick('.tf-product-total-quantity, .product-total-quantity', host);
+      if (quantity) host.insertBefore(optTarget, quantity);
+      else host.appendChild(optTarget);
+    } else {
+      host.appendChild(optTarget);
+    }
+    return;
+  }
+
+  const baseParsed = parseVariantOption({ name: p.name, attributes: p.attributes }, p);
+  const baseColor = baseParsed.color;
+  const baseSize = baseParsed.size;
+
+  let activeColor = uniqueColors.find((c) => c.toLowerCase() === (baseColor || '').toLowerCase()) || uniqueColors[0] || '';
+  let selectedSize = '';
+  if (baseSize) {
+    const hasInitialSize = parsedList.some(
+      (item) => (!item.color || item.color.toLowerCase() === activeColor.toLowerCase()) && item.size.toLowerCase() === baseSize.toLowerCase() && item.option.availability !== 'out'
+    );
+    if (hasInitialSize) selectedSize = baseSize;
+  }
+
+  const colorTarget = document.createElement('div');
+  colorTarget.className = 'variant-picker-item variant-color quick-variant-picker picker_color';
+
+  const colorLabel = document.createElement('div');
+  colorLabel.className = 'variant-picker-label variant-picker_label mb-12';
+  const colorTitleBox = document.createElement('div');
+  colorTitleBox.append(document.createTextNode('Colors: '));
+  const colorValueSpan = document.createElement('span');
+  colorValueSpan.className = 'variant-picker-label-value variant__value value-currentColor text-capitalize fw-medium';
+  colorValueSpan.textContent = activeColor || 'Select color';
+  colorTitleBox.appendChild(colorValueSpan);
+  colorLabel.appendChild(colorTitleBox);
+  colorTarget.appendChild(colorLabel);
+
+  const colorValues = document.createElement('div');
+  colorValues.className = 'variant-picker-values variant-picker_values';
+  colorTarget.appendChild(colorValues);
+
+  const sizeTarget = document.createElement('div');
+  sizeTarget.className = 'variant-picker-item variant-size quick-variant-picker picker_size';
+
+  const sizeLabel = document.createElement('div');
+  sizeLabel.className = 'variant-picker-label variant-picker_label mb-12 d-flex align-items-center justify-content-between';
+  const sizeTitleBox = document.createElement('div');
+  sizeTitleBox.append(document.createTextNode('Size: '));
+  const sizeValueSpan = document.createElement('span');
+  sizeValueSpan.className = 'variant-picker-label-value variant__value value-currentSize text-capitalize fw-medium';
+  sizeValueSpan.textContent = selectedSize || 'Select size';
+  sizeTitleBox.appendChild(sizeValueSpan);
+  sizeLabel.appendChild(sizeTitleBox);
+
+  const sizeGuideLink = document.createElement('a');
+  sizeGuideLink.href = '#findSize';
+  sizeGuideLink.setAttribute('data-bs-toggle', 'modal');
+  sizeGuideLink.className = 'tf-btn-line-2 style-primary text-caption-01 fw-semibold';
+  sizeGuideLink.textContent = 'Size Guide';
+  sizeLabel.appendChild(sizeGuideLink);
+
+  sizeTarget.appendChild(sizeLabel);
+
+  const sizeValues = document.createElement('div');
+  sizeValues.className = 'variant-picker-values variant-picker_values';
+  sizeTarget.appendChild(sizeValues);
+
+  function applyOption(option) {
+    const product = variantProduct(option, p);
+    const labelParts = [];
+    if (activeColor) labelParts.push('Color: ' + activeColor);
+    if (selectedSize) labelParts.push('Size: ' + selectedSize);
+    const label = labelParts.length ? labelParts.join(' / ') : (option.label || option.name || '');
+    if (onSelect) onSelect(product, label, option);
+  }
+
+  function renderSizesForColor() {
+    sizeValues.replaceChildren();
+    const colorItems = uniqueColors.length
+      ? parsedList.filter((item) => item.color.toLowerCase() === activeColor.toLowerCase())
+      : parsedList;
+
+    const matching = colorItems.find((item) => item.size.toLowerCase() === (selectedSize || '').toLowerCase());
+    if (!matching || matching.option.availability === 'out') {
+      selectedSize = '';
+    }
+
+    setText(sizeValueSpan, selectedSize || 'Select size');
+
+    colorItems.forEach((item) => {
+      const btn = document.createElement('span');
+      btn.className = 'size-btn size_btn';
+      btn.dataset.size = item.size;
+      btn.dataset.variantId = String(item.option.id);
+      btn.textContent = item.size;
+
+      if (item.option.availability === 'out') btn.classList.add('disabled');
+      if (selectedSize && item.size.toLowerCase() === selectedSize.toLowerCase() && item.option.availability !== 'out') {
+        btn.classList.add('active');
+      }
+
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (item.option.availability === 'out') {
+          return notify('That option is sold out.', 'error');
+        }
+        selectedSize = item.size;
+        setText(sizeValueSpan, selectedSize);
+        sizeValues.querySelectorAll('.size-btn, .size_btn').forEach((n) => {
+          n.classList.toggle('active', n.dataset.size === selectedSize);
+        });
+        applyOption(item.option);
+      });
+
+      sizeValues.appendChild(btn);
+    });
+
+    if (selectedSize && matching && matching.option.availability !== 'out') {
+      applyOption(matching.option);
+    } else {
+      if (onClear) onClear();
+    }
+  }
+
+  if (uniqueColors.length) {
+    uniqueColors.forEach((color) => {
+      const isCurrentActive = color.toLowerCase() === activeColor.toLowerCase();
+      const btn = document.createElement('div');
+      btn.className = 'hover-tooltip tooltip-bot color-btn color_btn style-image' + (isCurrentActive ? ' active' : '');
+      btn.dataset.color = color;
+      btn.title = color;
+
+      const swatch = document.createElement('span');
+      swatch.className = 'img';
+      swatch.style.backgroundColor = resolveColorSwatch(color);
+
+      const img = document.createElement('img');
+      img.alt = color;
+      img.loading = 'lazy';
+      const cached = COLOR_IMAGE_CACHE.get(color.toLowerCase());
+      if (cached) {
+        img.src = cached;
+      } else {
+        img.style.display = 'none';
+      }
+      swatch.appendChild(img);
+      btn.appendChild(swatch);
+
+      const tooltip = document.createElement('span');
+      tooltip.className = 'tooltip';
+      tooltip.textContent = color;
+      btn.appendChild(tooltip);
+
+      btn.addEventListener('mouseenter', () => {
+        setText(colorValueSpan, color);
+      });
+      btn.addEventListener('mouseleave', () => {
+        setText(colorValueSpan, activeColor || 'Select color');
+      });
+
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (activeColor.toLowerCase() === color.toLowerCase()) return;
+        activeColor = color;
+        setText(colorValueSpan, activeColor);
+        colorValues.querySelectorAll('.color-btn, .color_btn').forEach((n) => {
+          n.classList.toggle('active', n.dataset.color.toLowerCase() === activeColor.toLowerCase());
+        });
+
+        const colorProd = COLOR_PRODUCT_CACHE.get(activeColor.toLowerCase());
+        const rootContainer = host.closest('.modal, .offcanvas') || document;
+        if (colorProd?.imageUrls?.length) {
+          updateContainerImages(rootContainer, colorProd.imageUrls);
+        } else {
+          const sampleOpt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+          if (sampleOpt?.id) {
+            api.product(sampleOpt.id).then((detail) => {
+              if (detail?.imageUrls?.length) {
+                COLOR_IMAGE_CACHE.set(activeColor.toLowerCase(), detail.imageUrls[0]);
+                COLOR_PRODUCT_CACHE.set(activeColor.toLowerCase(), detail);
+                updateContainerImages(rootContainer, detail.imageUrls);
+              }
+            }).catch(() => {});
+          }
+        }
+
+        if (uniqueSizes.length) {
+          renderSizesForColor();
+        } else {
+          const opt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+          if (opt) applyOption(opt);
+        }
+      });
+
+      colorValues.appendChild(btn);
+    });
+  }
+
+  // Insert into host container before quantity widget if present
+  const quantity = pick('.tf-product-total-quantity, .product-total-quantity', host);
+  if (uniqueColors.length) {
+    if (quantity) host.insertBefore(colorTarget, quantity);
+    else host.appendChild(colorTarget);
+  }
+  if (uniqueSizes.length) {
+    if (quantity) host.insertBefore(sizeTarget, quantity);
+    else host.appendChild(sizeTarget);
+  }
+
+  if (uniqueSizes.length) {
+    renderSizesForColor();
+  } else if (uniqueColors.length) {
+    const initialOpt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+    if (initialOpt) applyOption(initialOpt);
+  }
+
+  loadSampleColorImages(parsedList, p, () => {
+    colorValues.querySelectorAll('.color-btn, .color_btn').forEach((btn) => {
+      const c = btn.dataset.color;
+      const img = btn.querySelector('img');
+      const cached = COLOR_IMAGE_CACHE.get(c.toLowerCase());
+      if (img && cached) {
+        img.src = cached;
+        img.style.display = 'block';
+      }
+    });
+  });
+}
+
 async function paintQuickVariants(panel, p) {
   let group = null;
   try { group = await api.variants(p.id); } catch { /* remove demo controls below */ }
@@ -2441,75 +2890,26 @@ async function paintQuickVariants(panel, p) {
   panel.dataset.merchSizeRequired = 'false';
   if (!options.length) return;
 
-  const optionName = (o) => o.label || o.name || o.value || o.title || '';
-  const looksLikeSize = options.every((o) => /^(XXS|XS|S|M|L|XL|XXL|XXXL|EXTRA SMALL|SMALL|MEDIUM|LARGE|EXTRA LARGE|\d{1,2}(?:\.\d+)?(?:\s?(?:US|UK|EU))?)$/i.test(String(optionName(o)).trim()));
-  const rawTitle = String(group?.title || options[0]?.groupTitle || options[0]?.optionType || '');
-  const title = !rawTitle || /^(options?|variants?)$/i.test(rawTitle) ? (looksLikeSize ? 'Size' : rawTitle || 'Options') : rawTitle;
-  const isSize = /size/i.test(title) || (!/colou?r/i.test(title) && looksLikeSize);
-  const isColor = /colou?r/i.test(title);
-  panel.dataset.merchSizeRequired = isSize ? 'true' : 'false';
-  const type = isSize ? 'Size' : isColor ? 'Color' : title;
-  const target = document.createElement('div');
-  target.className = 'quick-variant-picker picker_' + (isColor ? 'color' : 'size');
-  const label = document.createElement('div');
-  label.className = 'variant-picker_label mb-12';
-  const titleBox = document.createElement('div');
-  titleBox.append(document.createTextNode(type + ': '));
-  const valueLabel = document.createElement('span');
-  valueLabel.className = 'variant__value text-capitalize fw-medium';
-  valueLabel.textContent = 'Select ' + type.toLowerCase();
-  titleBox.appendChild(valueLabel);
-  label.appendChild(titleBox);
-  target.appendChild(label);
-  const values = document.createElement('div');
-  values.className = 'variant-picker_values';
-  target.appendChild(values);
-  const nodes = [];
-  options.forEach((option) => {
-    const node = document.createElement(isColor ? 'div' : 'span');
-    node.className = isColor ? 'hover-tooltip tooltip-bot color_btn style-image' : 'size_btn';
-    node.dataset.variantId = String(option.id);
-    if (isSize) node.dataset.quickSize = optionName(option);
-    if (isColor) {
-      const swatch = document.createElement('span');
-      swatch.className = 'img';
-      const color = option.color || option.colorCode || option.hex || '';
-      if (color && window.CSS?.supports?.('color', color)) swatch.style.backgroundColor = color;
-      else if (window.CSS?.supports?.('color', optionName(option))) swatch.style.backgroundColor = optionName(option);
-      node.appendChild(swatch);
-      const tooltip = document.createElement('span');
-      tooltip.className = 'tooltip color__label';
-      tooltip.textContent = optionName(option);
-      node.appendChild(tooltip);
-    } else node.textContent = optionName(option);
-    if (option.availability === 'out') node.classList.add('disabled');
-    values.appendChild(node);
-    nodes.push(node);
-  });
-  target.dataset.merchVariantGroup = title;
   const host = pick('.tf-product-variant', panel) || pick('.tf-product-quick_add, .tf-product-quick_view', panel) || panel;
-  const quantity = pick('.tf-product-total-quantity, .product-total-quantity', host);
-  if (quantity) host.insertBefore(target, quantity);
-  else host.appendChild(target);
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const hasSizes = parsedList.some((x) => x.size);
+  panel.dataset.merchSizeRequired = hasSizes ? 'true' : 'false';
 
-  const select = (option) => {
-    if (option.availability === 'out') return notify('That option is sold out.', 'error');
-    const product = variantProduct(option, p);
-    const label = (isSize ? 'Size' : isColor ? 'Color' : title) + ': ' + optionName(option);
-    panel._merchSelectedVariant = { product, label };
-    setText(pick('.product-infor-name|.prd-name', panel), product.name);
-    paintQuickViewExtras(panel, product);
-    if (valueLabel) setText(valueLabel, optionName(option));
-    nodes.forEach((node) => node.classList.toggle('active', node.dataset.variantId === String(option.id)));
-    const newPrice = pick('.price-on-sale|.price-new', panel);
-    if (newPrice) setText(newPrice, money(product.price));
-  };
-  values.addEventListener('click', (e) => {
-    const button = e.target.closest('[data-variant-id]');
-    if (!button || !values.contains(button)) return;
-    e.preventDefault();
-    const option = options.find((item) => String(item.id) === button.dataset.variantId);
-    if (option) select(option);
+  renderVariantPickers({
+    host,
+    p,
+    options,
+    isQuick: true,
+    onSelect: (variant, label) => {
+      panel._merchSelectedVariant = { product: variant, label };
+      setText(pick('.product-infor-name|.prd-name', panel), variant.name);
+      paintQuickViewExtras(panel, variant);
+      const newPrice = pick('.price-on-sale|.price-new', panel);
+      if (newPrice) setText(newPrice, money(variant.price));
+    },
+    onClear: () => {
+      panel._merchSelectedVariant = null;
+    },
   });
 }
 
@@ -3077,116 +3477,44 @@ let PDP_VARIANT_REQUIRED = false;
 let PDP_SELECTED_VARIANT = null;
 let FASHION_MINI_CART_TEMPLATE = null;
 
-function variantProduct(option, base) {
-  const detail = option.product && typeof option.product === 'object' ? option.product : {};
-  return {
-    ...base,
-    ...detail,
-    id: option.id ?? detail.id ?? base.id,
-    name: detail.name || option.productName || base.name,
-    price: option.price ?? detail.price ?? base.price,
-    availability: option.availability || detail.availability || base.availability,
-    imageUrls: detail.imageUrls || option.imageUrls || base.imageUrls,
-  };
-}
-
 async function paintVariants(spec, p) {
   if (!spec.variants) return;
   PDP_VARIANT_REQUIRED = false;
   PDP_SELECTED_VARIANT = null;
   remove(pick('.tf-sticky-atc-variant-price'));
-  /* `variantCount` stays 0 even for a product that IS in one of the store's
-     own variant groups — the catalogue projection does not carry them — so
-     gating on it meant the selector never appeared for any product. The
-     endpoint answers 200 with an empty list when there is no group, so the
-     honest thing is to ask, once, on the product page. */
+
   let group = null;
   try { group = await api.variants(p.id); } catch { group = null; }
   const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
   const container = pick(spec.variants.container);
   if (!container) return;
-  const optionName = (o) => o.label || o.name || o.value || o.title || '';
-  const looksLikeSize = options.length > 0 && options.every((o) =>
-    /^(XXS|XS|S|M|L|XL|XXL|XXXL|EXTRA SMALL|SMALL|MEDIUM|LARGE|EXTRA LARGE|\d{1,2}(?:\.\d+)?(?:\s?(?:US|UK|EU))?)$/i.test(String(optionName(o)).trim()),
-  );
-  const rawTitle = String(group?.title || options[0]?.groupTitle || options[0]?.optionType || '');
-  const title = !rawTitle || /^(options?|variants?)$/i.test(rawTitle) ? (looksLikeSize ? 'Size' : rawTitle || 'Options') : rawTitle;
-  const isSize = /size/i.test(title) || (!/colou?r/i.test(title) && looksLikeSize);
-  const groups = pickAll(spec.variants.group, container);
-  const sample = groups.find((el) => el.classList.contains(isSize ? 'variant-size' : 'variant-color')) || groups[0];
-  /* Remove all template color/size choices first; only store options may be
-     shown. An empty response means this product has no selectable variants. */
+
   pickAll(spec.variants.group, container).forEach(remove);
   if (!options.length) { remove(container); return; }
-  PDP_VARIANT_REQUIRED = isSize;
-  PDP_SELECTED_VARIANT = null;
-  if (!sample) return;
-  const target = sample.cloneNode(true);
-  const label = pick('.variant-picker-label|.option-title|h6', target);
-  const values = pick('.variant-picker-values|select|ul', target);
-  if (!values) return;
-  const titleText = label?.querySelector('.variant-picker-label-value');
-  if (label) {
-    [...label.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).forEach((n) => { n.textContent = ''; });
-    if (titleText) setText(titleText, '');
-    else setText(label, title + ':');
-  }
-  const cleanTitle = title.replace(/s$/i, '');
-  target.className = 'variant-picker-item variant-' + (isSize ? 'size' : /colou?r/i.test(title) ? 'color' : 'option');
-  const titleContainer = label?.querySelector('div');
-  if (titleContainer) titleContainer.insertBefore(document.createTextNode(cleanTitle + ': '), titleText || null);
-  const currentLabel = titleText || label?.querySelector('span');
-  if (currentLabel) setText(currentLabel, 'Select ' + cleanTitle.toLowerCase());
-  const guide = label?.querySelector('a');
-  if (guide) remove(guide);
-  container.appendChild(target);
-  const nodes = [];
-  if (values.tagName === 'SELECT') {
-    values.replaceChildren(new Option('Select ' + cleanTitle.toLowerCase(), ''));
-    options.forEach((o) => values.add(new Option(optionName(o), o.id)));
-  } else {
-    const proto = values.firstElementChild;
-    values.replaceChildren();
-    options.forEach((o, i) => {
-      const node = proto ? proto.cloneNode(true) : document.createElement('button');
-      node.removeAttribute('data-price');
-      node.removeAttribute('data-color');
-      node.classList.remove('active', 'disabled');
-      node.dataset.variantId = o.id;
-      remove(node.querySelector('.img'));
-      setText(node.querySelector('.tooltip') || node, optionName(o));
-      if (o.availability === 'out') node.classList.add('disabled');
-      values.appendChild(node);
-      nodes.push(node);
-    });
-  }
-  const selectOption = (option) => {
-    if (option.availability === 'out') return notify('That option is sold out.', 'error');
-    const product = variantProduct(option, p);
-    PDP_SELECTED_VARIANT = { product, label: cleanTitle + ': ' + optionName(option) };
-    if (currentLabel) setText(currentLabel, optionName(option));
-    nodes.forEach((n) => n.classList.toggle('active', n.dataset.variantId === String(option.id)));
-    $$('.btn-action-price, .btn-add-to-cart').forEach((btn) => setText(btn, 'Add to cart'));
-    const detailPrice = pick('.product-infor-price .price-on-sale');
-    if (detailPrice) setText(detailPrice, money(product.price));
-    const stickyVariant = pick('.tf-sticky-atc-product .distribute__prd');
-    if (stickyVariant) setText(stickyVariant, PDP_SELECTED_VARIANT.label);
-    const stickyPrice = pick('.tf-sticky-atc-product .price__prd');
-    if (stickyPrice) setText(stickyPrice, money(product.price));
-  };
-  if (values.tagName === 'SELECT') {
-    values.addEventListener('change', () => {
-      const option = options.find((o) => o.id === values.value);
-      if (option) selectOption(option);
-    });
-  } else values.addEventListener('click', (e) => {
-    const button = e.target.closest('[data-variant-id]');
-    if (!button || !values.contains(button)) return;
-    e.preventDefault();
-    const option = options.find((item) => String(item.id) === button.dataset.variantId);
-    if (option) selectOption(option);
+
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const hasSizes = parsedList.some((x) => x.size);
+  PDP_VARIANT_REQUIRED = hasSizes;
+
+  renderVariantPickers({
+    host: container,
+    p,
+    options,
+    isQuick: false,
+    onSelect: (variant, label) => {
+      PDP_SELECTED_VARIANT = { product: variant, label };
+      $$('.btn-action-price, .btn-add-to-cart').forEach((btn) => setText(btn, 'Add to cart'));
+      const detailPrice = pick('.product-infor-price .price-on-sale');
+      if (detailPrice) setText(detailPrice, money(variant.price));
+      const stickyVariant = pick('.tf-sticky-atc-product .distribute__prd');
+      if (stickyVariant) setText(stickyVariant, label);
+      const stickyPrice = pick('.tf-sticky-atc-product .price__prd');
+      if (stickyPrice) setText(stickyPrice, money(variant.price));
+    },
+    onClear: () => {
+      PDP_SELECTED_VARIANT = null;
+    },
   });
-  return;
 }
 
 async function paintReviews(p) {
