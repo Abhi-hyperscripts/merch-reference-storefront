@@ -3073,6 +3073,113 @@ pages.cart = async () => {
   cart.onChange(() => paintHeader());
 };
 
+/* --- COLOUR SWATCHES ------------------------------------------------------
+   An item carries BOTH a colour name and, optionally, a `color_code` hex. They
+   are two columns on purpose: the name is also the `?color=` filter value, the
+   facet label here, the option on a variant pill and a line on the merchant's
+   invoice and POS screen, so a hex in that one field would show "#1A1A1A" to a
+   shopper in all of them — and a literal '#' in a query string is a fragment
+   delimiter, so the filter would quietly stop round-tripping.
+
+   So: the code paints, the name reads. When a catalogue supplies no code (most
+   do not), these fall back to resolving the NAME, and a name we cannot resolve
+   gets no swatch at all — painting "Sea Foam" grey is worse than painting
+   nothing. */
+const COLOUR_HEX = {
+  black: '#1a1a1a', white: '#ffffff', ivory: '#fffff0', cream: '#fdf5e0',
+  grey: '#808080', gray: '#808080', charcoal: '#36454f', silver: '#c0c0c0',
+  navy: '#1a2a52', 'royal blue': '#2b4fa2', blue: '#2563eb', denim: '#3b5b86',
+  teal: '#117a7a', mint: '#8fd9b6', green: '#2e7d32', olive: '#6b7030',
+  sage: '#9caf88', khaki: '#b6a66f', beige: '#e3d5b8', sand: '#dcc9a6',
+  stone: '#d2cabb', brown: '#6b4a2f', coffee: '#4b352a', rust: '#9c4a1a',
+  orange: '#e3721f', mustard: '#d4a017', yellow: '#f2c200', peach: '#ffb997',
+  pink: '#e8a0b8', red: '#c62828', maroon: '#6d1f2b', wine: '#722f37',
+  purple: '#6b3fa0', lavender: '#c3b1e1', turquoise: '#30bfc4', neon: '#ccff00',
+  'red wine': '#6b2230',
+};
+
+/* Modifiers shade the base word they qualify — "Dark Green" is green pushed
+   toward black — rather than being colours themselves. Without this most real
+   catalogue values miss: 17 of Juxar's 41 are compound or carry two colours. */
+const COLOUR_MODIFIERS = {
+  dark: -0.30, deep: -0.30, bright: -0.05, light: 0.32, pale: 0.40,
+  pastel: 0.42, melange: 0.18, heather: 0.18, washed: 0.22,
+};
+
+/* #RGB, #RRGGBB or #RRGGBBAA — the only shapes a browser reads as a literal.
+   ⭐ This guard is not cosmetic: the value goes into a style attribute, so any
+   other string is a CSS injection carried by catalogue data. */
+const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+function shade(hex, amount) {
+  if (!amount) return hex;
+  const n = parseInt(hex.slice(1), 16);
+  const target = amount > 0 ? 255 : 0;
+  const a = Math.min(Math.abs(amount), 1);
+  const ch = (shift) => {
+    const v = (n >> shift) & 255;
+    return Math.round(v + (target - v) * a).toString(16).padStart(2, '0');
+  };
+  return '#' + ch(16) + ch(8) + ch(0);
+}
+
+/* One colour phrase -> a hex, or null. Two-word names win over single words, so
+   "Navy Blue" resolves as navy rather than as the blue that follows it. */
+function colourHex(name) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return null;
+  if (COLOUR_HEX[key]) return COLOUR_HEX[key];
+  const words = key.split(/[^a-z]+/).filter(Boolean);
+  for (let i = 0; i < words.length - 1; i++) {
+    const pair = COLOUR_HEX[words[i] + ' ' + words[i + 1]];
+    if (pair) return pair;
+  }
+  let base = null, shift = 0;
+  for (const w of words) {
+    if (base === null && COLOUR_HEX[w]) base = COLOUR_HEX[w];
+    else if (w in COLOUR_MODIFIERS) shift += COLOUR_MODIFIERS[w];
+  }
+  return base ? shade(base, shift) : null;
+}
+
+/* The CSS background for a swatch. An explicit, VALIDATED code wins; otherwise
+   the name is resolved, and a name carrying two colours ("Blue & Yellow") gets
+   both on the diagonal, because showing only the first says something false. */
+function colourBackground(name, code) {
+  const explicit = String(code || '').trim();
+  if (HEX_RE.test(explicit)) return explicit;
+  const parts = String(name || '')
+    .split(/\s*(?:&|\/|\+|\band\b)\s*/i)
+    .map((s) => colourHex(s))
+    .filter(Boolean);
+  if (parts.length > 1) return `linear-gradient(135deg, ${parts[0]} 0 50%, ${parts[1]} 50% 100%)`;
+  return parts[0] || colourHex(name);
+}
+
+/* A dot for one colour, or null when we cannot resolve it. Built with DOM calls
+   rather than innerHTML because the name is catalogue data. */
+function colourDot(name, px, code) {
+  const bg = colourBackground(name, code);
+  if (!bg) return null;
+  const dot = document.createElement('span');
+  dot.className = 'merch-swatch';
+  dot.setAttribute('aria-hidden', 'true');   /* the name is already in the text */
+  dot.title = String(name || '');
+  /* The ring is unconditional: White and Ivory are invisible on a white
+     sidebar without one, and a border on every swatch keeps them a set. */
+  dot.style.cssText = 'display:inline-block;flex:0 0 auto;border-radius:50%;'
+    + `width:${px}px;height:${px}px;background:${bg};`
+    + 'border:1px solid rgba(0,0,0,.28);margin-right:7px;vertical-align:-2px;';
+  return dot;
+}
+
+/* The colour of a variant label: "Black / XL" -> "Black". The catalogue puts
+   colour first precisely so this is the first segment. */
+function labelColour(label) {
+  const first = String(label || '').split('/')[0].trim();
+  return colourHex(first) ? first : null;
+}
+
 /* --- THE FILTER SIDEBAR ---------------------------------------------------
    Every template ships one, listing brands and categories its designer made
    up — "Bags (112)", "Clothing (42)" — and clicking them did nothing at all.
@@ -3164,6 +3271,10 @@ function paintFilterGroup(list, group, values, state, run) {
       if (label.tagName === 'LABEL') label.setAttribute('for', id);
     }
     setText(label, v.count ? `${v.label} (${v.count})` : v.label);
+    if (group.key === 'color') {
+      const dot = colourDot(v.value, 12);
+      if (dot) label.insertBefore(dot, label.firstChild);
+    }
     if (label.tagName === 'A') label.setAttribute('href', pageUrl('listing', { [group.key]: v.value }));
 
     const choose = (e) => {
