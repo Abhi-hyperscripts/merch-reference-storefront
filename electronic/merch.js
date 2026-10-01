@@ -4275,6 +4275,7 @@ pages.product = async () => {
   paintProductUniques(p);
   paintProductTabs(p);
   paintStickyAtcBar(p);
+  wireProductDetailCartFlow(p);
   await paintReviews(p);
   await paintRelated(p);
 
@@ -4287,6 +4288,7 @@ pages.product = async () => {
   onThemeReady(() => {
     paintPriceButtons(p);
     paintStickyAtcBar(p);
+    wireProductDetailCartFlow(p);
   });
 };
 
@@ -4342,6 +4344,7 @@ function paintStickyAtcBar(p) {
           item.addEventListener('click', (e) => {
             e.preventDefault();
             selectedVariant = v;
+            p._selectedVariant = v;
             if (valLabel) setText(valLabel, label);
             pickAll('.select-item', menu).forEach((si) => si.classList.remove('active'));
             item.classList.add('active');
@@ -4356,56 +4359,325 @@ function paintStickyAtcBar(p) {
         });
         if (p.variants[0]) {
           selectedVariant = p.variants[0];
+          p._selectedVariant = p.variants[0];
           if (valLabel) setText(valLabel, p.variants[0].title || p.variants[0].name || '');
         }
       }
     }
   }
+}
 
-  // 4. Quantity Stepper
-  const qtyInput = pick('.tf-sticky-atc-quantity input', bar);
-  if (qtyInput) {
-    if (!qtyInput.value || qtyInput.value === '0') qtyInput.value = '1';
-    const minusBtn = pick('.tf-sticky-atc-quantity .minus-btn', bar);
-    const plusBtn = pick('.tf-sticky-atc-quantity .plus-btn', bar);
-    if (minusBtn && !minusBtn._merchStickyQtyWired) {
-      minusBtn._merchStickyQtyWired = true;
-      minusBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        const cur = Math.max(1, (parseInt(qtyInput.value, 10) || 1) - 1);
-        qtyInput.value = cur;
-      });
-    }
-    if (plusBtn && !plusBtn._merchStickyQtyWired) {
-      plusBtn._merchStickyQtyWired = true;
-      plusBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        const cur = (parseInt(qtyInput.value, 10) || 1) + 1;
-        qtyInput.value = cur;
-      });
+function wireProductDetailCartFlow(p) {
+  const wrap = pick('.tf-product-info-wrap');
+  if (!wrap || !p) return;
+
+  const bar = pick('.tf-sticky-btn-atc');
+
+  // Quantity containers
+  const mainQtyBox = pick('.tf-product-info-quantity', wrap);
+  const stickyQtyBox = bar ? pick('.tf-sticky-atc-quantity', bar) : null;
+
+  // Quantity inputs and buttons
+  let mainQtyInput = pick('.tf-product-info-quantity .quantity-product, .tf-product-info-quantity input', wrap);
+  let mainMinus = pick('.tf-product-info-quantity .btn-decrease', wrap);
+  let mainPlus = pick('.tf-product-info-quantity .btn-increase', wrap);
+  let stickyQtyInput = bar ? pick('.tf-sticky-atc-quantity input', bar) : null;
+  let stickyMinus = bar ? pick('.tf-sticky-atc-quantity .minus-btn', bar) : null;
+  let stickyPlus = bar ? pick('.tf-sticky-atc-quantity .plus-btn', bar) : null;
+
+  // Main action buttons
+  let mainBtn = pick('.tf-product-info-by-btn .btn-add-to-cart, .tf-product-info-by-btn .btn-style-2, .tf-product-info-by-btn a', wrap);
+  let secondaryBuyBtn = pick('.btn-style-3', wrap.parentElement || wrap || document);
+
+  // Sticky action buttons
+  let stickyAddBtn = bar ? pick('.tf-sticky-atc-btns .btn-add-to-cart', bar) : null;
+  let stickyBuyBtn = bar ? pick('.tf-sticky-atc-btns .btn-sticky-buy', bar) : null;
+
+  // If stickyBuyBtn does not exist yet, create it dynamically
+  if (bar && !stickyBuyBtn) {
+    const btnsContainer = pick('.tf-sticky-atc-btns', bar);
+    if (btnsContainer) {
+      btnsContainer.classList.add('d-flex', 'gap-10');
+      stickyBuyBtn = document.createElement('a');
+      stickyBuyBtn.className = 'tf-btn btn-fill radius-4 btn-sticky-buy flex-grow-1';
+      stickyBuyBtn.href = pageUrl('checkout');
+      stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
+      btnsContainer.appendChild(stickyBuyBtn);
     }
   }
 
-  // 5. Add to Cart button
-  const addBtn = pick('.tf-sticky-atc-btns .btn-add-to-cart, .tf-sticky-atc-btns a', bar);
-  if (addBtn) {
-    addBtn.setAttribute('data-merch-action', 'add');
-    addBtn.setAttribute('data-merch-item', p.id || '');
-    addBtn.onclick = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const qty = Math.max(1, parseInt(qtyInput?.value, 10) || 1);
-      const toAdd = selectedVariant ? { ...p, price: selectedVariant.price ?? p.price, variant: selectedVariant } : p;
-      cart.add(toAdd, qty);
-      openCartSidebar();
-      notify((p.name || 'Item') + ' added to your cart.', 'success');
-      track('add_to_cart', { itemId: p.id, qty });
-    };
+  // Clone buttons and stepper spans once to strip any pre-existing listeners
+  if (mainBtn && !mainBtn._merchPdpReplaced) {
+    const clone = mainBtn.cloneNode(true);
+    clone._merchPdpReplaced = true;
+    mainBtn.parentNode.replaceChild(clone, mainBtn);
+    mainBtn = clone;
   }
+  if (secondaryBuyBtn && !secondaryBuyBtn._merchPdpReplaced) {
+    const clone = secondaryBuyBtn.cloneNode(true);
+    clone._merchPdpReplaced = true;
+    secondaryBuyBtn.parentNode.replaceChild(clone, secondaryBuyBtn);
+    secondaryBuyBtn = clone;
+  }
+  if (stickyAddBtn && !stickyAddBtn._merchPdpReplaced) {
+    const clone = stickyAddBtn.cloneNode(true);
+    clone._merchPdpReplaced = true;
+    stickyAddBtn.parentNode.replaceChild(clone, stickyAddBtn);
+    stickyAddBtn = clone;
+  }
+  if (stickyBuyBtn && !stickyBuyBtn._merchPdpReplaced) {
+    const clone = stickyBuyBtn.cloneNode(true);
+    clone._merchPdpReplaced = true;
+    stickyBuyBtn.parentNode.replaceChild(clone, stickyBuyBtn);
+    stickyBuyBtn = clone;
+  }
+  if (mainPlus && !mainPlus._merchPdpReplaced) {
+    const clone = mainPlus.cloneNode(true);
+    clone._merchPdpReplaced = true;
+    mainPlus.parentNode.replaceChild(clone, mainPlus);
+    mainPlus = clone;
+  }
+  if (mainMinus && !mainMinus._merchPdpReplaced) {
+    const clone = mainMinus.cloneNode(true);
+    clone._merchPdpReplaced = true;
+    mainMinus.parentNode.replaceChild(clone, mainMinus);
+    mainMinus = clone;
+  }
+  if (stickyPlus && !stickyPlus._merchPdpReplaced) {
+    const clone = stickyPlus.cloneNode(true);
+    clone._merchPdpReplaced = true;
+    stickyPlus.parentNode.replaceChild(clone, stickyPlus);
+    stickyPlus = clone;
+  }
+  if (stickyMinus && !stickyMinus._merchPdpReplaced) {
+    const clone = stickyMinus.cloneNode(true);
+    clone._merchPdpReplaced = true;
+    stickyMinus.parentNode.replaceChild(clone, stickyMinus);
+    stickyMinus = clone;
+  }
+
+  // Remove Bootstrap modal triggers to prevent unexpected popups
+  [mainBtn, secondaryBuyBtn, stickyAddBtn, stickyBuyBtn].forEach((btn) => {
+    if (btn) {
+      btn.removeAttribute('data-bs-toggle');
+      btn.removeAttribute('data-bs-target');
+    }
+  });
+
+  if (window.$) {
+    if (mainPlus) window.$(mainPlus).off('click');
+    if (mainMinus) window.$(mainMinus).off('click');
+    if (stickyPlus) window.$(stickyPlus).off('click');
+    if (stickyMinus) window.$(stickyMinus).off('click');
+  }
+
+  const getLine = () => cart.lines().find((l) => String(l.itemId) === String(p.id));
+
+  function getProductToAdd() {
+    return p._selectedVariant ? { ...p, price: p._selectedVariant.price ?? p.price, variant: p._selectedVariant } : p;
+  }
+
+  function updatePriceDisplay(qty) {
+    const toAdd = getProductToAdd();
+    const unitPrice = Number(toAdd.price) || 0;
+    const total = unitPrice * qty;
+    pickAll('.tf-qty-price.total-price', wrap).forEach((el) => {
+      setText(el, money(total));
+    });
+  }
+
+  function syncUI() {
+    const line = getLine();
+    const inCart = !!line;
+    const toAdd = getProductToAdd();
+    const unitPrice = Number(toAdd.price) || 0;
+
+    if (inCart) {
+      // --- IN CART STATE ---
+      // 1. Show Steppers synced with cart quantity
+      const cartQty = line.qty;
+      if (mainQtyBox) mainQtyBox.style.display = '';
+      if (stickyQtyBox) stickyQtyBox.style.display = 'flex';
+      if (mainQtyInput) mainQtyInput.value = cartQty;
+      if (stickyQtyInput) stickyQtyInput.value = cartQty;
+      updatePriceDisplay(cartQty);
+
+      // 2. Main Button becomes "Buy Now"
+      if (mainBtn) {
+        mainBtn.style.display = '';
+        mainBtn.style.flex = '1';
+        mainBtn.innerHTML = `<span class="text">Buy Now</span>`;
+        mainBtn.setAttribute('href', pageUrl('checkout'));
+        mainBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        };
+      }
+
+      // 3. Hide secondary Buy It Now button (main button is already Buy Now)
+      if (secondaryBuyBtn) {
+        secondaryBuyBtn.style.display = 'none';
+      }
+
+      // 4. Sticky Bar: Hide Add to Cart, Show Buy Now full width
+      if (stickyAddBtn) {
+        stickyAddBtn.style.display = 'none';
+      }
+      if (stickyBuyBtn) {
+        stickyBuyBtn.style.display = '';
+        stickyBuyBtn.classList.remove('flex-grow-1');
+        stickyBuyBtn.classList.add('w-100');
+        stickyBuyBtn.setAttribute('href', pageUrl('checkout'));
+        stickyBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        };
+      }
+    } else {
+      // --- NOT IN CART STATE ---
+      // 1. HIDE Quantity Steppers ("by default one nahi aana chahiye")
+      if (mainQtyBox) mainQtyBox.style.setProperty('display', 'none', 'important');
+      if (stickyQtyBox) stickyQtyBox.style.setProperty('display', 'none', 'important');
+      if (mainQtyInput) mainQtyInput.value = '1';
+      if (stickyQtyInput) stickyQtyInput.value = '1';
+      updatePriceDisplay(1);
+
+      // 2. Main Button is "Add to cart"
+      if (mainBtn) {
+        mainBtn.style.display = '';
+        mainBtn.style.flex = '1';
+        mainBtn.innerHTML = `<span class="text">Add to cart</span>`;
+        mainBtn.setAttribute('href', 'javascript:void(0);');
+        mainBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          openCartSidebar();
+          notify((itemToAdd.name || 'Item') + ' added to your cart.', 'success');
+          track('add_to_cart', { itemId: itemToAdd.id, qty: 1 });
+        };
+      }
+
+      // 3. Secondary Button is "Buy Now" -> adds 1 and goes directly to checkout
+      if (secondaryBuyBtn) {
+        secondaryBuyBtn.style.display = '';
+        secondaryBuyBtn.style.flex = '1';
+        secondaryBuyBtn.innerHTML = `<span class="text">Buy Now</span>`;
+        secondaryBuyBtn.setAttribute('href', pageUrl('checkout'));
+        secondaryBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          location.href = pageUrl('checkout');
+        };
+      }
+
+      // 4. Sticky Bar: Show Add to Cart AND Buy Now
+      if (stickyAddBtn) {
+        stickyAddBtn.style.display = '';
+        stickyAddBtn.classList.remove('w-100');
+        stickyAddBtn.classList.add('flex-grow-1');
+        stickyAddBtn.innerHTML = '<span class="text text-btn-uppercase">Add To Cart</span>';
+        stickyAddBtn.setAttribute('href', 'javascript:void(0);');
+        stickyAddBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          openCartSidebar();
+          notify((itemToAdd.name || 'Item') + ' added to your cart.', 'success');
+          track('add_to_cart', { itemId: itemToAdd.id, qty: 1 });
+        };
+      }
+      if (stickyBuyBtn) {
+        stickyBuyBtn.style.display = '';
+        stickyBuyBtn.classList.remove('w-100');
+        stickyBuyBtn.classList.add('flex-grow-1');
+        stickyBuyBtn.setAttribute('href', pageUrl('checkout'));
+        stickyBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          location.href = pageUrl('checkout');
+        };
+      }
+    }
+  }
+
+  function handleIncrease(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    const line = getLine();
+    const currentQty = line ? line.qty : 1;
+    cart.setQty(p.id, currentQty + 1);
+  }
+
+  function handleDecrease(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    const line = getLine();
+    if (line) {
+      if (line.qty > 1) {
+        cart.setQty(p.id, line.qty - 1);
+      } else {
+        cart.remove(p.id);
+        notify((p.name || 'Item') + ' removed from your cart.', 'info');
+      }
+    }
+  }
+
+  function handleInputChange(e) {
+    const val = Math.max(1, Math.min(99, parseInt(e.target.value, 10) || 1));
+    e.target.value = val;
+    const line = getLine();
+    if (line) {
+      cart.setQty(p.id, val);
+    }
+  }
+
+  if (mainPlus && !mainPlus._merchHandlerBound) {
+    mainPlus._merchHandlerBound = true;
+    mainPlus.addEventListener('click', handleIncrease, true);
+  }
+  if (mainMinus && !mainMinus._merchHandlerBound) {
+    mainMinus._merchHandlerBound = true;
+    mainMinus.addEventListener('click', handleDecrease, true);
+  }
+  if (stickyPlus && !stickyPlus._merchHandlerBound) {
+    stickyPlus._merchHandlerBound = true;
+    stickyPlus.addEventListener('click', handleIncrease, true);
+  }
+  if (stickyMinus && !stickyMinus._merchHandlerBound) {
+    stickyMinus._merchHandlerBound = true;
+    stickyMinus.addEventListener('click', handleDecrease, true);
+  }
+
+  if (mainQtyInput && !mainQtyInput._merchInputBound) {
+    mainQtyInput._merchInputBound = true;
+    mainQtyInput.addEventListener('change', handleInputChange);
+    mainQtyInput.addEventListener('input', handleInputChange);
+  }
+  if (stickyQtyInput && !stickyQtyInput._merchInputBound) {
+    stickyQtyInput._merchInputBound = true;
+    stickyQtyInput.addEventListener('change', handleInputChange);
+    stickyQtyInput.addEventListener('input', handleInputChange);
+  }
+
+  if (!p._merchPdpCartListenerWired) {
+    p._merchPdpCartListenerWired = true;
+    cart.onChange(() => {
+      syncUI();
+    });
+  }
+
+  syncUI();
 }
 
 function paintBreadcrumbs(p) {
@@ -4442,7 +4714,7 @@ function paintPriceButtons(p) {
     $$(sel).forEach((el) => buttons.add(el));
   }
   for (const btn of buttons) {
-    if (btn.closest('.tf-sticky-btn-atc, #quickView, #quick_view, #quickAdd, .modal-quick-view, .tf-minicart-recommendations')) continue;
+    if (btn.closest('.tf-sticky-btn-atc, #quickView, #quick_view, #quickAdd, .modal-quick-view, .tf-minicart-recommendations, .tf-product-info-wrap, .tf-product-info-by-btn')) continue;
     if (!/add to (cart|bag)/i.test(btn.textContent || '')) continue;
     setText(btn, 'Add to cart' + (p.availability === 'out' ? '' : ' - ' + money(p.price)));
     wireAction(btn, 'add', p, { node: document });

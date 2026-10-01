@@ -521,7 +521,7 @@
                                             </div>
                                         </div>
 
-                                        <div class="tf-product-info-quantity">
+                                        <div class="tf-product-info-quantity" style="display: none !important;">
                                             <div class="title mb_12">Quantity:</div>
                                             <div class="wg-quantity">
                                                 <span class="btn-quantity btn-decrease">-</span>
@@ -530,18 +530,18 @@
                                             </div>
                                         </div>
                                         <div>
-                                            <div class="tf-product-info-by-btn mb_10">
-                                                <a href="#shoppingCart" data-bs-toggle="modal" class="btn-style-2 flex-grow-1 text-btn-uppercase fw-6 btn-add-to-cart"><span>Add to cart -&nbsp;</span><span class="tf-qty-price total-price">$79.99</span></a>
-                                                <a href="#compare" data-bs-toggle="offcanvas" aria-controls="compare" class="box-icon hover-tooltip compare btn-icon-action">
+                                            <div class="tf-product-info-by-btn mb_10 d-flex gap-10 align-items-center">
+                                                <a href="javascript:void(0);" class="btn-style-2 text-btn-uppercase fw-6 btn-add-to-cart text-center" style="flex: 1; min-width: 0;"><span class="text">Add to cart</span></a>
+                                                <a href="checkout.html" class="btn-style-3 text-btn-uppercase fw-6 btn-buy-now text-center" style="flex: 1; min-width: 0;"><span class="text">Buy Now</span></a>
+                                                <a href="#compare" data-bs-toggle="offcanvas" aria-controls="compare" class="box-icon hover-tooltip compare btn-icon-action flex-shrink-0">
                                                     <span class="icon icon-gitDiff"></span>
                                                     <span class="tooltip text-caption-2">Compare</span>
                                                 </a>
-                                                <a href="javascript:void(0);" class="box-icon hover-tooltip text-caption-2 wishlist btn-icon-action">
+                                                <a href="javascript:void(0);" class="box-icon hover-tooltip text-caption-2 wishlist btn-icon-action flex-shrink-0">
                                                     <span class="icon icon-heart"></span>
                                                     <span class="tooltip text-caption-2">Wishlist</span>
                                                 </a>
                                             </div>
-                                            <a href="#" class="btn-style-3 text-btn-uppercase">Buy it now</a>
                                         </div>
                                         <div class="tf-product-info-help">
                                             <div class="tf-product-info-extra-link">
@@ -682,7 +682,7 @@
                                             <div class="dropdown-menu"></div>
                                         </div>
                                     </div>
-                                    <div class="tf-sticky-atc-quantity d-flex gap-12 align-items-center">
+                                    <div class="tf-sticky-atc-quantity d-flex gap-12 align-items-center" style="display: none !important;">
                                         <div class="tf-sticky-atc-infos-title text-title">Quantity:</div>
                                         <div class="wg-quantity style-1">
                                             <span class="btn-quantity minus-btn">-</span>
@@ -690,8 +690,9 @@
                                             <span class="btn-quantity plus-btn">+</span>
                                         </div>
                                     </div>
-                                    <div class="tf-sticky-atc-btns">
-                                        <a href="#shoppingCart" data-bs-toggle="modal" class="tf-btn w-100 btn-reset radius-4 btn-add-to-cart"><span class="text text-btn-uppercase">Add To Cart</span></a>
+                                    <div class="tf-sticky-atc-btns d-flex gap-10">
+                                        <a href="javascript:void(0);" class="tf-btn btn-reset radius-4 btn-add-to-cart flex-grow-1"><span class="text text-btn-uppercase">Add To Cart</span></a>
+                                        <a href="checkout.html" class="tf-btn btn-fill radius-4 btn-sticky-buy flex-grow-1"><span class="text text-btn-uppercase">Buy Now</span></a>
                                     </div>
                                 </div>
                             </form>
