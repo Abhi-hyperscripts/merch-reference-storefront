@@ -1546,6 +1546,7 @@ THEMES.electronic = {
       email: 'input[placeholder="Email Address*"]',
       phone: 'input[placeholder="Phone Number*"]',
       city: 'input[placeholder="Town/City*"]',
+      state: '#merch-state, select.text-title:not([name*="country"])',
       address1: 'input[placeholder="Street,..."]',
       pincode: 'input[placeholder="Postal Code*"]',
     },
@@ -6018,7 +6019,7 @@ async function prefillCustomer(spec) {
    spacing, so the design is untouched and the field belongs to the theme. */
 function cloneFieldAfter(source, { id, name, placeholder, label }) {
   if (!source) return null;
-  const wrapper = source.closest('[class*="col-"], .form-group, .field, .tf-field, p') || source;
+  const wrapper = source.closest('.form-group, .field, .tf-field, .single-input-item, p') || source;
   const clone = wrapper.cloneNode(true);
   const input = clone.matches('input') ? clone : clone.querySelector('input');
   if (!input || !wrapper.parentElement) return null;
