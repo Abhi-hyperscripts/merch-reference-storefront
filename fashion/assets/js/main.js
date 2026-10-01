@@ -169,6 +169,7 @@
 
                 if ($otherChildren.length > 0) {
                     $textEmpty.hide();
+                    $boxEmpty.show();
                 } else {
                     $textEmpty.show();
                     $boxEmpty.hide();

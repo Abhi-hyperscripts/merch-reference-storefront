@@ -931,6 +931,15 @@ function wireAction(el, action, data, ctx) {
         cart.add(item, qty, variantLabel);
         notify(item.name + ' added to your cart.', 'success');
         track('add_to_cart', { itemId: item.id, qty });
+        if (THEME?.name === 'fashion') {
+          try {
+            const cartEl = document.getElementById('shoppingCart');
+            if (cartEl && window.bootstrap?.Offcanvas) {
+              const bsOffcanvas = window.bootstrap.Offcanvas.getInstance(cartEl) || new window.bootstrap.Offcanvas(cartEl);
+              bsOffcanvas.show();
+            }
+          } catch { /* ignore */ }
+        }
       });
       break;
     case 'buy':
@@ -1937,6 +1946,85 @@ function paintFashionMiniCart() {
   pickAll('.popup-shopping-cart .tf-mini-cart-total .total-price').forEach((el) =>
     setText(el, money(cart.localSubtotal())),
   );
+
+  pickAll('.popup-shopping-cart').forEach((popup) => {
+    let bottom = pick('.tf-mini-cart-bottom', popup);
+    const wrap = pick('.wrap-empty_text', popup) || pick('.wrap', popup) || popup;
+    if (!bottom && wrap) {
+      bottom = document.createElement('div');
+      bottom.className = 'tf-mini-cart-bottom box-empty_clear';
+      bottom.innerHTML = `
+        <div class="tf-mini-cart-bottom-wrap">
+          <div class="tf-mini-cart-total">
+            <h5 class="text-total d-flex align-content-center justify-content-between">
+              <span class="subtotal">Subtotal</span>
+              <span class="total-price tf-totals-total-value">${money(cart.localSubtotal())}</span>
+            </h5>
+          </div>
+          <div class="tf-mini-cart-view-checkout">
+            <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
+            <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
+          </div>
+        </div>
+      `;
+      wrap.appendChild(bottom);
+    }
+
+    if (bottom) {
+      if (lines.length) {
+        bottom.style.display = 'block';
+        bottom.classList.remove('d-none');
+      } else {
+        bottom.style.display = 'none';
+      }
+
+      const bottomWrap = pick('.tf-mini-cart-bottom-wrap', bottom) || bottom;
+      let viewCheckout = pick('.tf-mini-cart-view-checkout', bottomWrap);
+      if (!viewCheckout) {
+        viewCheckout = document.createElement('div');
+        viewCheckout.className = 'tf-mini-cart-view-checkout';
+        viewCheckout.innerHTML = `
+          <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
+          <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
+        `;
+        const continueLink = pick('a[href*="shop"]', bottomWrap);
+        if (continueLink) bottomWrap.insertBefore(viewCheckout, continueLink);
+        else bottomWrap.appendChild(viewCheckout);
+      }
+
+      let viewCartBtn = pick('a[href*="cart"], .btn-stroke', viewCheckout);
+      if (!viewCartBtn) {
+        viewCartBtn = document.createElement('a');
+        viewCartBtn.className = 'tf-btn btn-stroke';
+        viewCartBtn.textContent = 'View cart';
+        viewCheckout.insertBefore(viewCartBtn, viewCheckout.firstChild);
+      }
+      setAttr(viewCartBtn, 'href', pageUrl('cart'));
+      if (!viewCartBtn._merchWired) {
+        viewCartBtn._merchWired = true;
+        viewCartBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          location.href = pageUrl('cart');
+        });
+      }
+
+      let checkoutBtn = pick('a[href*="checkout"], .animate-btn', viewCheckout);
+      if (!checkoutBtn) {
+        checkoutBtn = document.createElement('a');
+        checkoutBtn.className = 'tf-btn animate-btn';
+        checkoutBtn.textContent = 'Check Out';
+        viewCheckout.appendChild(checkoutBtn);
+      }
+      setAttr(checkoutBtn, 'href', pageUrl('checkout'));
+      if (!checkoutBtn._merchWired) {
+        checkoutBtn._merchWired = true;
+        checkoutBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        });
+      }
+    }
+  });
 }
 
 /* --- The shop's own identity -------------------------------------------------
@@ -2972,6 +3060,21 @@ function wireQuickView() {
     cart.add(item, qty, selected?.label || '');
     notify(item.name + ' added to your cart.', 'success');
     track('add_to_cart', { itemId: item.id, qty, via: 'quickview' });
+    if (THEME?.name === 'fashion') {
+      try {
+        if (window.bootstrap?.Modal) {
+          window.bootstrap.Modal.getInstance(modal)?.hide();
+        }
+        if (window.bootstrap?.Offcanvas) {
+          window.bootstrap.Offcanvas.getInstance(modal)?.hide();
+        }
+        const cartEl = document.getElementById('shoppingCart');
+        if (cartEl && window.bootstrap?.Offcanvas) {
+          const bsOffcanvas = window.bootstrap.Offcanvas.getInstance(cartEl) || new window.bootstrap.Offcanvas(cartEl);
+          bsOffcanvas.show();
+        }
+      } catch { /* ignore */ }
+    }
   });
 }
 
