@@ -131,13 +131,14 @@
         }
 
         function updateTotalPriceEach() {
+            if (window.__merchHandledCart) return;
             var total = 0;
 
             $(".each-list-prd .each-prd").each(function () {
                 var priceText = $(this)
                     .find(".each-subtotal-price")
                     .text()
-                    .replace(/[$,]/g, "")
+                    .replace(/[^0-9.]/g, "")
                     .trim();
 
                 var subtotal = parseFloat(priceText);

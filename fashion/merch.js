@@ -1657,9 +1657,14 @@ THEMES.fashion = {
       subtotal: { sel: '.cart_total', text: (l) => money(l.price * l.qty) },
       remove:   { sel: '.cart_remove', action: 'remove' },
     },
-    totals: { subtotal: '.each-subtotal|.tf-totals-total-value', total: '.total-price|.tf-totals-total-value' },
-    coupon: { input: 'input[placeholder*="iscount"]', button: '.ip-discount-code button' },
-    checkoutBtn: 'a[href*="checkout"]',
+    totals: {
+      subtotal: '.box-order-summary .subtotal .total, .each-subtotal, .tf-totals-total-value',
+      discount: '.box-order-summary .discount .total',
+      shipping: '.box-order-summary .ship .price',
+      total: '.box-order-summary .total-order .total, .each-total-price, .total-price, .tf-totals-total-value',
+    },
+    coupon: { input: '.ip-discount-code input|input[placeholder*="iscount"]', button: '.ip-discount-code button' },
+    checkoutBtn: 'a[href*="checkout"], #checkout-btn, .action-checkout',
   },
   checkout: {
     ...THEMES.electronic.checkout,
@@ -1673,6 +1678,26 @@ THEMES.fashion = {
         price: { sel: '.quantity-price', text: (l) => money(l.price * l.qty) },
       },
     },
+    totals: {
+      subtotal: '.box-your-order .total-item-subtotal span:last-child',
+      shipping: '.box-your-order .total-item-shipping span:last-child',
+      discount: '.box-your-order .total-item-discount span:last-child',
+      total: '.box-your-order .last-total span:last-child',
+    },
+    coupon: { input: '.ip-discount-code input|input[placeholder*="voucher"]', button: '.ip-discount-code button' },
+    form: {
+      firstName: 'input[placeholder="First Name*"]',
+      lastName: 'input[placeholder="Last Name*"]',
+      email: 'input[placeholder="Email Address*"]',
+      phone: 'input[placeholder="Phone Number*"]',
+      country: '#shipping-country-form',
+      city: 'input[placeholder="Town/City*"]',
+      address1: 'input[placeholder="Street,..."]',
+      state: '#shipping-province-form',
+      pincode: 'input[placeholder="Postal Code*"]',
+    },
+    paymentRadios: 'input[name="payment-method"]',
+    placeBtn: '.tf-page-checkout a.animate-btn|.tf-page-checkout button.animate-btn|a[href*="thank-you"]',
   },
 };
 
@@ -3702,6 +3727,7 @@ const pending = {
 };
 
 pages.cart = async () => {
+  window.__merchHandledCart = true;
   const spec = THEME.cart;
   const lines = await cart.refresh();
 
@@ -3742,6 +3768,12 @@ pages.cart = async () => {
   pickAll(spec.checkoutBtn).forEach((btn) => {
     btn.addEventListener('click', (e) => {
       if (!cart.count()) { e.preventDefault(); notify('Your cart is empty.', 'error'); return; }
+      const agree = pick('#checkOutAgree');
+      if (agree && !agree.checked) {
+        e.preventDefault();
+        notify('Please agree to the Terms and Conditions before continuing.', 'error');
+        return;
+      }
       const href = btn.tagName === 'A' ? (btn.getAttribute('href') || '') : '';
       if (/checkout/i.test(href)) return;        // already points at the right page
       e.preventDefault();
@@ -4073,6 +4105,82 @@ function paintFreeShippingBar(lines) {
   bars.forEach((el) => { el.style.width = Math.min(100, Math.round((subtotal / free) * 100)) + '%'; });
 }
 
+function paintFashionCartTotals(subtotal, discount, shipping, total) {
+  const box = pick('.box-order-summary');
+  if (!box) return;
+
+  const subtotalEl = pick('.subtotal .total', box);
+  if (subtotalEl) setText(subtotalEl, money(subtotal));
+
+  const discountEl = pick('.discount .total', box);
+  if (discountEl) setText(discountEl, discount > 0 ? '-' + money(discount) : money(0));
+
+  const freeLabelPrice = pick('label[for="free"] .price', box);
+  if (freeLabelPrice) setText(freeLabelPrice, money(0));
+  const localLabelPrice = pick('label[for="local"] .price', box);
+  if (localLabelPrice) setText(localLabelPrice, money(35));
+  const rateLabelPrice = pick('label[for="rate"] .price', box);
+  if (rateLabelPrice) setText(rateLabelPrice, money(35));
+
+  const p = pending.get();
+  let shipAmount = p.shipping;
+  const localRadio = pick('#local', box);
+  const rateRadio = pick('#rate', box);
+  const freeRadio = pick('#free', box);
+
+  if (shipAmount === undefined || shipAmount === null) {
+    if (localRadio?.checked) shipAmount = 35;
+    else if (rateRadio?.checked) shipAmount = 35;
+    else shipAmount = 0;
+    pending.set({ shipping: shipAmount });
+  }
+
+  if (shipAmount === 0 && freeRadio) freeRadio.checked = true;
+  else if (shipAmount === 35) {
+    if (!localRadio?.checked && !rateRadio?.checked) {
+      if (localRadio) localRadio.checked = true;
+      else if (rateRadio) rateRadio.checked = true;
+    }
+  }
+
+  if (!box._merchShippingWired) {
+    box._merchShippingWired = true;
+    pickAll('input[name="ship-check"]', box).forEach((radio) => {
+      radio.addEventListener('change', () => {
+        let newShip = 0;
+        if (radio.id === 'local' || radio.id === 'rate') newShip = 35;
+        pending.set({ shipping: newShip });
+        const curDisc = pending.get().discount || 0;
+        const curSub = cart.lines().reduce((n, l) => n + l.price * l.qty, 0);
+        const newTotal = Math.max(0, curSub - curDisc + newShip);
+        const totalEl = pick('.total-order .total, .each-total-price', box);
+        if (totalEl) setText(totalEl, money(newTotal));
+      });
+    });
+  }
+
+  const finalTotal = Math.max(0, subtotal - discount + (shipAmount || 0));
+  const totalEl = pick('.total-order .total, .each-total-price', box);
+  if (totalEl) setText(totalEl, money(finalTotal));
+
+  const freeAbove = Number(STORE?.shipping?.freeAbove) || 70;
+  const left = Math.max(0, freeAbove - subtotal);
+  const progressP = pick('.notification-progress p', box);
+  if (progressP) {
+    if (left > 0) {
+      progressP.innerHTML = `Buy <span class="text-primary fw-bold">${money(left)}</span> more to get freeship`;
+    } else {
+      progressP.innerHTML = `Your order qualifies for <span class="text-primary fw-bold">Free Shipping</span>!`;
+    }
+  }
+  const progressBar = pick('.progress-cart .value', box);
+  if (progressBar) {
+    const pct = Math.min(100, Math.round((subtotal / freeAbove) * 100));
+    progressBar.style.width = pct + '%';
+    progressBar.setAttribute('data-progress', pct);
+  }
+}
+
 async function paintCartTotals(spec, lines) {
   const t = spec.totals || {};
   const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
@@ -4110,9 +4218,15 @@ async function paintCartTotals(spec, lines) {
     discount += Number(bxgy?.discountAmount ?? bxgy?.discount ?? 0) || 0;
   }
 
+  const finalTotal = Math.max(0, subtotal - discount + (p.shipping || 0));
+
+  if (THEME?.name === 'fashion') {
+    paintFashionCartTotals(subtotal, discount, p.shipping, finalTotal);
+  }
+
   pickAll(t.discount).forEach((el) => setText(el, discount ? '-' + money(discount) : money(0)));
   pickAll(t.shipping).forEach((el) => setText(el, p.shipping == null ? 'Calculated at checkout' : (p.shipping ? money(p.shipping) : 'Free')));
-  pickAll(t.total).forEach((el) => setText(el, money(Math.max(0, subtotal - discount + (p.shipping || 0)))));
+  pickAll(t.total).forEach((el) => setText(el, money(finalTotal)));
 }
 
 function wireCoupon(spec, rerender) {
@@ -4192,6 +4306,7 @@ pages.checkout = async () => {
 
   ensureCustomerFields(spec);
   paintCheckoutSummary(spec, lines);
+  wireCoupon(spec, () => paintCheckoutSummary(spec, cart.lines()));
   await prefillCustomer(spec);
   const paymentCfg = await paintPaymentOptions(spec);
   wireShippingQuote(spec, lines);
@@ -4222,6 +4337,70 @@ pages.checkout = async () => {
   });
 };
 
+function paintFashionCheckoutTotals(subtotal, discount, shipping, total) {
+  const box = pick('.box-your-order');
+  if (!box) return;
+
+  const listTotal = pick('.list-total', box);
+  if (listTotal) {
+    let subtotalItem = pick('.total-item-subtotal', listTotal);
+    if (!subtotalItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/subtotal/i.test(pick('span:first-child', li)?.textContent || '')) {
+          subtotalItem = li;
+          subtotalItem.classList.add('total-item-subtotal');
+          break;
+        }
+      }
+    }
+    if (!subtotalItem) {
+      subtotalItem = document.createElement('li');
+      subtotalItem.className = 'total-item lh-24 fw-medium total-item-subtotal';
+      subtotalItem.innerHTML = `<span>Subtotal</span><span>${money(subtotal)}</span>`;
+      listTotal.insertBefore(subtotalItem, listTotal.firstChild);
+    } else {
+      const valSpan = pick('span:last-child', subtotalItem);
+      if (valSpan) setText(valSpan, money(subtotal));
+    }
+
+    let shippingItem = pick('.total-item-shipping', listTotal);
+    if (!shippingItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/shipping/i.test(pick('span:first-child', li)?.textContent || '')) {
+          shippingItem = li;
+          shippingItem.classList.add('total-item-shipping');
+          break;
+        }
+      }
+    }
+    if (shippingItem) {
+      const valSpan = pick('span:last-child', shippingItem);
+      if (valSpan) setText(valSpan, shipping == null ? 'Free' : (shipping > 0 ? money(shipping) : 'Free'));
+    }
+
+    let discountItem = pick('.total-item-discount', listTotal);
+    if (!discountItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/discount/i.test(pick('span:first-child', li)?.textContent || '')) {
+          discountItem = li;
+          discountItem.classList.add('total-item-discount');
+          break;
+        }
+      }
+    }
+    if (discountItem) {
+      const valSpan = pick('span:last-child', discountItem);
+      if (valSpan) setText(valSpan, discount > 0 ? '-' + money(discount) : money(0));
+    }
+  }
+
+  const lastTotal = pick('.last-total', box);
+  if (lastTotal) {
+    const valSpan = pick('span:last-child', lastTotal);
+    if (valSpan) setText(valSpan, money(total));
+  }
+}
+
 function paintCheckoutSummary(spec, lines) {
   const s = spec.summary;
   const t = takeTemplate(s);
@@ -4238,9 +4417,14 @@ function paintCheckoutSummary(spec, lines) {
   const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
   const p = pending.get();
   const total = Math.max(0, subtotal - (p.discount || 0) + (p.shipping || 0));
+
+  if (THEME?.name === 'fashion') {
+    paintFashionCheckoutTotals(subtotal, p.discount || 0, p.shipping, total);
+  }
+
   const tt = spec.totals || {};
   pickAll(tt.subtotal).forEach((el) => setText(el, money(subtotal)));
-  pickAll(tt.shipping).forEach((el) => setText(el, p.shipping == null ? 'Calculated' : (p.shipping ? money(p.shipping) : 'Free')));
+  pickAll(tt.shipping).forEach((el) => setText(el, p.shipping == null ? 'Free' : (p.shipping ? money(p.shipping) : 'Free')));
   pickAll(tt.discount).forEach((el) => setText(el, p.discount ? '-' + money(p.discount) : money(0)));
   pickAll(tt.total).forEach((el) => setText(el, money(total)));
 
