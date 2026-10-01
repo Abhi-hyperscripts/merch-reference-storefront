@@ -2576,12 +2576,32 @@ const COLOR_PALETTE = {
   neon: '#39ff14',
   lavender: '#e6e6fa',
   burgundy: '#800020',
+  ivory: '#fffff0',
+  silver: '#c0c0c0',
+  'royal blue': '#2b4fa2',
+  denim: '#3b5b86',
+  mint: '#8fd9b6',
+  sand: '#dcc9a6',
+  stone: '#d2cabb',
+  coffee: '#4b352a',
+  peach: '#ffb997',
+  wine: '#722f37',
+  'red wine': '#6b2230',
+  turquoise: '#30bfc4',
+  coral: '#ff7f50',
+  cyan: '#06b6d4',
+  magenta: '#d946ef',
+  gold: '#ffd700',
 };
 
 function resolveColorSwatch(colorName) {
   if (!colorName) return '#e5e5e5';
   const clean = String(colorName).trim().toLowerCase();
   if (COLOR_PALETTE[clean]) return COLOR_PALETTE[clean];
+  if (typeof colourBackground === 'function') {
+    const bg = colourBackground(colorName);
+    if (bg) return bg;
+  }
   if (window.CSS?.supports?.('color', colorName)) return colorName;
   const parts = clean.split(/\s+/);
   if (parts.length > 1 && COLOR_PALETTE[parts[parts.length - 1]]) {
@@ -2899,18 +2919,9 @@ function renderVariantPickers({
 
       const swatch = document.createElement('span');
       swatch.className = 'img';
-      swatch.style.backgroundColor = resolveColorSwatch(color);
-
-      const img = document.createElement('img');
-      img.alt = color;
-      img.loading = 'lazy';
-      const cached = COLOR_IMAGE_CACHE.get(color.toLowerCase());
-      if (cached) {
-        img.src = cached;
-      } else {
-        img.style.display = 'none';
-      }
-      swatch.appendChild(img);
+      const swatchBg = resolveColorSwatch(color);
+      swatch.style.backgroundColor = swatchBg;
+      swatch.style.background = swatchBg;
       btn.appendChild(swatch);
 
       const tooltip = document.createElement('span');
@@ -2981,17 +2992,7 @@ function renderVariantPickers({
     if (initialOpt) applyOption(initialOpt);
   }
 
-  loadSampleColorImages(parsedList, p, () => {
-    colorValues.querySelectorAll('.color-btn, .color_btn').forEach((btn) => {
-      const c = btn.dataset.color;
-      const img = btn.querySelector('img');
-      const cached = COLOR_IMAGE_CACHE.get(c.toLowerCase());
-      if (img && cached) {
-        img.src = cached;
-        img.style.display = 'block';
-      }
-    });
-  });
+  loadSampleColorImages(parsedList, p);
 }
 
 async function paintQuickVariants(panel, p) {
