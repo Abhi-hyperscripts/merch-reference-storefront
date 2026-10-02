@@ -520,23 +520,20 @@ function writeCart(lines) {
 export const cart = {
   lines: () => readCart(),
   apiLines: () => readCart().map((l) => ({ itemId: l.itemId, qty: l.qty })),
-  count: () => readCart().length,
-  totalUnits: () => readCart().reduce((n, l) => n + l.qty, 0),
+  count: () => readCart().reduce((n, l) => n + l.qty, 0),
   localSubtotal: () => readCart().reduce((n, l) => n + (Number(l.price) || 0) * l.qty, 0),
   onChange: (fn) => { cartListeners.add(fn); return () => cartListeners.delete(fn); },
 
   add(product, qty = 1) {
     const lines = readCart();
-    const pid = String(product.id || product.itemId || product._id || '');
-    if (!pid) return;
-    const found = lines.find((l) => String(l.itemId) === pid);
+    const found = lines.find((l) => l.itemId === product.id);
     if (found) found.qty = Math.min(99, found.qty + qty);
     else lines.push({
-      itemId: pid,
+      itemId: product.id,
       qty: Math.min(99, Math.max(1, qty)),
-      name: product.name || 'Product',
-      price: Number(product.price) || 0,
-      image: (product.imageUrls && product.imageUrls[0]) || product.image || '',
+      name: product.name,
+      price: product.price,
+      image: (product.imageUrls && product.imageUrls[0]) || '',
     });
     writeCart(lines);
   },
@@ -544,16 +541,12 @@ export const cart = {
     const n = Math.floor(Number(qty));
     if (!Number.isFinite(n) || n < 1) return this.remove(itemId);
     const lines = readCart();
-    const sid = String(itemId);
-    const found = lines.find((l) => String(l.itemId) === sid);
+    const found = lines.find((l) => l.itemId === itemId);
     if (!found) return;
     found.qty = Math.min(99, n);
     writeCart(lines);
   },
-  remove(itemId) {
-    const sid = String(itemId);
-    writeCart(readCart().filter((l) => String(l.itemId) !== sid));
-  },
+  remove(itemId) { writeCart(readCart().filter((l) => l.itemId !== itemId)); },
   clear() { writeCart([]); },
 
   /* Refresh the cached names and prices from the store, and drop anything the
@@ -564,14 +557,14 @@ export const cart = {
     let fresh = [];
     try { fresh = await api.products(lines.map((l) => l.itemId)); }
     catch { return lines; }       // offline: keep what we have rather than emptying the basket
-    const byId = new Map((fresh || []).map((p) => [String(p.id), p]));
+    const byId = new Map((fresh || []).map((p) => [p.id, p]));
     const kept = lines
+      .filter((l) => byId.has(l.itemId))
       .map((l) => {
-        const p = byId.get(String(l.itemId));
-        if (!p) return l; // Always keep item if API doesn't return it
+        const p = byId.get(l.itemId);
         return { ...l, name: p.name, price: p.price, image: (p.imageUrls && p.imageUrls[0]) || l.image, product: p };
       });
-    writeCart(kept.map(({ product, ...l }) => l));
+    if (kept.length !== lines.length) writeCart(kept.map(({ product, ...l }) => l));
     return kept;
   },
 };
@@ -902,29 +895,6 @@ function applyField(el, f, data, ctx, name) {
   if (f.on) for (const [evt, handler] of Object.entries(f.on)) {
     el.addEventListener(evt, (e) => handler(e, data, ctx));
   }
-}
-
-function openCartSidebar() {
-  const modalEl = document.getElementById('shoppingCart');
-  if (!modalEl) return;
-  try { paintMiniCart(); } catch {}
-  try {
-    if (window.bootstrap?.Modal) {
-      const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
-      modal.show();
-      return;
-    }
-  } catch {}
-  try {
-    if (window.$ && typeof window.$.fn?.modal === 'function') {
-      window.$(modalEl).modal('show');
-      return;
-    }
-  } catch {}
-  modalEl.classList.add('show');
-  modalEl.style.display = 'block';
-  modalEl.removeAttribute('aria-hidden');
-  modalEl.setAttribute('aria-modal', 'true');
 }
 
 /* The theme's own button, made to do the thing it says. We never change what
@@ -1404,7 +1374,7 @@ const THEMES = {
 THEMES.electronic = {
   name: 'electronic',
   pages: {
-    home: 'index.html', listing: 'shop-left-sidebar.html', product: 'product-detail.html',
+    home: 'index.html', listing: 'shop-default-grid.html', product: 'product-detail.html',
     cart: 'shopping-cart.html', checkout: 'checkout.html', order: 'order-received.html',
     /* `payment-confirmation.html` is this theme's PRE-payment screen — demo
        card digits and a "Confirm Payment" button. Landing a paid shopper on
@@ -1423,11 +1393,7 @@ THEMES.electronic = {
      merchant's number vanished from the header to make room for a sale. A
      theme without the slot simply does not show the bar. */
   qtyInput: '.wg-quantity .quantity-product|.quantity-product',
-  header: {
-    cartCount: '.nav-cart .count-box|.count-box',
-    wishCount: '.nav-wishlist .count-box',
-    cartTotal: '.sub-total-price|.tf-totals-total-value',
-  },
+  header: { cartCount: '.nav-cart .count-box|.count-box', cartTotal: '.sub-total-price|.tf-totals-total-value' },
   resultCount: '.count-text|.wrapper-control-shop .count-text',
 
   banners: {
@@ -1442,20 +1408,13 @@ THEMES.electronic = {
     },
   },
   categories: {
-    container: '.tf-sw-categories .swiper-wrapper',
+    container: null,
     card: '.collection-circle',
     fields: {
-      link:  { sel: 'a.img-style', attr: 'href', value: (c) => pageUrl('listing', { category: c?.name || c }) },
-      image: {
-        sel: 'a.img-style img',
-        attr: 'src',
-        value: (c, ctx) => {
-          const idx = typeof ctx === 'number' ? ctx : (ctx?.index ?? 0);
-          return mediaUrl(c?.imageUrl || '') || (`images/collections/collection-circle/cls-electronic${(Number(idx) % 11) + 1}.jpg`);
-        },
-      },
-      titleLink: { sel: 'a.cls-title', attr: 'href', value: (c) => pageUrl('listing', { category: c?.name || c }) },
-      name:  { sel: '.cls-title .text, .cls-title .title, .cls-title', text: (c) => c?.name || c },
+      link:  { sel: 'a.img-style', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+      image: { sel: 'a.img-style img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
+      titleLink: { sel: 'a.cls-title', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+      name:  { sel: '.cls-title .text', text: (c) => c.name },
     },
   },
 
@@ -1472,7 +1431,7 @@ THEMES.electronic = {
       mrp:   { sel: '.card-product-info .compare-at-price', text: mrpText, hideWhen: hasNoMrp },
       badge: { sel: '.on-sale-item|.badges-on-sale', text: discountText, hideWhen: hasNoMrp },
       sizes: { sel: '.size-list|.variant-box', dropWhen: (p) => !(p.variantCount > 1) },
-      add:   { sel: '.btn-main-product|.btn-add-to-cart|.bottom .box-icon', action: 'add' },
+      add:   { sel: '.btn-main-product|.btn-add-to-cart', action: 'add' },
       wish:  { sel: '.box-icon.wishlist', action: 'wishlist' },
       compare: { sel: '.box-icon.compare', action: 'compare' },
     },
@@ -1512,9 +1471,8 @@ THEMES.electronic = {
       remove:   { sel: '.remove-cart .remove|.remove', action: 'remove' },
     },
     totals: {
-      subtotal: '.subtotal .total|.tf-cart-totals-discounts .tf-totals-total-value|.total-value',
-      discount: '.discount .total',
-      total: '.total-order .total|.tf-cart-totals-discounts .tf-totals-total-value|.total-value',
+      subtotal: '.tf-cart-totals-discounts .tf-totals-total-value|.total-value',
+      total: '.tf-cart-totals-discounts .tf-totals-total-value|.total-value',
     },
     coupon: { input: '.ip-discount-code input|input[placeholder*="iscount"]', button: '.ip-discount-code button|.tf-btn' },
     checkoutBtn: 'a[href*="checkout"]',
@@ -1559,7 +1517,7 @@ THEMES.electronic = {
     /* `.btn-checkout` exists in neither of this vendor's templates — the
        control is an <a> reading "Check Out" or "Pay Now". Matched by class
        where we can and by its WORDS where we cannot; see findPlaceButton. */
-    placeBtn: '.form-payment button.tf-btn|.tf-btn.btn-fill|.sidebar-checkout-content .tf-btn',
+    placeBtn: '.tf-btn.btn-fill|.sidebar-checkout-content .tf-btn',
   },
 
   blog: {
@@ -2781,6 +2739,7 @@ function paintQuickViewExtras(panel, p) {
 let quickViewProduct = null;
 
 function wireQuickView() {
+  if (THEME?.name === 'fashion') return wireQuickViewFashion();
   /* A theme can ship more than one of these — fashion has a Quick View
      offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
      the shopper opens has to be the product they clicked. */
@@ -2827,14 +2786,9 @@ function wireQuickView() {
     if (/wish/i.test(add.className)) return;
     e.preventDefault();
     const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
+    if (quickViewProduct.availability === 'out') return notify('That one is sold out.', 'error');
     cart.add(quickViewProduct, qty);
-    try {
-      if (window.bootstrap?.Modal) {
-        window.bootstrap.Modal.getInstance(modal)?.hide();
-      }
-    } catch {}
-    openCartSidebar();
-    notify((quickViewProduct.name || 'Item') + ' added to your cart.', 'success');
+    notify(quickViewProduct.name + ' added to your cart.', 'success');
     track('add_to_cart', { itemId: quickViewProduct.id, qty, via: 'quickview' });
   });
 }
@@ -2849,8 +2803,6 @@ const pages = {};
 pages.home = async () => {
   let data = null;
   try { data = await api.homepage(); } catch (e) { warn('homepage', e); }
-
-  try { await paintBanners(data); } catch (e) { warn('paintBanners', e); }
 
   /* Look up the containers AFTER the fetch, never before it.
 
@@ -2906,9 +2858,11 @@ pages.home = async () => {
     } catch (e) { warn(e); }
   }
 
-  await paintCategoryTiles(data);
+  paintBanners(data);
+  paintCategoryTiles(data);
+  /* The electronic theme's home tabs — gated as its own copy gated them. */
   if (THEME?.name === 'electronic') {
-    await paintElectronicHomeTabs();
+    paintElectronicHomeTabs().catch((e) => warn('electronic home tabs', e));
   }
   await renderRecentlyViewed(rails[rails.length - 1]);
   await paintBlogStrip(4);
@@ -3103,6 +3057,17 @@ async function paintBanners(data) {
 
 /* "Browse categories" — { slug, name, count, imageUrl }. Every theme ships a
    strip of these pointing at demo pages; each one becomes a real filter. */
+/* ⭐ The electronic theme ships eleven circular category images and falls back to
+   them when a category has no picture of its own. Those files exist ONLY in that
+   theme, so applying the fallback everywhere made fashion and grocery request
+   `cls-electronic*.jpg` and 404 eleven times each. Electronic keeps its fallback;
+   the others leave the template's own image alone. */
+function categoryTileFallback(i) {
+  return THEME?.name === 'electronic'
+    ? `images/collections/collection-circle/cls-electronic${(i % 11) + 1}.jpg`
+    : '';
+}
+
 async function paintCategoryTiles(data) {
   let cats = (data?.sections || [])
     .filter((x) => x.type === 'browseCategories')
@@ -3112,7 +3077,7 @@ async function paintCategoryTiles(data) {
     if (raw?.length) {
       cats = raw.map((c, i) => {
         const name = typeof c === 'string' ? c : c.name;
-        const img = (typeof c === 'object' && c.imageUrl) ? c.imageUrl : `images/collections/collection-circle/cls-electronic${(i % 11) + 1}.jpg`;
+        const img = (typeof c === 'object' && c.imageUrl) ? c.imageUrl : categoryTileFallback(i);
         return { name, slug: name, imageUrl: img };
       });
     }
@@ -3130,90 +3095,17 @@ async function paintCategoryTiles(data) {
       fillFields(node, spec.fields, c, { node, index: i });
       const img = node.querySelector('a.img-style img, img');
       if (img) {
-        const src = c.imageUrl || `images/collections/collection-circle/cls-electronic${(i % 11) + 1}.jpg`;
-        img.src = src;
-        img.setAttribute('data-src', src);
-        img.classList.remove('lazyload');
-        img.classList.add('lazyloaded');
+        const src = c.imageUrl || categoryTileFallback(i);
+        if (src) {
+          img.src = src;
+          img.setAttribute('data-src', src);
+          img.classList.remove('lazyload');
+          img.classList.add('lazyloaded');
+        }
       }
     });
   }
   refreshSwipers();
-}
-
-async function paintElectronicHomeTabs() {
-  const tabList = pick('.tab-product-v3');
-  if (!tabList) return;
-
-  const tabLinks = pickAll('a[data-bs-toggle="tab"]', tabList);
-  if (!tabLinks.length) return;
-
-  let allProducts = [];
-  try {
-    const catalogRes = await api.catalog({ pageSize: 24 });
-    allProducts = Array.isArray(catalogRes) ? catalogRes : catalogRes?.products || [];
-  } catch (e) {
-    warn('all products tab fetch', e);
-  }
-
-  // 1. Paint #AllProducts tab
-  const allPane = document.getElementById('AllProducts');
-  if (allPane && allProducts.length) {
-    const rail = pick('.swiper-wrapper', allPane);
-    if (rail) {
-      renderProducts(allProducts.slice(0, 8), THEME.listing, rail);
-      hydrated.add(rail);
-    }
-  }
-
-  // 2. Fetch categories for remaining tabs
-  let cats = [];
-  try { cats = await getCategories(); } catch { cats = []; }
-
-  // Map remaining tabs: tabLinks[1], tabLinks[2], tabLinks[3]
-  const remainingTabs = tabLinks.slice(1);
-  for (let i = 0; i < remainingTabs.length; i++) {
-    const tabLink = remainingTabs[i];
-    const targetId = (tabLink.getAttribute('href') || '').replace('#', '');
-    const targetPane = targetId ? document.getElementById(targetId) : null;
-    if (!targetPane) continue;
-
-    const cat = cats[i];
-    const rail = pick('.swiper-wrapper', targetPane);
-    if (!rail) continue;
-
-    let tabProducts = [];
-    if (cat) {
-      const catName = typeof cat === 'string' ? cat : cat.name;
-      tabLink.textContent = catName;
-      try {
-        const catRes = await api.catalog({ category: catName, pageSize: 8 });
-        tabProducts = Array.isArray(catRes) ? catRes : catRes?.products || [];
-      } catch (e) {
-        warn('tab category catalog', e);
-      }
-    }
-
-    // If category has no products or not enough, take a distinct non-overlapping slice from allProducts
-    if (!tabProducts.length && allProducts.length) {
-      const startIdx = ((i + 1) * 4) % allProducts.length;
-      tabProducts = allProducts.slice(startIdx, startIdx + 8);
-      if (tabProducts.length < 4) {
-        tabProducts = allProducts.slice(0, 8);
-      }
-    }
-
-    if (tabProducts.length) {
-      renderProducts(tabProducts, THEME.listing, rail);
-      hydrated.add(rail);
-    }
-  }
-
-  tabLinks.forEach((link) => {
-    link.addEventListener('shown.bs.tab', () => {
-      refreshSwipers();
-    });
-  });
 }
 
 /* Blog posts on pages outside the blog archive - e.g. the home page's
@@ -3339,14 +3231,6 @@ pages.listing = async () => {
     wireQuickView();
     const total = await paintResultCount(items, state, pageSize);
     renderPagination(total, state, run, pageSize);
-
-    // Dynamic page title and breadcrumbs for listing
-    const pageTitleHeading = pick('.page-title .heading');
-    const breadcrumbLast = pick('.breadcrumbs li:last-child, .tf-breadcrumb-list span:last-child');
-    const titleText = state.category || state.q || (state.collection ? state.collection : 'All Products');
-    if (pageTitleHeading) setText(pageTitleHeading, titleText);
-    if (breadcrumbLast) setText(breadcrumbLast, titleText);
-
     THEME.reinit?.();
   };
 
@@ -3970,38 +3854,16 @@ function wirePriceFilter(state, run) {
   const apply = pick('.price-input-area button, .filter-value-min-max button, .price-filter button, .filter-btn');
   const from = pick('.price-range .from|#slider-range-value1|input[name="min_price"]|#min');
   const to = pick('.price-range .to|#slider-range-value2|input[name="max_price"]|#max');
-  if (apply && (from || to)) {
-    apply.addEventListener('click', (e) => {
-      e.preventDefault();
-      const num = (el) => { const n = Number(String(el?.textContent || el?.value || '').replace(/[^\d.]/g, '')); return Number.isFinite(n) && n > 0 ? n : ''; };
-      state.minPrice = num(from);
-      state.maxPrice = num(to);
-      state.page = 1;
-      pushState(state);
-      run();
-    });
-  }
-
-  /* noUiSlider on #price-value-range (electronic & fashion themes) */
-  const sliderEl = document.getElementById('price-value-range');
-  if (sliderEl) {
-    const bindSlider = () => {
-      if (sliderEl.noUiSlider && !sliderEl._merchBound) {
-        sliderEl._merchBound = true;
-        sliderEl.noUiSlider.on('change', (values) => {
-          const min = Math.round(Number(values[0]));
-          const max = Math.round(Number(values[1]));
-          state.minPrice = min > 0 ? min : '';
-          state.maxPrice = max > 0 ? max : '';
-          state.page = 1;
-          pushState(state);
-          run();
-        });
-      }
-    };
-    bindSlider();
-    onThemeReady(bindSlider);
-  }
+  if (!apply || (!from && !to)) return;
+  apply.addEventListener('click', (e) => {
+    e.preventDefault();
+    const num = (el) => { const n = Number(String(el?.textContent || el?.value || '').replace(/[^\d.]/g, '')); return Number.isFinite(n) && n > 0 ? n : ''; };
+    state.minPrice = num(from);
+    state.maxPrice = num(to);
+    state.page = 1;
+    pushState(state);
+    run();
+  });
 }
 
 /* /api/catalog answers a plain array with no total, so the honest number for
@@ -4098,18 +3960,6 @@ function wireSortSelects(onSort) {
       onSort(mapped);
     });
   });
-}
-
-function categoryIcon(name = '') {
-  const n = String(name).toLowerCase();
-  if (n.includes('phone') || n.includes('mobile')) return 'icon-smartphone';
-  if (n.includes('laptop') || n.includes('computer') || n.includes('pc')) return 'icon-laptop';
-  if (n.includes('camera') || n.includes('photo')) return 'icon-camera';
-  if (n.includes('tv') || n.includes('video') || n.includes('display')) return 'icon-tv';
-  if (n.includes('headphone') || n.includes('ear') || n.includes('sound')) return 'icon-headphones';
-  if (n.includes('audio') || n.includes('speaker')) return 'icon-audio';
-  if (n.includes('watch') || n.includes('wearable')) return 'icon-watch';
-  return 'icon-laptop';
 }
 
 let headerCategoriesPainted = false;
@@ -4274,6 +4124,7 @@ pages.product = async () => {
   await paintVariants(spec, p);
   paintProductUniques(p);
   paintProductTabs(p);
+  /* Both no-op without the electronic theme's own selectors. */
   paintStickyAtcBar(p);
   wireProductDetailCartFlow(p);
   await paintReviews(p);
@@ -4285,448 +4136,8 @@ pages.product = async () => {
   api.recordView(p.id, sessionId()).catch(() => {});
   track('product_view', { itemId: p.id });
   THEME.reinit?.();
-  onThemeReady(() => {
-    paintPriceButtons(p);
-    paintStickyAtcBar(p);
-    wireProductDetailCartFlow(p);
-  });
+  onThemeReady(() => paintPriceButtons(p));
 };
-
-async function paintStickyAtcBar(p) {
-  const bar = pick('.tf-sticky-btn-atc');
-  if (!bar || !p) return;
-
-  // 1. Product Image
-  const img = pick('.tf-sticky-atc-product .image img', bar);
-  if (img) {
-    const src = mediaUrl((p.imageUrls || [])[0] || p.image || '');
-    if (src) {
-      img.src = src;
-      img.setAttribute('data-src', src);
-      img.removeAttribute('srcset');
-      img.classList.remove('lazyload', 'lazyloading');
-      img.classList.add('lazyloaded');
-    }
-    img.alt = p.name || '';
-  }
-
-  // 2. Title & Meta & Price
-  const titleEl = pick('.tf-sticky-atc-title, .tf-sticky-atc-product .content .text-title:first-child', bar);
-  if (titleEl) setText(titleEl, p.name || '');
-
-  const metaEl = pick('.tf-sticky-atc-meta, .tf-sticky-atc-product .content .text-caption-1', bar);
-  if (metaEl) setText(metaEl, p.category || '');
-
-  const priceEl = pick('.tf-sticky-atc-price, .tf-sticky-atc-product .content .text-title:last-child', bar);
-  if (priceEl && priceEl !== titleEl) setText(priceEl, money(p.price));
-
-  // 3. Size dropdown / variants
-  const sizeBox = pick('.tf-sticky-atc-size', bar);
-  let selectedVariant = null;
-  /* ⭐ The options come from /api/products/{id}/variants — they are NOT on the product. This gated on
-     `p.variants`, a field the catalogue has never returned, so `hasVariants` was false for every
-     product and the sticky bar's size dropdown was hidden on the whole catalogue. The main product
-     painter had been calling the endpoint all along; this one simply never did. */
-  let variants = Array.isArray(p.variants) ? p.variants : [];
-  if (!variants.length) {
-    try {
-      const group = await api.variants(p.id);
-      variants = group?.options || [];
-    } catch { variants = []; }
-  }
-  const hasVariants = variants.length > 1;
-
-  if (sizeBox) {
-    if (!hasVariants) {
-      show(sizeBox, false);
-      sizeBox.style.setProperty('display', 'none', 'important');
-    } else {
-      show(sizeBox, true);
-      sizeBox.style.display = '';
-      const valLabel = pick('.text-sort-value', sizeBox);
-      const menu = pick('.dropdown-menu', sizeBox);
-      if (menu) {
-        menu.replaceChildren();
-        variants.forEach((v, idx) => {
-          const item = document.createElement('div');
-          item.className = 'select-item' + (idx === 0 ? ' active' : '');
-          const label = v.label || v.title || v.name || ('Option ' + (idx + 1));
-          item.innerHTML = `<span class="text-value-item">${escapeHtml(label)}</span>`;
-          item.addEventListener('click', (e) => {
-            e.preventDefault();
-            selectedVariant = v;
-            p._selectedVariant = v;
-            if (valLabel) setText(valLabel, label);
-            pickAll('.select-item', menu).forEach((si) => si.classList.remove('active'));
-            item.classList.add('active');
-            if (v.price != null && priceEl && priceEl !== titleEl) setText(priceEl, money(v.price));
-            if (v.imageUrl && img) {
-              const vsrc = mediaUrl(v.imageUrl);
-              img.src = vsrc;
-              img.setAttribute('data-src', vsrc);
-            }
-          });
-          menu.appendChild(item);
-        });
-        const cur = variants.find((v) => v.current) || variants[0];
-        if (cur) {
-          selectedVariant = cur;
-          p._selectedVariant = cur;
-          if (valLabel) setText(valLabel, cur.label || cur.title || cur.name || '');
-        }
-      }
-    }
-  }
-}
-
-function wireProductDetailCartFlow(p) {
-  const wrap = pick('.tf-product-info-wrap');
-  if (!wrap || !p) return;
-
-  const bar = pick('.tf-sticky-btn-atc');
-
-  // Quantity containers
-  const mainQtyBox = pick('.tf-product-info-quantity', wrap);
-  const stickyQtyBox = bar ? pick('.tf-sticky-atc-quantity', bar) : null;
-
-  // Quantity inputs and buttons
-  const mainQtyInput = pick('.tf-product-info-quantity .quantity-product, .tf-product-info-quantity input', wrap);
-  const mainMinus = pick('.tf-product-info-quantity .btn-decrease, .tf-product-info-quantity .minus-btn, .tf-product-info-quantity .btn-quantity:first-child', wrap);
-  const mainPlus = pick('.tf-product-info-quantity .btn-increase, .tf-product-info-quantity .plus-btn, .tf-product-info-quantity .btn-quantity:last-child', wrap);
-  const stickyQtyInput = bar ? pick('.tf-sticky-atc-quantity input', bar) : null;
-  const stickyMinus = bar ? pick('.tf-sticky-atc-quantity .minus-btn, .tf-sticky-atc-quantity .btn-decrease, .tf-sticky-atc-quantity .btn-quantity:first-child', bar) : null;
-  const stickyPlus = bar ? pick('.tf-sticky-atc-quantity .plus-btn, .tf-sticky-atc-quantity .btn-increase, .tf-sticky-atc-quantity .btn-quantity:last-child', bar) : null;
-
-  // Main action buttons
-  const mainBtn = pick('.tf-product-info-by-btn .btn-add-to-cart, .tf-product-info-by-btn .btn-style-2', wrap);
-  const secondaryBuyBtn = pick('.tf-product-info-by-btn .btn-buy-now, .tf-product-info-by-btn .btn-style-3, .btn-buy-now', wrap);
-
-  // Sticky action buttons
-  const stickyAddBtn = bar ? pick('.tf-sticky-atc-btns .btn-add-to-cart', bar) : null;
-  let stickyBuyBtn = bar ? pick('.tf-sticky-atc-btns .btn-sticky-buy', bar) : null;
-
-  // If stickyBuyBtn does not exist yet, create it dynamically
-  if (bar && !stickyBuyBtn) {
-    const btnsContainer = pick('.tf-sticky-atc-btns', bar);
-    if (btnsContainer) {
-      btnsContainer.classList.add('d-flex', 'gap-10');
-      stickyBuyBtn = document.createElement('a');
-      stickyBuyBtn.className = 'tf-btn btn-fill radius-4 btn-sticky-buy flex-grow-1';
-      stickyBuyBtn.href = pageUrl('checkout');
-      stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
-      btnsContainer.appendChild(stickyBuyBtn);
-    }
-  }
-
-  // Remove Bootstrap modal triggers to prevent unexpected popups
-  [mainBtn, secondaryBuyBtn, stickyAddBtn, stickyBuyBtn].forEach((btn) => {
-    if (btn) {
-      btn.removeAttribute('data-bs-toggle');
-      btn.removeAttribute('data-bs-target');
-    }
-  });
-
-  // Detach jQuery click handlers if present
-  if (window.$) {
-    if (mainQtyBox) window.$(mainQtyBox).find('.btn-quantity, .btn-decrease, .btn-increase, input').off('click change input');
-    if (stickyQtyBox) window.$(stickyQtyBox).find('.btn-quantity, .minus-btn, .plus-btn, input').off('click change input');
-    if (mainBtn) window.$(mainBtn).off('click');
-    if (secondaryBuyBtn) window.$(secondaryBuyBtn).off('click');
-    if (stickyAddBtn) window.$(stickyAddBtn).off('click');
-    if (stickyBuyBtn) window.$(stickyBuyBtn).off('click');
-  }
-
-  const getLine = () => {
-    const lines = cart.lines();
-    const pid = String(p?.id || p?.itemId || p?._id || '');
-    if (pid) {
-      const found = lines.find((l) => String(l.itemId) === pid);
-      if (found) return found;
-    }
-    if (p?.name) {
-      const found = lines.find((l) => l.name && l.name.toLowerCase() === p.name.toLowerCase());
-      if (found) return found;
-    }
-    return null;
-  };
-
-  const getItemId = () => {
-    const line = getLine();
-    if (line && line.itemId) return String(line.itemId);
-    return String(p?.id || p?.itemId || p?._id || '');
-  };
-
-  function getProductToAdd() {
-    return p._selectedVariant ? { ...p, price: p._selectedVariant.price ?? p.price, variant: p._selectedVariant } : p;
-  }
-
-  function updatePriceDisplay(qty) {
-    const toAdd = getProductToAdd();
-    const unitPrice = Number(toAdd.price) || 0;
-    const total = unitPrice * qty;
-    pickAll('.tf-qty-price.total-price', wrap).forEach((el) => {
-      setText(el, money(total));
-    });
-  }
-
-  function syncUI() {
-    const line = getLine();
-    const inCart = !!line;
-    const toAdd = getProductToAdd();
-
-    if (inCart) {
-      // --- IN CART STATE ---
-      const cartQty = Number(line.qty) || 1;
-
-      // 1. Show Steppers synced with cart quantity
-      if (mainQtyBox) {
-        mainQtyBox.style.removeProperty('display');
-        mainQtyBox.style.setProperty('display', 'block', 'important');
-      }
-      if (stickyQtyBox) {
-        stickyQtyBox.style.removeProperty('display');
-        stickyQtyBox.style.setProperty('display', 'flex', 'important');
-      }
-      if (mainQtyInput) mainQtyInput.value = cartQty;
-      if (stickyQtyInput) stickyQtyInput.value = cartQty;
-      updatePriceDisplay(cartQty);
-
-      // 2. Hide "Add to cart", Show "Buy Now"
-      if (secondaryBuyBtn) {
-        if (mainBtn) mainBtn.style.setProperty('display', 'none', 'important');
-        secondaryBuyBtn.style.removeProperty('display');
-        secondaryBuyBtn.style.display = '';
-        secondaryBuyBtn.style.flex = '1';
-        secondaryBuyBtn.innerHTML = `<span class="text">Buy Now</span>`;
-        secondaryBuyBtn.setAttribute('href', pageUrl('checkout'));
-        secondaryBuyBtn.onclick = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          location.href = pageUrl('checkout');
-        };
-      } else if (mainBtn) {
-        mainBtn.style.removeProperty('display');
-        mainBtn.style.display = '';
-        mainBtn.style.flex = '1';
-        mainBtn.innerHTML = `<span class="text">Buy Now</span>`;
-        mainBtn.setAttribute('href', pageUrl('checkout'));
-        mainBtn.onclick = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          location.href = pageUrl('checkout');
-        };
-      }
-
-      // 3. Sticky Bar: Hide Add to Cart, Show Buy Now full width
-      if (stickyAddBtn) {
-        stickyAddBtn.style.setProperty('display', 'none', 'important');
-      }
-      if (stickyBuyBtn) {
-        stickyBuyBtn.style.removeProperty('display');
-        stickyBuyBtn.style.display = '';
-        stickyBuyBtn.classList.remove('flex-grow-1');
-        stickyBuyBtn.classList.add('w-100');
-        stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
-        stickyBuyBtn.setAttribute('href', pageUrl('checkout'));
-        stickyBuyBtn.onclick = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          location.href = pageUrl('checkout');
-        };
-      }
-    } else {
-      // --- NOT IN CART STATE ---
-      // 1. HIDE Quantity Steppers ("by default one nahi aana chahiye")
-      if (mainQtyBox) mainQtyBox.style.setProperty('display', 'none', 'important');
-      if (stickyQtyBox) stickyQtyBox.style.setProperty('display', 'none', 'important');
-      if (mainQtyInput) mainQtyInput.value = '1';
-      if (stickyQtyInput) stickyQtyInput.value = '1';
-      updatePriceDisplay(1);
-
-      // 2. Main Button is "Add to cart"
-      if (mainBtn) {
-        mainBtn.style.removeProperty('display');
-        mainBtn.style.display = '';
-        mainBtn.style.flex = '1';
-        mainBtn.innerHTML = `<span class="text">Add to cart</span>`;
-        mainBtn.setAttribute('href', 'javascript:void(0);');
-        mainBtn.onclick = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const itemToAdd = getProductToAdd();
-          cart.add(itemToAdd, 1);
-          openCartSidebar();
-          notify((itemToAdd.name || 'Item') + ' added to your cart.', 'success');
-          track('add_to_cart', { itemId: itemToAdd.id, qty: 1 });
-          syncUI();
-        };
-      }
-
-      // 3. Secondary Button is "Buy Now" -> adds 1 and goes directly to checkout
-      if (secondaryBuyBtn) {
-        secondaryBuyBtn.style.removeProperty('display');
-        secondaryBuyBtn.style.display = '';
-        secondaryBuyBtn.style.flex = '1';
-        secondaryBuyBtn.innerHTML = `<span class="text">Buy Now</span>`;
-        secondaryBuyBtn.setAttribute('href', pageUrl('checkout'));
-        secondaryBuyBtn.onclick = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const itemToAdd = getProductToAdd();
-          cart.add(itemToAdd, 1);
-          location.href = pageUrl('checkout');
-        };
-      }
-
-      // 4. Sticky Bar: Show Add to Cart AND Buy Now side by side
-      if (stickyAddBtn) {
-        stickyAddBtn.style.removeProperty('display');
-        stickyAddBtn.style.display = '';
-        stickyAddBtn.classList.remove('w-100');
-        stickyAddBtn.classList.add('flex-grow-1');
-        stickyAddBtn.innerHTML = '<span class="text text-btn-uppercase">Add To Cart</span>';
-        stickyAddBtn.setAttribute('href', 'javascript:void(0);');
-        stickyAddBtn.onclick = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const itemToAdd = getProductToAdd();
-          cart.add(itemToAdd, 1);
-          openCartSidebar();
-          notify((itemToAdd.name || 'Item') + ' added to your cart.', 'success');
-          track('add_to_cart', { itemId: itemToAdd.id, qty: 1 });
-          syncUI();
-        };
-      }
-      if (stickyBuyBtn) {
-        stickyBuyBtn.style.removeProperty('display');
-        stickyBuyBtn.style.display = '';
-        stickyBuyBtn.classList.remove('w-100');
-        stickyBuyBtn.classList.add('flex-grow-1');
-        stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
-        stickyBuyBtn.setAttribute('href', pageUrl('checkout'));
-        stickyBuyBtn.onclick = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const itemToAdd = getProductToAdd();
-          cart.add(itemToAdd, 1);
-          location.href = pageUrl('checkout');
-        };
-      }
-    }
-  }
-
-  function handleIncrease(e) {
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-    }
-    const line = getLine();
-    const itemId = getItemId();
-    if (!itemId) return;
-
-    if (line) {
-      const cur = Number(line.qty) || 1;
-      cart.setQty(itemId, Math.min(99, cur + 1));
-    } else {
-      const toAdd = getProductToAdd();
-      cart.add(toAdd, 1);
-    }
-    syncUI();
-  }
-
-  function handleDecrease(e) {
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-    }
-    const line = getLine();
-    const itemId = getItemId();
-    if (!itemId) return;
-
-    const cur = line ? (Number(line.qty) || 1) : 1;
-    if (cur > 1) {
-      cart.setQty(itemId, cur - 1);
-    } else {
-      // Dropping to 0 -> remove from cart and notify
-      cart.remove(itemId);
-      notify((p.name || line?.name || 'Item') + ' removed from your cart.', 'info');
-    }
-    syncUI();
-  }
-
-  function handleInputChange(e) {
-    const val = parseInt(e.target.value, 10);
-    const itemId = getItemId();
-    if (!itemId) return;
-    if (isNaN(val) || val <= 0) {
-      cart.remove(itemId);
-      notify((p.name || 'Item') + ' removed from your cart.', 'info');
-      syncUI();
-    } else {
-      const clamped = Math.min(99, val);
-      e.target.value = clamped;
-      cart.setQty(itemId, clamped);
-      syncUI();
-    }
-  }
-
-  // Bind direct onclick on buttons
-  if (mainMinus) mainMinus.onclick = handleDecrease;
-  if (mainPlus) mainPlus.onclick = handleIncrease;
-  if (stickyMinus) stickyMinus.onclick = handleDecrease;
-  if (stickyPlus) stickyPlus.onclick = handleIncrease;
-
-  // Bind delegated onclick on containers
-  if (mainQtyBox) {
-    mainQtyBox.onclick = (e) => {
-      const dec = e.target.closest('.btn-decrease, .minus-btn, .btn-quantity:first-child');
-      if (dec && (dec.textContent.trim() === '-' || dec.classList.contains('btn-decrease') || dec.classList.contains('minus-btn'))) {
-        handleDecrease(e);
-        return;
-      }
-      const inc = e.target.closest('.btn-increase, .plus-btn, .btn-quantity:last-child');
-      if (inc && (inc.textContent.trim() === '+' || inc.classList.contains('btn-increase') || inc.classList.contains('plus-btn'))) {
-        handleIncrease(e);
-        return;
-      }
-    };
-  }
-
-  if (stickyQtyBox) {
-    stickyQtyBox.onclick = (e) => {
-      const dec = e.target.closest('.minus-btn, .btn-decrease, .btn-quantity:first-child');
-      if (dec && (dec.textContent.trim() === '-' || dec.classList.contains('minus-btn') || dec.classList.contains('btn-decrease'))) {
-        handleDecrease(e);
-        return;
-      }
-      const inc = e.target.closest('.plus-btn, .btn-increase, .btn-quantity:last-child');
-      if (inc && (inc.textContent.trim() === '+' || inc.classList.contains('plus-btn') || inc.classList.contains('btn-increase'))) {
-        handleIncrease(e);
-        return;
-      }
-    };
-  }
-
-  if (mainQtyInput) {
-    mainQtyInput.oninput = handleInputChange;
-    mainQtyInput.onchange = handleInputChange;
-  }
-  if (stickyQtyInput) {
-    stickyQtyInput.oninput = handleInputChange;
-    stickyQtyInput.onchange = handleInputChange;
-  }
-
-  if (!p._merchPdpCartListenerWired) {
-    p._merchPdpCartListenerWired = true;
-    cart.onChange(() => {
-      syncUI();
-    });
-  }
-
-  syncUI();
-}
 
 function paintBreadcrumbs(p) {
   const wrapper = pick('.tf-breadcrumb-list, .navigator-breadcrumb-wrapper, .breadcrumbs');
@@ -4852,13 +4263,7 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
       if (img) {
         setAttr(img, 'src', urls[i]);
         if (img.hasAttribute('data-src')) setAttr(img, 'data-src', urls[i]);
-        if (img.hasAttribute('data-zoom')) setAttr(img, 'data-zoom', urls[i]);
         img.removeAttribute('srcset');
-        const parentAnchor = img.closest('a');
-        if (parentAnchor) {
-          setAttr(parentAnchor, 'href', urls[i]);
-          if (parentAnchor.hasAttribute('data-zoom')) setAttr(parentAnchor, 'data-zoom', urls[i]);
-        }
       }
     });
   }
@@ -4867,6 +4272,7 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
 /* Variants & Attributes. Displays variant choices (navigates between products in a group)
    and dynamic product attributes (e.g. Size, Color) with responsive styling. */
 async function paintVariants(spec, p) {
+  if (THEME?.name === 'fashion') return paintVariantsFashion(spec, p);
   let group = null;
   try { group = await api.variants(p.id); } catch { /* best effort */ }
   const options = group?.options || [];
@@ -5303,79 +4709,90 @@ const pending = {
 
 pages.cart = async () => {
   const spec = THEME.cart;
-  await cart.refresh();
-
-  // If electronic theme, remove any static "You may also like" section
-  const recsSection = pick('section.flat-spacing.pt-0');
-  if (recsSection) recsSection.remove();
+  const lines = await cart.refresh();
 
   const draw = () => {
     const t = takeTemplate(spec);
     const current = cart.lines();
-    const emptyWrap = pick('.tf-cart-empty-wrap');
-    const contentRow = pick('.cart-content-row');
-    const soldEl = pick('.tf-cart-sold');
-    const rightSidebar = pick('.fl-sidebar-cart, .cart-total-area-start-right');
-    const sideCol = rightSidebar?.closest('[class*="col-xl-3"], [class*="col-xl-4"]') || rightSidebar;
+    if (!t) return;
 
-    if (!current.length) {
-      if (emptyWrap) {
-        emptyWrap.style.display = 'block';
-        if (contentRow) contentRow.style.display = 'none';
-        if (soldEl) show(soldEl, false);
-        if (sideCol) show(sideCol, false);
-      } else if (t) {
-        const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container);
-        if (head) show(head, false);
-        const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
-        rows.forEach((r) => r.remove());
-        const couponArea = pick('.bottom-cupon-code-cart-area, .ip-discount-code, .group-discount');
-        if (couponArea) show(couponArea, false);
-        if (soldEl) show(soldEl, false);
-        if (sideCol) show(sideCol, false);
+    const renderCartEmpty = () => {
+      // 1. Hide table headers
+      const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+      if (head) show(head, false);
 
-        if (!pick('.merch-empty', t.container.parentElement || t.container)) {
-          const emptyDiv = document.createElement('div');
-          emptyDiv.className = 'merch-empty text-center';
-          emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
-          emptyDiv.innerHTML = `
-            <i class="icon icon-cart text-muted mb-3 d-inline-block" style="font-size:48px;"></i>
-            <h4 style="margin-bottom:8px;font-weight:600;">Your cart is empty</h4>
-            <p style="color:#64748b;margin-bottom:20px;">Looks like you haven't added anything to your cart yet.</p>
-            <a href="${pageUrl('listing')}" class="tf-btn btn-fill radius-4" style="display:inline-block;padding:12px 28px;"><span class="text">Continue Shopping</span></a>
-          `;
-          (t.container.parentElement || t.container).prepend(emptyDiv);
-        }
+      // 2. Remove all product rows
+      const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
+      rows.forEach((r) => r.remove());
+
+      // 3. Hide coupon code area
+      const couponArea = pick('.bottom-cupon-code-cart-area', t.container) || pick('.bottom-cupon-code-cart-area');
+      if (couponArea) show(couponArea, false);
+
+      // 4. Hide shipping note & progress bar
+      const noteArea = pick('.cart-area-main-wrapper, .cart-top-area-note');
+      if (noteArea) show(noteArea, false);
+
+      // 5. Hide right sidebar (Cart Totals)
+      const rightSidebar = pick('.cart-total-area-start-right');
+      if (rightSidebar) {
+        const sideCol = rightSidebar.closest('[class*="col-xl-3"]') || rightSidebar.parentElement || rightSidebar;
+        show(sideCol, false);
+      }
+
+      // 6. Expand left column to full width so the empty state is centered
+      const leftCol = t.container.closest('[class*="col-xl-9"]');
+      if (leftCol) {
+        leftCol.classList.remove('col-xl-9');
+        leftCol.classList.add('col-xl-12');
+      }
+
+      // 7. Render empty message with Continue Shopping button (matching wishlist design!)
+      if (!pick('.merch-empty', t.container)) {
+        const emptyDiv = document.createElement('div');
+        emptyDiv.className = 'merch-empty text-center';
+        emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
+        emptyDiv.innerHTML = `
+          <i class="fa-sharp fa-regular fa-cart-shopping" style="font-size:48px;color:#94a3b8;margin-bottom:16px;display:block;"></i>
+          <h4 style="margin-bottom:8px;font-weight:600;">Your cart is empty</h4>
+          <p style="color:#64748b;margin-bottom:20px;">Looks like you haven't added anything to your cart yet.</p>
+          <a href="shop.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
+        `;
+        t.container.prepend(emptyDiv);
       }
       paintCartTotals(spec, current);
       paintHeader();
+    };
+
+    if (!current.length) {
+      renderCartEmpty();
       return;
     }
-
-    if (emptyWrap) emptyWrap.style.display = 'none';
-    if (contentRow) contentRow.style.display = '';
-    if (soldEl) show(soldEl, true);
-    if (sideCol) show(sideCol, true);
-
-    if (!t) return;
 
     // Restore left column width if previously modified
     const leftCol = t.container.closest('[class*="col-xl-12"]');
     if (leftCol) {
       leftCol.classList.remove('col-xl-12');
-      leftCol.classList.add(pick('.fl-sidebar-cart') ? 'col-xl-8' : 'col-xl-9');
+      leftCol.classList.add('col-xl-9');
     }
 
     // Show table head
-    const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container);
+    const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
     if (head) show(head, true);
 
     // Show coupon bar
-    const couponArea = pick('.bottom-cupon-code-cart-area, .ip-discount-code');
+    const couponArea = pick('.bottom-cupon-code-cart-area', t.container) || pick('.bottom-cupon-code-cart-area');
     if (couponArea) show(couponArea, true);
 
+    // Show right sidebar
+    const rightSidebar = pick('.cart-total-area-start-right');
+    if (rightSidebar) {
+      const sideCol = rightSidebar.closest('[class*="col-xl-3"]') || rightSidebar.parentElement || rightSidebar;
+      show(sideCol, true);
+    }
+
     // Remove empty state container
-    pickAll('.merch-empty', t.container.parentElement || t.container).forEach(remove);
+    pickAll('.merch-empty', t.container).forEach(remove);
 
     // Render cart items
     repeat(t, current, (node, l) => {
@@ -5383,84 +4800,31 @@ pages.cart = async () => {
       fillFields(node, spec.fields, l, { node, rerender: draw });
 
       // Image & thumbnail link
-      const imgEl = pick('.img-box img, .thumbnail img, .pro-thumbnail img', node);
+      const imgEl = pick('.thumbnail img, .pro-thumbnail img', node);
       if (imgEl) {
         if (l.image) imgEl.src = mediaUrl(l.image);
         imgEl.alt = l.name || 'product';
         imgEl.style.cssText = 'width:65px;height:65px;object-fit:contain;border-radius:4px;';
       }
-      const thumbLink = pick('a.img-box, .thumbnail a, .pro-thumbnail a', node);
+      const thumbLink = pick('.thumbnail a, .pro-thumbnail a', node);
       if (thumbLink) {
         thumbLink.href = productHref({ id: l.itemId });
+      } else if (imgEl && imgEl.parentElement) {
+        const a = document.createElement('a');
+        a.href = productHref({ id: l.itemId });
+        imgEl.parentElement.insertBefore(a, imgEl);
+        a.appendChild(imgEl);
       }
 
       // Title link
-      const titleEl = pick('.cart-title, .information .title, .pro-title', node);
+      const titleEl = pick('.information .title, .pro-title', node);
       if (titleEl) {
         titleEl.innerHTML = `<a href="${escapeHtml(productHref({ id: l.itemId }))}" style="color:inherit;">${escapeHtml(l.name)}</a>`;
-      }
-
-      // Price & Total
-      const priceEl = pick('.cart-price', node);
-      if (priceEl) priceEl.textContent = money(l.price);
-      const totalEl = pick('.cart-total', node);
-      if (totalEl) totalEl.textContent = money(l.price * l.qty);
-      const qtyInput = pick('.quantity-product', node);
-      if (qtyInput) qtyInput.value = l.qty;
-
-      // Quantity stepper buttons
-      const decBtn = pick('.btn-decrease, .minus-btn, .btn-quantity:first-child', node);
-      const incBtn = pick('.btn-increase, .plus-btn, .btn-quantity:last-child', node);
-      if (decBtn && !decBtn._merchWired) {
-        decBtn._merchWired = true;
-        decBtn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const cur = Number(l.qty) || 1;
-          const next = Math.max(1, cur - 1);
-          cart.setQty(l.itemId, next);
-          draw();
-          paintHeader();
-        });
-      }
-      if (incBtn && !incBtn._merchWired) {
-        incBtn._merchWired = true;
-        incBtn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const cur = Number(l.qty) || 1;
-          const next = Math.min(99, cur + 1);
-          cart.setQty(l.itemId, next);
-          draw();
-          paintHeader();
-        });
-      }
-      if (qtyInput && !qtyInput._merchWired) {
-        qtyInput._merchWired = true;
-        qtyInput.addEventListener('change', (e) => {
-          const val = Math.max(1, Math.min(99, parseInt(qtyInput.value, 10) || 1));
-          cart.setQty(l.itemId, val);
-          draw();
-          paintHeader();
-        });
-      }
-
-      // Remove button
-      const removeBtn = pick('.remove-cart .remove, .remove-cart, .remove', node);
-      if (removeBtn && !removeBtn._merchWired) {
-        removeBtn._merchWired = true;
-        removeBtn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          cart.remove(l.itemId);
-          draw();
-          paintHeader();
-        });
       }
     });
 
     // Wire Clear All button
-    const clearBtn = pick('.bottom-cupon-code-cart-area a', t.container.parentElement || t.container);
+    const clearBtn = pick('.bottom-cupon-code-cart-area a', t.container);
     if (clearBtn && !clearBtn._merchWired) {
       clearBtn._merchWired = true;
       clearBtn.addEventListener('click', (e) => {
@@ -5482,20 +4846,20 @@ pages.cart = async () => {
   wireCoupon(spec, draw);
   wireGiftCard(spec, draw);
 
-  cart.onChange(() => {
-    draw();
-    paintHeader();
-  });
-
+  /* "Proceed to checkout" is a link on some themes and a plain <button> on
+     others — a <button> outside a form goes NOWHERE on its own, so the button
+     the designer drew has to be given the navigation as well as the guard. */
   pickAll(spec.checkoutBtn).forEach((btn) => {
     btn.addEventListener('click', (e) => {
       if (!cart.count()) { e.preventDefault(); notify('Your cart is empty.', 'error'); return; }
       const href = btn.tagName === 'A' ? (btn.getAttribute('href') || '') : '';
-      if (/checkout/i.test(href)) return;
+      if (/checkout/i.test(href)) return;        // already points at the right page
       e.preventDefault();
       location.href = pageUrl('checkout');
     });
   });
+
+  cart.onChange(() => paintHeader());
 };
 
 /* --- COLOUR SWATCHES ------------------------------------------------------
@@ -5605,6 +4969,1579 @@ function labelColour(label) {
   return colourHex(first) ? first : null;
 }
 
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ELECTRONIC THEME — ported up from electronic/merch.js, which had forked.
+
+   These eight are the theme's own: a sticky add-to-cart bar, its home tabs, its
+   cart sidebar, an account-details form with avatar initials, and a dead-link
+   remapper. They are self-contained — they call only each other and what the
+   master already had — and each returns early when the selector it needs is
+   absent, so they are no-ops on the other three themes.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function categoryIcon(name = '') {
+  const n = String(name).toLowerCase();
+  if (n.includes('phone') || n.includes('mobile')) return 'icon-smartphone';
+  if (n.includes('laptop') || n.includes('computer') || n.includes('pc')) return 'icon-laptop';
+  if (n.includes('camera') || n.includes('photo')) return 'icon-camera';
+  if (n.includes('tv') || n.includes('video') || n.includes('display')) return 'icon-tv';
+  if (n.includes('headphone') || n.includes('ear') || n.includes('sound')) return 'icon-headphones';
+  if (n.includes('audio') || n.includes('speaker')) return 'icon-audio';
+  if (n.includes('watch') || n.includes('wearable')) return 'icon-watch';
+  return 'icon-laptop';
+}
+
+function openCartSidebar() {
+  const modalEl = document.getElementById('shoppingCart');
+  if (!modalEl) return;
+  try { paintMiniCart(); } catch {}
+  try {
+    if (window.bootstrap?.Modal) {
+      const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+      modal.show();
+      return;
+    }
+  } catch {}
+  try {
+    if (window.$ && typeof window.$.fn?.modal === 'function') {
+      window.$(modalEl).modal('show');
+      return;
+    }
+  } catch {}
+  modalEl.classList.add('show');
+  modalEl.style.display = 'block';
+  modalEl.removeAttribute('aria-hidden');
+  modalEl.setAttribute('aria-modal', 'true');
+}
+
+async function paintElectronicHomeTabs() {
+  const tabList = pick('.tab-product-v3');
+  if (!tabList) return;
+
+  const tabLinks = pickAll('a[data-bs-toggle="tab"]', tabList);
+  if (!tabLinks.length) return;
+
+  let allProducts = [];
+  try {
+    const catalogRes = await api.catalog({ pageSize: 24 });
+    allProducts = Array.isArray(catalogRes) ? catalogRes : catalogRes?.products || [];
+  } catch (e) {
+    warn('all products tab fetch', e);
+  }
+
+  // 1. Paint #AllProducts tab
+  const allPane = document.getElementById('AllProducts');
+  if (allPane && allProducts.length) {
+    const rail = pick('.swiper-wrapper', allPane);
+    if (rail) {
+      renderProducts(allProducts.slice(0, 8), THEME.listing, rail);
+      hydrated.add(rail);
+    }
+  }
+
+  // 2. Fetch categories for remaining tabs
+  let cats = [];
+  try { cats = await getCategories(); } catch { cats = []; }
+
+  // Map remaining tabs: tabLinks[1], tabLinks[2], tabLinks[3]
+  const remainingTabs = tabLinks.slice(1);
+  for (let i = 0; i < remainingTabs.length; i++) {
+    const tabLink = remainingTabs[i];
+    const targetId = (tabLink.getAttribute('href') || '').replace('#', '');
+    const targetPane = targetId ? document.getElementById(targetId) : null;
+    if (!targetPane) continue;
+
+    const cat = cats[i];
+    const rail = pick('.swiper-wrapper', targetPane);
+    if (!rail) continue;
+
+    let tabProducts = [];
+    if (cat) {
+      const catName = typeof cat === 'string' ? cat : cat.name;
+      tabLink.textContent = catName;
+      try {
+        const catRes = await api.catalog({ category: catName, pageSize: 8 });
+        tabProducts = Array.isArray(catRes) ? catRes : catRes?.products || [];
+      } catch (e) {
+        warn('tab category catalog', e);
+      }
+    }
+
+    // If category has no products or not enough, take a distinct non-overlapping slice from allProducts
+    if (!tabProducts.length && allProducts.length) {
+      const startIdx = ((i + 1) * 4) % allProducts.length;
+      tabProducts = allProducts.slice(startIdx, startIdx + 8);
+      if (tabProducts.length < 4) {
+        tabProducts = allProducts.slice(0, 8);
+      }
+    }
+
+    if (tabProducts.length) {
+      renderProducts(tabProducts, THEME.listing, rail);
+      hydrated.add(rail);
+    }
+  }
+
+  tabLinks.forEach((link) => {
+    link.addEventListener('shown.bs.tab', () => {
+      refreshSwipers();
+    });
+  });
+}
+
+async function paintStickyAtcBar(p) {
+  const bar = pick('.tf-sticky-btn-atc');
+  if (!bar || !p) return;
+
+  // 1. Product Image
+  const img = pick('.tf-sticky-atc-product .image img', bar);
+  if (img) {
+    const src = mediaUrl((p.imageUrls || [])[0] || p.image || '');
+    if (src) {
+      img.src = src;
+      img.setAttribute('data-src', src);
+      img.removeAttribute('srcset');
+      img.classList.remove('lazyload', 'lazyloading');
+      img.classList.add('lazyloaded');
+    }
+    img.alt = p.name || '';
+  }
+
+  // 2. Title & Meta & Price
+  const titleEl = pick('.tf-sticky-atc-title, .tf-sticky-atc-product .content .text-title:first-child', bar);
+  if (titleEl) setText(titleEl, p.name || '');
+
+  const metaEl = pick('.tf-sticky-atc-meta, .tf-sticky-atc-product .content .text-caption-1', bar);
+  if (metaEl) setText(metaEl, p.category || '');
+
+  const priceEl = pick('.tf-sticky-atc-price, .tf-sticky-atc-product .content .text-title:last-child', bar);
+  if (priceEl && priceEl !== titleEl) setText(priceEl, money(p.price));
+
+  // 3. Size dropdown / variants
+  const sizeBox = pick('.tf-sticky-atc-size', bar);
+  let selectedVariant = null;
+  /* ⭐ The options come from /api/products/{id}/variants — they are NOT on the product. This gated on
+     `p.variants`, a field the catalogue has never returned, so `hasVariants` was false for every
+     product and the sticky bar's size dropdown was hidden on the whole catalogue. The main product
+     painter had been calling the endpoint all along; this one simply never did. */
+  let variants = Array.isArray(p.variants) ? p.variants : [];
+  if (!variants.length) {
+    try {
+      const group = await api.variants(p.id);
+      variants = group?.options || [];
+    } catch { variants = []; }
+  }
+  const hasVariants = variants.length > 1;
+
+  if (sizeBox) {
+    if (!hasVariants) {
+      show(sizeBox, false);
+      sizeBox.style.setProperty('display', 'none', 'important');
+    } else {
+      show(sizeBox, true);
+      sizeBox.style.display = '';
+      const valLabel = pick('.text-sort-value', sizeBox);
+      const menu = pick('.dropdown-menu', sizeBox);
+      if (menu) {
+        menu.replaceChildren();
+        variants.forEach((v, idx) => {
+          const item = document.createElement('div');
+          item.className = 'select-item' + (idx === 0 ? ' active' : '');
+          const label = v.label || v.title || v.name || ('Option ' + (idx + 1));
+          item.innerHTML = `<span class="text-value-item">${escapeHtml(label)}</span>`;
+          item.addEventListener('click', (e) => {
+            e.preventDefault();
+            selectedVariant = v;
+            p._selectedVariant = v;
+            if (valLabel) setText(valLabel, label);
+            pickAll('.select-item', menu).forEach((si) => si.classList.remove('active'));
+            item.classList.add('active');
+            if (v.price != null && priceEl && priceEl !== titleEl) setText(priceEl, money(v.price));
+            if (v.imageUrl && img) {
+              const vsrc = mediaUrl(v.imageUrl);
+              img.src = vsrc;
+              img.setAttribute('data-src', vsrc);
+            }
+          });
+          menu.appendChild(item);
+        });
+        const cur = variants.find((v) => v.current) || variants[0];
+        if (cur) {
+          selectedVariant = cur;
+          p._selectedVariant = cur;
+          if (valLabel) setText(valLabel, cur.label || cur.title || cur.name || '');
+        }
+      }
+    }
+  }
+}
+
+function remapDeadLinks() {
+  const shopPages = [
+    'shop-default-grid.html', 'shop-default-list.html', 'shop-fullwidth-list.html',
+    'shop-fullwidth-grid.html', 'shop-right-sidebar.html', 'shop-filter-dropdown.html',
+    'shop-filter-canvas.html', 'shop-categories-top-02.html', 'shop-collection.html',
+    'shop-breadcrumb-img.html', 'shop-breadcrumb-left.html', 'shop-breadcrumb-background.html',
+    'shop-load-button.html', 'shop-pagination.html', 'shop-infinite-scrolling.html'
+  ];
+  const prodPages = [
+    'product-grid-1.html', 'product-grid-2.html', 'product-stacked.html',
+    'product-right-thumbnails.html', 'product-bottom-thumbnails.html',
+    'product-description-accordion.html', 'product-description-list.html',
+    'product-description-menutab.html', 'product-description-fullwidth.html',
+    'product-fixed-price.html', 'product-fixed-scroll.html', 'product-swatch-color.html',
+    'product-swatch-rounded.html', 'product-swatch-rounded-color.html',
+    'product-swatch-image.html', 'product-swatch-rounded-image.html',
+    'product-swatch-dropdown.html', 'product-swatch-dropdown-color.html',
+    'product-style-01.html', 'product-style-02.html', 'product-style-03.html',
+    'product-style-04.html', 'product-style-05.html', 'product-style-06.html', 'product-style-07.html'
+  ];
+
+  $$('a[href]').forEach((a) => {
+    const href = a.getAttribute('href');
+    if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+    const cleanHref = href.split('?')[0].split('#')[0];
+    if (shopPages.includes(cleanHref)) {
+      a.setAttribute('href', href.replace(cleanHref, 'shop-left-sidebar.html'));
+    } else if (prodPages.includes(cleanHref)) {
+      a.setAttribute('href', href.replace(cleanHref, 'product-detail.html'));
+    }
+  });
+}
+
+function updateAvatarInitials(first, last, fullName, email) {
+  let f = (first || '').trim().charAt(0);
+  let l = (last || '').trim().charAt(0);
+  if (!f && !l && fullName) {
+    const parts = fullName.trim().split(/\s+/).filter(Boolean);
+    if (parts.length > 0) f = parts[0].charAt(0);
+    if (parts.length > 1) l = parts[parts.length - 1].charAt(0);
+  }
+  if (!f && email) f = email.trim().charAt(0);
+  const initials = ((f + l) || 'U').toUpperCase();
+
+  const avatarWraps = pickAll('.account-avatar');
+  avatarWraps.forEach((wrap) => {
+    let initEl = wrap.querySelector('.avatar-initials');
+    if (!initEl) {
+      const imgWrap = wrap.querySelector('.image');
+      if (imgWrap) imgWrap.style.display = 'none';
+      initEl = document.createElement('div');
+      initEl.className = 'avatar-initials';
+      initEl.style.cssText = 'width: 80px; height: 80px; border-radius: 50%; background: #181818; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; margin: 0 auto 16px; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);';
+      wrap.insertBefore(initEl, wrap.firstChild);
+    }
+    initEl.textContent = initials;
+
+    const nameEl = wrap.querySelector('h6, .customer-name, .account-name');
+    if (nameEl) nameEl.textContent = fullName || 'Account';
+    const emailEl = wrap.querySelector('.body-text-1, .customer-email, .account-email');
+    if (emailEl) emailEl.textContent = email || '';
+  });
+}
+
+function wireAccountDetailsForm() {
+  const form = pick('form.form-account-details') || $$('form').find((f) => {
+    return pick('input[placeholder*="first" i]', f) && pick('input[placeholder*="last" i]', f) && pick('input[type="email"]', f);
+  });
+  if (!form || form._merchDetailsWired) return;
+  form._merchDetailsWired = true;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const fn = pick('input[placeholder*="first" i]|input[name*="first" i]', form)?.value.trim() || '';
+    const ln = pick('input[placeholder*="last" i]|input[name*="last" i]', form)?.value.trim() || '';
+    const em = pick('input[type="email"]|input[placeholder*="email address" i]', form)?.value.trim() || '';
+    const ph = pick('input[type="tel"]|input[placeholder*="phone" i]|input[name*="phone" i]|input[placeholder*="mobile" i]', form)?.value.trim() || '';
+    const stateEl = pick('#account-state, select[name*="state"]', form);
+    const stateVal = stateEl?.value || '';
+
+    const fullName = [fn, ln].filter(Boolean).join(' ') || em.split('@')[0] || '';
+
+    try {
+      if (fn) localStorage.setItem('merch.shopper_first_name', fn);
+      if (ln) localStorage.setItem('merch.shopper_last_name', ln);
+      if (fullName) localStorage.setItem('merch.shopper_name', fullName);
+      if (em) localStorage.setItem('merch.shopper_email', em);
+      if (ph) localStorage.setItem('merch.shopper_phone', ph);
+      if (stateVal && stateVal !== 'Choose State') localStorage.setItem('merch.shopper_state', stateVal);
+    } catch {}
+
+    updateAvatarInitials(fn, ln, fullName, em);
+    pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, fullName));
+    pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, em));
+    applyShopperHeader(fullName, em);
+
+    const currentPw = pick('input[placeholder*="current" i][type="password"], .account-password input[placeholder*="password*" i]', form);
+    const newPw = pick('input[placeholder*="new" i][type="password"]', form);
+    const confirmPw = pick('input[placeholder*="confirm" i][type="password"]', form);
+
+    if (currentPw?.value || newPw?.value || confirmPw?.value) {
+      if (!currentPw?.value || !newPw?.value) {
+        return notify('Please fill both current and new password to change password.', 'error');
+      }
+      if (confirmPw && confirmPw.value !== newPw.value) {
+        return notify('The two new passwords do not match.', 'error');
+      }
+      try {
+        await api.changePassword(currentPw.value, newPw.value);
+        currentPw.value = '';
+        newPw.value = '';
+        if (confirmPw) confirmPw.value = '';
+        notify('Account information and password updated successfully.', 'success');
+      } catch (err) {
+        showError(err);
+      }
+    } else {
+      notify('Account information updated successfully.', 'success');
+    }
+  });
+}
+
+function wireProductDetailCartFlow(p) {
+  const wrap = pick('.tf-product-info-wrap');
+  if (!wrap || !p) return;
+
+  const bar = pick('.tf-sticky-btn-atc');
+
+  // Quantity containers
+  const mainQtyBox = pick('.tf-product-info-quantity', wrap);
+  const stickyQtyBox = bar ? pick('.tf-sticky-atc-quantity', bar) : null;
+
+  // Quantity inputs and buttons
+  const mainQtyInput = pick('.tf-product-info-quantity .quantity-product, .tf-product-info-quantity input', wrap);
+  const mainMinus = pick('.tf-product-info-quantity .btn-decrease, .tf-product-info-quantity .minus-btn, .tf-product-info-quantity .btn-quantity:first-child', wrap);
+  const mainPlus = pick('.tf-product-info-quantity .btn-increase, .tf-product-info-quantity .plus-btn, .tf-product-info-quantity .btn-quantity:last-child', wrap);
+  const stickyQtyInput = bar ? pick('.tf-sticky-atc-quantity input', bar) : null;
+  const stickyMinus = bar ? pick('.tf-sticky-atc-quantity .minus-btn, .tf-sticky-atc-quantity .btn-decrease, .tf-sticky-atc-quantity .btn-quantity:first-child', bar) : null;
+  const stickyPlus = bar ? pick('.tf-sticky-atc-quantity .plus-btn, .tf-sticky-atc-quantity .btn-increase, .tf-sticky-atc-quantity .btn-quantity:last-child', bar) : null;
+
+  // Main action buttons
+  const mainBtn = pick('.tf-product-info-by-btn .btn-add-to-cart, .tf-product-info-by-btn .btn-style-2', wrap);
+  const secondaryBuyBtn = pick('.tf-product-info-by-btn .btn-buy-now, .tf-product-info-by-btn .btn-style-3, .btn-buy-now', wrap);
+
+  // Sticky action buttons
+  const stickyAddBtn = bar ? pick('.tf-sticky-atc-btns .btn-add-to-cart', bar) : null;
+  let stickyBuyBtn = bar ? pick('.tf-sticky-atc-btns .btn-sticky-buy', bar) : null;
+
+  // If stickyBuyBtn does not exist yet, create it dynamically
+  if (bar && !stickyBuyBtn) {
+    const btnsContainer = pick('.tf-sticky-atc-btns', bar);
+    if (btnsContainer) {
+      btnsContainer.classList.add('d-flex', 'gap-10');
+      stickyBuyBtn = document.createElement('a');
+      stickyBuyBtn.className = 'tf-btn btn-fill radius-4 btn-sticky-buy flex-grow-1';
+      stickyBuyBtn.href = pageUrl('checkout');
+      stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
+      btnsContainer.appendChild(stickyBuyBtn);
+    }
+  }
+
+  // Remove Bootstrap modal triggers to prevent unexpected popups
+  [mainBtn, secondaryBuyBtn, stickyAddBtn, stickyBuyBtn].forEach((btn) => {
+    if (btn) {
+      btn.removeAttribute('data-bs-toggle');
+      btn.removeAttribute('data-bs-target');
+    }
+  });
+
+  // Detach jQuery click handlers if present
+  if (window.$) {
+    if (mainQtyBox) window.$(mainQtyBox).find('.btn-quantity, .btn-decrease, .btn-increase, input').off('click change input');
+    if (stickyQtyBox) window.$(stickyQtyBox).find('.btn-quantity, .minus-btn, .plus-btn, input').off('click change input');
+    if (mainBtn) window.$(mainBtn).off('click');
+    if (secondaryBuyBtn) window.$(secondaryBuyBtn).off('click');
+    if (stickyAddBtn) window.$(stickyAddBtn).off('click');
+    if (stickyBuyBtn) window.$(stickyBuyBtn).off('click');
+  }
+
+  const getLine = () => {
+    const lines = cart.lines();
+    const pid = String(p?.id || p?.itemId || p?._id || '');
+    if (pid) {
+      const found = lines.find((l) => String(l.itemId) === pid);
+      if (found) return found;
+    }
+    if (p?.name) {
+      const found = lines.find((l) => l.name && l.name.toLowerCase() === p.name.toLowerCase());
+      if (found) return found;
+    }
+    return null;
+  };
+
+  const getItemId = () => {
+    const line = getLine();
+    if (line && line.itemId) return String(line.itemId);
+    return String(p?.id || p?.itemId || p?._id || '');
+  };
+
+  function getProductToAdd() {
+    return p._selectedVariant ? { ...p, price: p._selectedVariant.price ?? p.price, variant: p._selectedVariant } : p;
+  }
+
+  function updatePriceDisplay(qty) {
+    const toAdd = getProductToAdd();
+    const unitPrice = Number(toAdd.price) || 0;
+    const total = unitPrice * qty;
+    pickAll('.tf-qty-price.total-price', wrap).forEach((el) => {
+      setText(el, money(total));
+    });
+  }
+
+  function syncUI() {
+    const line = getLine();
+    const inCart = !!line;
+    const toAdd = getProductToAdd();
+
+    if (inCart) {
+      // --- IN CART STATE ---
+      const cartQty = Number(line.qty) || 1;
+
+      // 1. Show Steppers synced with cart quantity
+      if (mainQtyBox) {
+        mainQtyBox.style.removeProperty('display');
+        mainQtyBox.style.setProperty('display', 'block', 'important');
+      }
+      if (stickyQtyBox) {
+        stickyQtyBox.style.removeProperty('display');
+        stickyQtyBox.style.setProperty('display', 'flex', 'important');
+      }
+      if (mainQtyInput) mainQtyInput.value = cartQty;
+      if (stickyQtyInput) stickyQtyInput.value = cartQty;
+      updatePriceDisplay(cartQty);
+
+      // 2. Hide "Add to cart", Show "Buy Now"
+      if (secondaryBuyBtn) {
+        if (mainBtn) mainBtn.style.setProperty('display', 'none', 'important');
+        secondaryBuyBtn.style.removeProperty('display');
+        secondaryBuyBtn.style.display = '';
+        secondaryBuyBtn.style.flex = '1';
+        secondaryBuyBtn.innerHTML = `<span class="text">Buy Now</span>`;
+        secondaryBuyBtn.setAttribute('href', pageUrl('checkout'));
+        secondaryBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        };
+      } else if (mainBtn) {
+        mainBtn.style.removeProperty('display');
+        mainBtn.style.display = '';
+        mainBtn.style.flex = '1';
+        mainBtn.innerHTML = `<span class="text">Buy Now</span>`;
+        mainBtn.setAttribute('href', pageUrl('checkout'));
+        mainBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        };
+      }
+
+      // 3. Sticky Bar: Hide Add to Cart, Show Buy Now full width
+      if (stickyAddBtn) {
+        stickyAddBtn.style.setProperty('display', 'none', 'important');
+      }
+      if (stickyBuyBtn) {
+        stickyBuyBtn.style.removeProperty('display');
+        stickyBuyBtn.style.display = '';
+        stickyBuyBtn.classList.remove('flex-grow-1');
+        stickyBuyBtn.classList.add('w-100');
+        stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
+        stickyBuyBtn.setAttribute('href', pageUrl('checkout'));
+        stickyBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        };
+      }
+    } else {
+      // --- NOT IN CART STATE ---
+      // 1. HIDE Quantity Steppers ("by default one nahi aana chahiye")
+      if (mainQtyBox) mainQtyBox.style.setProperty('display', 'none', 'important');
+      if (stickyQtyBox) stickyQtyBox.style.setProperty('display', 'none', 'important');
+      if (mainQtyInput) mainQtyInput.value = '1';
+      if (stickyQtyInput) stickyQtyInput.value = '1';
+      updatePriceDisplay(1);
+
+      // 2. Main Button is "Add to cart"
+      if (mainBtn) {
+        mainBtn.style.removeProperty('display');
+        mainBtn.style.display = '';
+        mainBtn.style.flex = '1';
+        mainBtn.innerHTML = `<span class="text">Add to cart</span>`;
+        mainBtn.setAttribute('href', 'javascript:void(0);');
+        mainBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          openCartSidebar();
+          notify((itemToAdd.name || 'Item') + ' added to your cart.', 'success');
+          track('add_to_cart', { itemId: itemToAdd.id, qty: 1 });
+          syncUI();
+        };
+      }
+
+      // 3. Secondary Button is "Buy Now" -> adds 1 and goes directly to checkout
+      if (secondaryBuyBtn) {
+        secondaryBuyBtn.style.removeProperty('display');
+        secondaryBuyBtn.style.display = '';
+        secondaryBuyBtn.style.flex = '1';
+        secondaryBuyBtn.innerHTML = `<span class="text">Buy Now</span>`;
+        secondaryBuyBtn.setAttribute('href', pageUrl('checkout'));
+        secondaryBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          location.href = pageUrl('checkout');
+        };
+      }
+
+      // 4. Sticky Bar: Show Add to Cart AND Buy Now side by side
+      if (stickyAddBtn) {
+        stickyAddBtn.style.removeProperty('display');
+        stickyAddBtn.style.display = '';
+        stickyAddBtn.classList.remove('w-100');
+        stickyAddBtn.classList.add('flex-grow-1');
+        stickyAddBtn.innerHTML = '<span class="text text-btn-uppercase">Add To Cart</span>';
+        stickyAddBtn.setAttribute('href', 'javascript:void(0);');
+        stickyAddBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          openCartSidebar();
+          notify((itemToAdd.name || 'Item') + ' added to your cart.', 'success');
+          track('add_to_cart', { itemId: itemToAdd.id, qty: 1 });
+          syncUI();
+        };
+      }
+      if (stickyBuyBtn) {
+        stickyBuyBtn.style.removeProperty('display');
+        stickyBuyBtn.style.display = '';
+        stickyBuyBtn.classList.remove('w-100');
+        stickyBuyBtn.classList.add('flex-grow-1');
+        stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
+        stickyBuyBtn.setAttribute('href', pageUrl('checkout'));
+        stickyBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          location.href = pageUrl('checkout');
+        };
+      }
+    }
+  }
+
+  function handleIncrease(e) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    }
+    const line = getLine();
+    const itemId = getItemId();
+    if (!itemId) return;
+
+    if (line) {
+      const cur = Number(line.qty) || 1;
+      cart.setQty(itemId, Math.min(99, cur + 1));
+    } else {
+      const toAdd = getProductToAdd();
+      cart.add(toAdd, 1);
+    }
+    syncUI();
+  }
+
+  function handleDecrease(e) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    }
+    const line = getLine();
+    const itemId = getItemId();
+    if (!itemId) return;
+
+    const cur = line ? (Number(line.qty) || 1) : 1;
+    if (cur > 1) {
+      cart.setQty(itemId, cur - 1);
+    } else {
+      // Dropping to 0 -> remove from cart and notify
+      cart.remove(itemId);
+      notify((p.name || line?.name || 'Item') + ' removed from your cart.', 'info');
+    }
+    syncUI();
+  }
+
+  function handleInputChange(e) {
+    const val = parseInt(e.target.value, 10);
+    const itemId = getItemId();
+    if (!itemId) return;
+    if (isNaN(val) || val <= 0) {
+      cart.remove(itemId);
+      notify((p.name || 'Item') + ' removed from your cart.', 'info');
+      syncUI();
+    } else {
+      const clamped = Math.min(99, val);
+      e.target.value = clamped;
+      cart.setQty(itemId, clamped);
+      syncUI();
+    }
+  }
+
+  // Bind direct onclick on buttons
+  if (mainMinus) mainMinus.onclick = handleDecrease;
+  if (mainPlus) mainPlus.onclick = handleIncrease;
+  if (stickyMinus) stickyMinus.onclick = handleDecrease;
+  if (stickyPlus) stickyPlus.onclick = handleIncrease;
+
+  // Bind delegated onclick on containers
+  if (mainQtyBox) {
+    mainQtyBox.onclick = (e) => {
+      const dec = e.target.closest('.btn-decrease, .minus-btn, .btn-quantity:first-child');
+      if (dec && (dec.textContent.trim() === '-' || dec.classList.contains('btn-decrease') || dec.classList.contains('minus-btn'))) {
+        handleDecrease(e);
+        return;
+      }
+      const inc = e.target.closest('.btn-increase, .plus-btn, .btn-quantity:last-child');
+      if (inc && (inc.textContent.trim() === '+' || inc.classList.contains('btn-increase') || inc.classList.contains('plus-btn'))) {
+        handleIncrease(e);
+        return;
+      }
+    };
+  }
+
+  if (stickyQtyBox) {
+    stickyQtyBox.onclick = (e) => {
+      const dec = e.target.closest('.minus-btn, .btn-decrease, .btn-quantity:first-child');
+      if (dec && (dec.textContent.trim() === '-' || dec.classList.contains('minus-btn') || dec.classList.contains('btn-decrease'))) {
+        handleDecrease(e);
+        return;
+      }
+      const inc = e.target.closest('.plus-btn, .btn-increase, .btn-quantity:last-child');
+      if (inc && (inc.textContent.trim() === '+' || inc.classList.contains('plus-btn') || inc.classList.contains('btn-increase'))) {
+        handleIncrease(e);
+        return;
+      }
+    };
+  }
+
+  if (mainQtyInput) {
+    mainQtyInput.oninput = handleInputChange;
+    mainQtyInput.onchange = handleInputChange;
+  }
+  if (stickyQtyInput) {
+    stickyQtyInput.oninput = handleInputChange;
+    stickyQtyInput.onchange = handleInputChange;
+  }
+
+  if (!p._merchPdpCartListenerWired) {
+    p._merchPdpCartListenerWired = true;
+    cart.onChange(() => {
+      syncUI();
+    });
+  }
+
+  syncUI();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FASHION THEME — ported up from fashion/merch.js, which had forked.
+
+   The fashion theme ships separate colour and size pickers, its own offcanvas
+   basket and its own cart/checkout totals. That work lived only in the theme's
+   own copy, so the master could not be synced onto it without deleting it. It
+   is reproduced here VERBATIM, reached only behind a theme guard, so the other
+   three themes behave exactly as they did before.
+
+   `paintVariantsFashion` and `wireQuickViewFashion` are DELEGATED to wholesale
+   rather than merged into their master counterparts. The theme's versions carry
+   changes that are not theme-gated — a different quick-view selector, an extra
+   painter call — and applying those to all four themes would be a decision
+   about intent that belongs to whoever wrote them, not to this merge.
+
+   Note for whoever owns this: COLOR_PALETTE here and COLOUR_HEX below are two
+   colour tables. `resolveColorSwatch` already prefers this one and falls back
+   to `colourBackground`, so nothing is broken — but they are worth reconciling.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* --- Fashion Color & Size Variant Swatch Engine --- */
+const COLOR_IMAGE_CACHE = new Map();
+
+const COLOR_PRODUCT_CACHE = new Map();
+
+const COLOR_PALETTE = {
+  black: '#111111',
+  white: '#ffffff',
+  grey: '#808080',
+  gray: '#808080',
+  charcoal: '#36454f',
+  mustard: '#e1ad01',
+  teal: '#008080',
+  maroon: '#800000',
+  olive: '#808000',
+  navy: '#000080',
+  sage: '#9caf88',
+  beige: '#f5f5dc',
+  rust: '#b7410e',
+  blue: '#2563eb',
+  red: '#dc2626',
+  green: '#16a34a',
+  yellow: '#eab308',
+  orange: '#ea580c',
+  purple: '#9333ea',
+  pink: '#ec4899',
+  brown: '#78350f',
+  cream: '#fffdd0',
+  khaki: '#c3b091',
+  neon: '#39ff14',
+  lavender: '#e6e6fa',
+  burgundy: '#800020',
+  ivory: '#fffff0',
+  silver: '#c0c0c0',
+  'royal blue': '#2b4fa2',
+  denim: '#3b5b86',
+  mint: '#8fd9b6',
+  sand: '#dcc9a6',
+  stone: '#d2cabb',
+  coffee: '#4b352a',
+  peach: '#ffb997',
+  wine: '#722f37',
+  'red wine': '#6b2230',
+  turquoise: '#30bfc4',
+  coral: '#ff7f50',
+  cyan: '#06b6d4',
+  magenta: '#d946ef',
+  gold: '#ffd700',
+};
+
+/* Variant options are returned as products. A selected size/color therefore
+   supplies the product id and price used by both cart views. */
+let PDP_VARIANT_REQUIRED = false;
+
+let PDP_SELECTED_VARIANT = null;
+
+let FASHION_MINI_CART_TEMPLATE = null;
+
+function resolveColorSwatch(colorName) {
+  if (!colorName) return '#e5e5e5';
+  const clean = String(colorName).trim().toLowerCase();
+  if (COLOR_PALETTE[clean]) return COLOR_PALETTE[clean];
+  if (typeof colourBackground === 'function') {
+    const bg = colourBackground(colorName);
+    if (bg) return bg;
+  }
+  if (window.CSS?.supports?.('color', colorName)) return colorName;
+  const parts = clean.split(/\s+/);
+  if (parts.length > 1 && COLOR_PALETTE[parts[parts.length - 1]]) {
+    return COLOR_PALETTE[parts[parts.length - 1]];
+  }
+  return '#eee';
+}
+
+function isSizeString(str) {
+  if (!str) return false;
+  const clean = String(str).trim();
+  return /^(\d{1,2}\s*XL|XXS|XS|S|M|L|XL|XXL|XXXL|EXTRA\s*SMALL|SMALL|MEDIUM|LARGE|EXTRA\s*LARGE|ONE\s*SIZE|FREE\s*SIZE|OS|\d{1,2}(?:\.\d+)?(?:\s?(?:US|UK|EU))?)$/i.test(clean);
+}
+
+function parseVariantOption(option, baseProduct) {
+  let color = '';
+  let size = '';
+
+  const attrs = option?.attributes || option?.product?.attributes || [];
+  const colorAttr = attrs.find((a) => /^colou?r$/i.test(a.key || a.name))?.value;
+  const sizeAttr = attrs.find((a) => /^size$/i.test(a.key || a.name))?.value;
+  if (colorAttr) color = String(colorAttr).trim();
+  if (sizeAttr) size = String(sizeAttr).trim();
+
+  let text = String(option?.label || option?.name || option?.title || '').trim();
+  if (text.includes('—')) text = text.split('—').pop().trim();
+  else if (text.includes(' - ') && !text.includes(' / ')) {
+    const parts = text.split(' - ');
+    if (parts.length > 1 && (parts[1].includes('/') || isSizeString(parts[1]))) {
+      text = parts.slice(1).join(' - ').trim();
+    }
+  }
+
+  if ((!color || !size) && text.includes(' / ')) {
+    const parts = text.split(' / ').map((s) => s.trim());
+    if (parts.length >= 2) {
+      if (isSizeString(parts[0]) && !isSizeString(parts[1])) {
+        if (!size) size = parts[0];
+        if (!color) color = parts[1];
+      } else {
+        if (!color) color = parts[0];
+        if (!size) size = parts[1];
+      }
+    }
+  } else if (!color && !size && text) {
+    if (isSizeString(text)) size = text;
+    else color = text;
+  }
+
+  return { color, size, option };
+}
+
+function variantProduct(option, base) {
+  const detail = option.product && typeof option.product === 'object' ? option.product : {};
+  return {
+    ...base,
+    ...detail,
+    id: option.id ?? detail.id ?? base.id,
+    name: detail.name || option.productName || base.name,
+    price: option.price ?? detail.price ?? base.price,
+    availability: option.availability || detail.availability || base.availability,
+    imageUrls: detail.imageUrls || option.imageUrls || base.imageUrls,
+  };
+}
+
+function updateContainerImages(root, imageUrls) {
+  if (!imageUrls || !imageUrls.length) return;
+  const urls = imageUrls.map(mediaUrl);
+  const targets = pickAll(
+    '.tf-product-media-main img, .tf-product-media-thumbs img, .thumbs-slider img, ' +
+    '.mini-quick-image img, .item-scroll-quickview img, .quickView-item img, ' +
+    '.prd-image img, .img-product',
+    root || document
+  );
+  if (targets.length) {
+    targets.forEach((img, i) => {
+      const url = urls[i % urls.length];
+      setAttr(img, 'src', url);
+      if (img.hasAttribute('data-src')) setAttr(img, 'data-src', url);
+      img.removeAttribute('srcset');
+    });
+  }
+  pickAll('.tf-zoom-main, .drift-zoom-pane', root || document).forEach((pane) => {
+    if (urls[0]) pane.style.backgroundImage = 'url("' + urls[0] + '")';
+  });
+  const stickyImg = pick('.tf-sticky-atc-product .prd_img img');
+  if (stickyImg && urls[0]) {
+    setAttr(stickyImg, 'src', urls[0]);
+    if (stickyImg.hasAttribute('data-src')) setAttr(stickyImg, 'data-src', urls[0]);
+  }
+}
+
+async function loadSampleColorImages(parsedList, baseProduct, onLoaded) {
+  const missingIds = [];
+  const colorToOption = new Map();
+  for (const item of parsedList) {
+    if (!item.color) continue;
+    const key = item.color.toLowerCase();
+    if (!COLOR_IMAGE_CACHE.has(key) && !colorToOption.has(key)) {
+      colorToOption.set(key, item.option);
+      if (item.option?.id) missingIds.push(item.option.id);
+    }
+  }
+
+  const baseColor = (baseProduct?.attributes?.find((a) => /^colou?r$/i.test(a.key || a.name))?.value)
+    || parseVariantOption({ name: baseProduct?.name }, baseProduct).color;
+  if (baseColor && baseProduct?.imageUrls?.length) {
+    const key = baseColor.toLowerCase();
+    if (!COLOR_IMAGE_CACHE.has(key)) {
+      COLOR_IMAGE_CACHE.set(key, baseProduct.imageUrls[0]);
+      COLOR_PRODUCT_CACHE.set(key, baseProduct);
+    }
+  }
+
+  if (missingIds.length) {
+    try {
+      const res = await api.products(missingIds);
+      const items = Array.isArray(res) ? res : (res?.items || []);
+      for (const prod of items) {
+        const parsed = parseVariantOption({ name: prod.name, attributes: prod.attributes }, prod);
+        const c = parsed.color || '';
+        if (c && prod.imageUrls?.length) {
+          const key = c.toLowerCase();
+          COLOR_IMAGE_CACHE.set(key, prod.imageUrls[0]);
+          COLOR_PRODUCT_CACHE.set(key, prod);
+        }
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  if (onLoaded) onLoaded();
+}
+
+function renderVariantPickers({
+  host,
+  p,
+  options,
+  isQuick = false,
+  onSelect,
+  onClear,
+}) {
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const uniqueColors = [...new Set(parsedList.map((x) => x.color).filter(Boolean))];
+  const uniqueSizes = [...new Set(parsedList.map((x) => x.size).filter(Boolean))];
+
+  if (!uniqueColors.length && !uniqueSizes.length) {
+    const rawTitle = String(options[0]?.groupTitle || options[0]?.optionType || 'Options');
+    const optTarget = document.createElement('div');
+    optTarget.className = 'variant-picker-item variant-option quick-variant-picker';
+    const optLabel = document.createElement('div');
+    optLabel.className = 'variant-picker-label variant-picker_label mb-12';
+    optLabel.append(document.createTextNode(rawTitle + ': '));
+    const optValSpan = document.createElement('span');
+    optValSpan.className = 'variant-picker-label-value variant__value fw-medium';
+    optValSpan.textContent = 'Select option';
+    optLabel.appendChild(optValSpan);
+    optTarget.appendChild(optLabel);
+
+    const optValues = document.createElement('div');
+    optValues.className = 'variant-picker-values variant-picker_values';
+    optTarget.appendChild(optValues);
+
+    options.forEach((opt) => {
+      const btn = document.createElement('span');
+      btn.className = 'size-btn size_btn';
+      btn.dataset.variantId = String(opt.id);
+      const name = opt.label || opt.name || opt.title || '';
+      btn.textContent = name;
+      if (opt.availability === 'out') btn.classList.add('disabled');
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (opt.availability === 'out') return notify('That option is sold out.', 'error');
+        optValues.querySelectorAll('.size-btn, .size_btn').forEach((n) => n.classList.remove('active'));
+        btn.classList.add('active');
+        setText(optValSpan, name);
+        const variant = variantProduct(opt, p);
+        if (onSelect) onSelect(variant, rawTitle + ': ' + name, opt);
+      });
+      optValues.appendChild(btn);
+    });
+
+    if (isQuick) {
+      const quantity = pick('.tf-product-total-quantity, .product-total-quantity', host);
+      if (quantity) host.insertBefore(optTarget, quantity);
+      else host.appendChild(optTarget);
+    } else {
+      host.appendChild(optTarget);
+    }
+    return;
+  }
+
+  const baseParsed = parseVariantOption({ name: p.name, attributes: p.attributes }, p);
+  const baseColor = baseParsed.color;
+  const baseSize = baseParsed.size;
+
+  let activeColor = uniqueColors.find((c) => c.toLowerCase() === (baseColor || '').toLowerCase()) || uniqueColors[0] || '';
+  let selectedSize = '';
+  if (baseSize) {
+    const hasInitialSize = parsedList.some(
+      (item) => (!item.color || item.color.toLowerCase() === activeColor.toLowerCase()) && item.size.toLowerCase() === baseSize.toLowerCase() && item.option.availability !== 'out'
+    );
+    if (hasInitialSize) selectedSize = baseSize;
+  }
+
+  const colorTarget = document.createElement('div');
+  colorTarget.className = 'variant-picker-item variant-color quick-variant-picker picker_color';
+
+  const colorLabel = document.createElement('div');
+  colorLabel.className = 'variant-picker-label variant-picker_label mb-12';
+  const colorTitleBox = document.createElement('div');
+  colorTitleBox.append(document.createTextNode('Colors: '));
+  const colorValueSpan = document.createElement('span');
+  colorValueSpan.className = 'variant-picker-label-value variant__value value-currentColor text-capitalize fw-medium';
+  colorValueSpan.textContent = activeColor || 'Select color';
+  colorTitleBox.appendChild(colorValueSpan);
+  colorLabel.appendChild(colorTitleBox);
+  colorTarget.appendChild(colorLabel);
+
+  const colorValues = document.createElement('div');
+  colorValues.className = 'variant-picker-values variant-picker_values';
+  colorTarget.appendChild(colorValues);
+
+  const sizeTarget = document.createElement('div');
+  sizeTarget.className = 'variant-picker-item variant-size quick-variant-picker picker_size';
+
+  const sizeLabel = document.createElement('div');
+  sizeLabel.className = 'variant-picker-label variant-picker_label mb-12 d-flex align-items-center justify-content-between';
+  const sizeTitleBox = document.createElement('div');
+  sizeTitleBox.append(document.createTextNode('Size: '));
+  const sizeValueSpan = document.createElement('span');
+  sizeValueSpan.className = 'variant-picker-label-value variant__value value-currentSize text-capitalize fw-medium';
+  sizeValueSpan.textContent = selectedSize || 'Select size';
+  sizeTitleBox.appendChild(sizeValueSpan);
+  sizeLabel.appendChild(sizeTitleBox);
+
+  const sizeGuideLink = document.createElement('a');
+  sizeGuideLink.href = '#findSize';
+  sizeGuideLink.setAttribute('data-bs-toggle', 'modal');
+  sizeGuideLink.className = 'tf-btn-line-2 style-primary text-caption-01 fw-semibold';
+  sizeGuideLink.textContent = 'Size Guide';
+  sizeLabel.appendChild(sizeGuideLink);
+
+  sizeTarget.appendChild(sizeLabel);
+
+  const sizeValues = document.createElement('div');
+  sizeValues.className = 'variant-picker-values variant-picker_values';
+  sizeTarget.appendChild(sizeValues);
+
+  function applyOption(option) {
+    const product = variantProduct(option, p);
+    const labelParts = [];
+    if (activeColor) labelParts.push('Color: ' + activeColor);
+    if (selectedSize) labelParts.push('Size: ' + selectedSize);
+    const label = labelParts.length ? labelParts.join(' / ') : (option.label || option.name || '');
+    if (onSelect) onSelect(product, label, option);
+  }
+
+  function renderSizesForColor() {
+    sizeValues.replaceChildren();
+    const colorItems = uniqueColors.length
+      ? parsedList.filter((item) => item.color.toLowerCase() === activeColor.toLowerCase())
+      : parsedList;
+
+    const matching = colorItems.find((item) => item.size.toLowerCase() === (selectedSize || '').toLowerCase());
+    if (!matching || matching.option.availability === 'out') {
+      selectedSize = '';
+    }
+
+    setText(sizeValueSpan, selectedSize || 'Select size');
+
+    colorItems.forEach((item) => {
+      const btn = document.createElement('span');
+      btn.className = 'size-btn size_btn';
+      btn.dataset.size = item.size;
+      btn.dataset.variantId = String(item.option.id);
+      btn.textContent = item.size;
+
+      if (item.option.availability === 'out') btn.classList.add('disabled');
+      if (selectedSize && item.size.toLowerCase() === selectedSize.toLowerCase() && item.option.availability !== 'out') {
+        btn.classList.add('active');
+      }
+
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (item.option.availability === 'out') {
+          return notify('That option is sold out.', 'error');
+        }
+        selectedSize = item.size;
+        setText(sizeValueSpan, selectedSize);
+        sizeValues.querySelectorAll('.size-btn, .size_btn').forEach((n) => {
+          n.classList.toggle('active', n.dataset.size === selectedSize);
+        });
+        applyOption(item.option);
+      });
+
+      sizeValues.appendChild(btn);
+    });
+
+    if (selectedSize && matching && matching.option.availability !== 'out') {
+      applyOption(matching.option);
+    } else {
+      if (onClear) onClear();
+    }
+  }
+
+  if (uniqueColors.length) {
+    uniqueColors.forEach((color) => {
+      const isCurrentActive = color.toLowerCase() === activeColor.toLowerCase();
+      const btn = document.createElement('div');
+      btn.className = 'hover-tooltip tooltip-bot color-btn color_btn style-image' + (isCurrentActive ? ' active' : '');
+      btn.dataset.color = color;
+      btn.title = color;
+
+      const swatch = document.createElement('span');
+      swatch.className = 'img';
+      const swatchBg = resolveColorSwatch(color);
+      swatch.style.backgroundColor = swatchBg;
+      swatch.style.background = swatchBg;
+      btn.appendChild(swatch);
+
+      const tooltip = document.createElement('span');
+      tooltip.className = 'tooltip';
+      tooltip.textContent = color;
+      btn.appendChild(tooltip);
+
+      btn.addEventListener('mouseenter', () => {
+        setText(colorValueSpan, color);
+      });
+      btn.addEventListener('mouseleave', () => {
+        setText(colorValueSpan, activeColor || 'Select color');
+      });
+
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (activeColor.toLowerCase() === color.toLowerCase()) return;
+        activeColor = color;
+        setText(colorValueSpan, activeColor);
+        colorValues.querySelectorAll('.color-btn, .color_btn').forEach((n) => {
+          n.classList.toggle('active', n.dataset.color.toLowerCase() === activeColor.toLowerCase());
+        });
+
+        const colorProd = COLOR_PRODUCT_CACHE.get(activeColor.toLowerCase());
+        const rootContainer = host.closest('.modal, .offcanvas') || document;
+        if (colorProd?.imageUrls?.length) {
+          updateContainerImages(rootContainer, colorProd.imageUrls);
+        } else {
+          const sampleOpt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+          if (sampleOpt?.id) {
+            api.product(sampleOpt.id).then((detail) => {
+              if (detail?.imageUrls?.length) {
+                COLOR_IMAGE_CACHE.set(activeColor.toLowerCase(), detail.imageUrls[0]);
+                COLOR_PRODUCT_CACHE.set(activeColor.toLowerCase(), detail);
+                updateContainerImages(rootContainer, detail.imageUrls);
+              }
+            }).catch(() => {});
+          }
+        }
+
+        if (uniqueSizes.length) {
+          renderSizesForColor();
+        } else {
+          const opt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+          if (opt) applyOption(opt);
+        }
+      });
+
+      colorValues.appendChild(btn);
+    });
+  }
+
+  // Insert into host container before quantity widget if present
+  const quantity = pick('.tf-product-total-quantity, .product-total-quantity', host);
+  if (uniqueColors.length) {
+    if (quantity) host.insertBefore(colorTarget, quantity);
+    else host.appendChild(colorTarget);
+  }
+  if (uniqueSizes.length) {
+    if (quantity) host.insertBefore(sizeTarget, quantity);
+    else host.appendChild(sizeTarget);
+  }
+
+  if (uniqueSizes.length) {
+    renderSizesForColor();
+  } else if (uniqueColors.length) {
+    const initialOpt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+    if (initialOpt) applyOption(initialOpt);
+  }
+
+  loadSampleColorImages(parsedList, p);
+}
+
+async function paintQuickVariants(panel, p) {
+  let group = null;
+  try { group = await api.variants(p.id); } catch { /* remove demo controls below */ }
+  const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
+  pickAll('.quick-variant-picker, .tf-product-variant .variant-picker-item', panel).forEach(remove);
+  panel._merchSelectedVariant = null;
+  panel.dataset.merchSizeRequired = 'false';
+  if (!options.length) return;
+
+  const host = pick('.tf-product-variant', panel) || pick('.tf-product-quick_add, .tf-product-quick_view', panel) || panel;
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const hasSizes = parsedList.some((x) => x.size);
+  panel.dataset.merchSizeRequired = hasSizes ? 'true' : 'false';
+
+  renderVariantPickers({
+    host,
+    p,
+    options,
+    isQuick: true,
+    onSelect: (variant, label) => {
+      panel._merchSelectedVariant = { product: variant, label };
+      setText(pick('.product-infor-name|.prd-name', panel), variant.name);
+      paintQuickViewExtras(panel, variant);
+      const newPrice = pick('.price-on-sale|.price-new', panel);
+      if (newPrice) setText(newPrice, money(variant.price));
+    },
+    onClear: () => {
+      panel._merchSelectedVariant = null;
+    },
+  });
+}
+
+/* Keep the fashion offcanvas basket in step with the actual basket. Its HTML
+   ships with demo rows, including demo sizes and prices, so use one row only
+   as a visual template and rebuild the contents from local cart data. */
+function paintFashionMiniCart() {
+  if (THEME?.name !== 'fashion') return;
+  const host = pick('.popup-shopping-cart .tf-mini-cart-items');
+  if (!host) return;
+  const rows = pickAll('.tf-mini-cart-item', host);
+  if (!FASHION_MINI_CART_TEMPLATE && rows[0]) FASHION_MINI_CART_TEMPLATE = rows[0].cloneNode(true);
+  rows.forEach(remove);
+  const lines = cart.lines();
+  const empty = pick('.box-text_empty', host);
+  show(empty, !lines.length);
+  host.classList.toggle('list-empty', !lines.length);
+  if (lines.length && FASHION_MINI_CART_TEMPLATE) {
+    const frag = document.createDocumentFragment();
+    lines.forEach((line) => {
+      const row = FASHION_MINI_CART_TEMPLATE.cloneNode(true);
+      row.dataset.merchId = line.itemId;
+      const img = pick('.tf-mini-cart-image img', row);
+      if (line.image) {
+        setAttr(img, 'src', mediaUrl(line.image));
+        img?.removeAttribute('data-src');
+      } else remove(img);
+      const name = pick('.tf-mini-cart-info .name', row);
+      setText(name, line.name);
+      setAttr(name, 'href', productHref({ id: line.itemId }));
+      pickAll('.tf-prd-select', row).forEach(remove);
+      if (line.variantLabel) {
+        const variant = document.createElement('div');
+        variant.className = 'tf-prd-select text-caption-01';
+        setText(variant, line.variantLabel);
+        pick('.tf-mini-cart-info', row)?.appendChild(variant);
+      }
+      setText(pick('.tf-mini-cart-price .number', row), line.qty);
+      setText(pick('.tf-mini-card-price', row), money(line.price));
+      pick('.tf-mini-cart-price .remove', row)?.addEventListener('click', () => cart.remove(line.itemId));
+      frag.appendChild(row);
+    });
+    host.appendChild(frag);
+  }
+  pickAll('.popup-shopping-cart .tf-mini-cart-total .total-price').forEach((el) =>
+    setText(el, money(cart.localSubtotal())),
+  );
+
+  pickAll('.popup-shopping-cart').forEach((popup) => {
+    let bottom = pick('.tf-mini-cart-bottom', popup);
+    const wrap = pick('.wrap-empty_text', popup) || pick('.wrap', popup) || popup;
+    if (!bottom && wrap) {
+      bottom = document.createElement('div');
+      bottom.className = 'tf-mini-cart-bottom box-empty_clear';
+      bottom.innerHTML = `
+        <div class="tf-mini-cart-bottom-wrap">
+          <div class="tf-mini-cart-total">
+            <h5 class="text-total d-flex align-content-center justify-content-between">
+              <span class="subtotal">Subtotal</span>
+              <span class="total-price tf-totals-total-value">${money(cart.localSubtotal())}</span>
+            </h5>
+          </div>
+          <div class="tf-mini-cart-view-checkout">
+            <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
+            <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
+          </div>
+        </div>
+      `;
+      wrap.appendChild(bottom);
+    }
+
+    if (bottom) {
+      if (lines.length) {
+        bottom.style.display = 'block';
+        bottom.classList.remove('d-none');
+      } else {
+        bottom.style.display = 'none';
+      }
+
+      const bottomWrap = pick('.tf-mini-cart-bottom-wrap', bottom) || bottom;
+      let viewCheckout = pick('.tf-mini-cart-view-checkout', bottomWrap);
+      if (!viewCheckout) {
+        viewCheckout = document.createElement('div');
+        viewCheckout.className = 'tf-mini-cart-view-checkout';
+        viewCheckout.innerHTML = `
+          <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
+          <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
+        `;
+        const continueLink = pick('a[href*="shop"]', bottomWrap);
+        if (continueLink) bottomWrap.insertBefore(viewCheckout, continueLink);
+        else bottomWrap.appendChild(viewCheckout);
+      }
+
+      let viewCartBtn = pick('a[href*="cart"], .btn-stroke', viewCheckout);
+      if (!viewCartBtn) {
+        viewCartBtn = document.createElement('a');
+        viewCartBtn.className = 'tf-btn btn-stroke';
+        viewCartBtn.textContent = 'View cart';
+        viewCheckout.insertBefore(viewCartBtn, viewCheckout.firstChild);
+      }
+      setAttr(viewCartBtn, 'href', pageUrl('cart'));
+      if (!viewCartBtn._merchWired) {
+        viewCartBtn._merchWired = true;
+        viewCartBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          location.href = pageUrl('cart');
+        });
+      }
+
+      let checkoutBtn = pick('a[href*="checkout"], .animate-btn', viewCheckout);
+      if (!checkoutBtn) {
+        checkoutBtn = document.createElement('a');
+        checkoutBtn.className = 'tf-btn animate-btn';
+        checkoutBtn.textContent = 'Check Out';
+        viewCheckout.appendChild(checkoutBtn);
+      }
+      setAttr(checkoutBtn, 'href', pageUrl('checkout'));
+      if (!checkoutBtn._merchWired) {
+        checkoutBtn._merchWired = true;
+        checkoutBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        });
+      }
+    }
+  });
+}
+
+function paintFashionCartTotals(subtotal, discount, shipping, total) {
+  const box = pick('.box-order-summary');
+  if (!box) return;
+
+  const subtotalEl = pick('.subtotal .total', box);
+  if (subtotalEl) setText(subtotalEl, money(subtotal));
+
+  const discountEl = pick('.discount .total', box);
+  if (discountEl) setText(discountEl, discount > 0 ? '-' + money(discount) : money(0));
+
+  const freeLabelPrice = pick('label[for="free"] .price', box);
+  if (freeLabelPrice) setText(freeLabelPrice, money(0));
+  const localLabelPrice = pick('label[for="local"] .price', box);
+  if (localLabelPrice) setText(localLabelPrice, money(35));
+  const rateLabelPrice = pick('label[for="rate"] .price', box);
+  if (rateLabelPrice) setText(rateLabelPrice, money(35));
+
+  const p = pending.get();
+  let shipAmount = p.shipping;
+  const localRadio = pick('#local', box);
+  const rateRadio = pick('#rate', box);
+  const freeRadio = pick('#free', box);
+
+  if (shipAmount === undefined || shipAmount === null) {
+    if (localRadio?.checked) shipAmount = 35;
+    else if (rateRadio?.checked) shipAmount = 35;
+    else shipAmount = 0;
+    pending.set({ shipping: shipAmount });
+  }
+
+  if (shipAmount === 0 && freeRadio) freeRadio.checked = true;
+  else if (shipAmount === 35) {
+    if (!localRadio?.checked && !rateRadio?.checked) {
+      if (localRadio) localRadio.checked = true;
+      else if (rateRadio) rateRadio.checked = true;
+    }
+  }
+
+  if (!box._merchShippingWired) {
+    box._merchShippingWired = true;
+    pickAll('input[name="ship-check"]', box).forEach((radio) => {
+      radio.addEventListener('change', () => {
+        let newShip = 0;
+        if (radio.id === 'local' || radio.id === 'rate') newShip = 35;
+        pending.set({ shipping: newShip });
+        const curDisc = pending.get().discount || 0;
+        const curSub = cart.lines().reduce((n, l) => n + l.price * l.qty, 0);
+        const newTotal = Math.max(0, curSub - curDisc + newShip);
+        const totalEl = pick('.total-order .total, .each-total-price', box);
+        if (totalEl) setText(totalEl, money(newTotal));
+      });
+    });
+  }
+
+  const finalTotal = Math.max(0, subtotal - discount + (shipAmount || 0));
+  const totalEl = pick('.total-order .total, .each-total-price', box);
+  if (totalEl) setText(totalEl, money(finalTotal));
+
+  const freeAbove = Number(STORE?.shipping?.freeAbove) || 70;
+  const left = Math.max(0, freeAbove - subtotal);
+  const progressP = pick('.notification-progress p', box);
+  if (progressP) {
+    if (left > 0) {
+      progressP.innerHTML = `Buy <span class="text-primary fw-bold">${money(left)}</span> more to get freeship`;
+    } else {
+      progressP.innerHTML = `Your order qualifies for <span class="text-primary fw-bold">Free Shipping</span>!`;
+    }
+  }
+  const progressBar = pick('.progress-cart .value', box);
+  if (progressBar) {
+    const pct = Math.min(100, Math.round((subtotal / freeAbove) * 100));
+    progressBar.style.width = pct + '%';
+    progressBar.setAttribute('data-progress', pct);
+  }
+}
+
+function paintFashionCheckoutTotals(subtotal, discount, shipping, total) {
+  const box = pick('.box-your-order');
+  if (!box) return;
+
+  const listTotal = pick('.list-total', box);
+  if (listTotal) {
+    let subtotalItem = pick('.total-item-subtotal', listTotal);
+    if (!subtotalItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/subtotal/i.test(pick('span:first-child', li)?.textContent || '')) {
+          subtotalItem = li;
+          subtotalItem.classList.add('total-item-subtotal');
+          break;
+        }
+      }
+    }
+    if (!subtotalItem) {
+      subtotalItem = document.createElement('li');
+      subtotalItem.className = 'total-item lh-24 fw-medium total-item-subtotal';
+      subtotalItem.innerHTML = `<span>Subtotal</span><span>${money(subtotal)}</span>`;
+      listTotal.insertBefore(subtotalItem, listTotal.firstChild);
+    } else {
+      const valSpan = pick('span:last-child', subtotalItem);
+      if (valSpan) setText(valSpan, money(subtotal));
+    }
+
+    let shippingItem = pick('.total-item-shipping', listTotal);
+    if (!shippingItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/shipping/i.test(pick('span:first-child', li)?.textContent || '')) {
+          shippingItem = li;
+          shippingItem.classList.add('total-item-shipping');
+          break;
+        }
+      }
+    }
+    if (shippingItem) {
+      const valSpan = pick('span:last-child', shippingItem);
+      if (valSpan) setText(valSpan, shipping == null ? 'Free' : (shipping > 0 ? money(shipping) : 'Free'));
+    }
+
+    let discountItem = pick('.total-item-discount', listTotal);
+    if (!discountItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/discount/i.test(pick('span:first-child', li)?.textContent || '')) {
+          discountItem = li;
+          discountItem.classList.add('total-item-discount');
+          break;
+        }
+      }
+    }
+    if (discountItem) {
+      const valSpan = pick('span:last-child', discountItem);
+      if (valSpan) setText(valSpan, discount > 0 ? '-' + money(discount) : money(0));
+    }
+  }
+
+  const lastTotal = pick('.last-total', box);
+  if (lastTotal) {
+    const valSpan = pick('span:last-child', lastTotal);
+    if (valSpan) setText(valSpan, money(total));
+  }
+}
+
+async function paintVariantsFashion(spec, p) {
+  if (!spec.variants) return;
+  PDP_VARIANT_REQUIRED = false;
+  PDP_SELECTED_VARIANT = null;
+  remove(pick('.tf-sticky-atc-variant-price'));
+
+  let group = null;
+  try { group = await api.variants(p.id); } catch { group = null; }
+  const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
+  const container = pick(spec.variants.container);
+  if (!container) return;
+
+  pickAll(spec.variants.group, container).forEach(remove);
+  if (!options.length) { remove(container); return; }
+
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const hasSizes = parsedList.some((x) => x.size);
+  PDP_VARIANT_REQUIRED = hasSizes;
+
+  renderVariantPickers({
+    host: container,
+    p,
+    options,
+    isQuick: false,
+    onSelect: (variant, label) => {
+      PDP_SELECTED_VARIANT = { product: variant, label };
+      $$('.btn-action-price, .btn-add-to-cart').forEach((btn) => setText(btn, 'Add to cart'));
+      const detailPrice = pick('.product-infor-price .price-on-sale');
+      if (detailPrice) setText(detailPrice, money(variant.price));
+      const stickyVariant = pick('.tf-sticky-atc-product .distribute__prd');
+      if (stickyVariant) setText(stickyVariant, label);
+      const stickyPrice = pick('.tf-sticky-atc-product .price__prd');
+      if (stickyPrice) setText(stickyPrice, money(variant.price));
+    },
+    onClear: () => {
+      PDP_SELECTED_VARIANT = null;
+    },
+  });
+}
+
+function wireQuickViewFashion() {
+  /* A theme can ship more than one of these — fashion has a Quick View
+     offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
+     the shopper opens has to be the product they clicked. */
+  const panels = [];
+  for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper', '.modal-quick-view']) {
+    $$(sel).forEach((el) => { if (!panels.includes(el)) panels.push(el); });
+  }
+  if (!panels.length || panels[0].dataset.merchQuickView) return;
+  panels.forEach((el) => { el.dataset.merchQuickView = '1'; });
+
+  /* The text fields only. Anything carrying an `action` is wired once, below,
+     against whichever product is currently showing — re-running wireAction per
+     open would either be ignored (it guards against double-wiring) or stack a
+     handler per open. */
+  const fields = Object.fromEntries(
+    Object.entries(THEME.product?.fields || {}).filter(([, f]) => f && !f.action),
+  );
+
+  document.addEventListener('click', async (e) => {
+    const trigger = e.target.closest(
+      '.quickview, .cta-quickview, .product-details-popup-btn, [data-quickview], ' +
+      'a[href="#quickView"], a[href="#quick_view"], a[href="#quickAdd"], ' +
+      '[data-bs-target="#quick_view"], [data-bs-target="#quickAdd"]',
+    );
+    if (!trigger) return;
+    const id = trigger.closest('[data-merch-id]')?.dataset.merchId;
+    if (!id) return;                       // a trigger on markup we never filled
+
+    try {
+      const p = await api.product(id);
+      quickViewProduct = p;
+      for (const panel of panels) {
+        fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
+        paintGalleryIn(panel, THEME.product?.gallery, p);
+        paintQuickViewExtras(panel, p);
+        await paintQuickVariants(panel, p);
+      }
+    } catch (err) { showError(err); }
+  }, true);                                 // capture, so we fill BEFORE the theme opens it
+
+  /* One handler for the panels' own buttons, reading whatever is showing. */
+  for (const modal of panels) modal.addEventListener('click', (e) => {
+    const add = e.target.closest(THEME?.name === 'fashion'
+      ? '.btn-add-to-cart, .btn-action-price'
+      : '.btn-add-to-cart, .btn-action-price, .btn-cart2, .btn-cart, .rts-btn.btn-primary, .tf-btn');
+    if (!add || !quickViewProduct) return;
+    if (/wish/i.test(add.className)) return;
+    e.preventDefault();
+    const selected = modal._merchSelectedVariant;
+    if (modal.dataset.merchSizeRequired === 'true' && !selected) return notify('Please select a size first.', 'error');
+    const item = selected?.product || quickViewProduct;
+    if (item.availability === 'out') return notify('That option is sold out.', 'error');
+    const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
+    cart.add(item, qty, selected?.label || '');
+    notify(item.name + ' added to your cart.', 'success');
+    track('add_to_cart', { itemId: item.id, qty, via: 'quickview' });
+    if (THEME?.name === 'fashion') {
+      try {
+        if (window.bootstrap?.Modal) {
+          window.bootstrap.Modal.getInstance(modal)?.hide();
+        }
+        if (window.bootstrap?.Offcanvas) {
+          window.bootstrap.Offcanvas.getInstance(modal)?.hide();
+        }
+        const cartEl = document.getElementById('shoppingCart');
+        if (cartEl && window.bootstrap?.Offcanvas) {
+          const bsOffcanvas = window.bootstrap.Offcanvas.getInstance(cartEl) || new window.bootstrap.Offcanvas(cartEl);
+          bsOffcanvas.show();
+        }
+      } catch { /* ignore */ }
+    }
+  });
+}
+
 /* --- THE FILTER SIDEBAR ---------------------------------------------------
    Every template ships one, listing brands and categories its designer made
    up — "Bags (112)", "Clothing (42)" — and clicking them did nothing at all.
@@ -5655,13 +6592,6 @@ async function paintFilters(state, run) {
   catch { return; }
   if (!facets) return;
 
-  if (!facets.categories || !facets.categories.length) {
-    const rawCats = await getCategories();
-    if (rawCats?.length) {
-      facets.categories = rawCats.map((name) => ({ name: typeof name === 'string' ? name : name.name, count: 0 }));
-    }
-  }
-
   wireHorizontalFilterBar(state, run, facets);
 
   for (const group of FILTER_GROUPS) {
@@ -5679,20 +6609,6 @@ async function paintFilters(state, run) {
       if (/\d/.test(el.textContent || '')) setText(el, 'Price: ' + money(price.min) + ' — ' + money(price.max));
     });
     $$('input[type="range"]').forEach((r) => { r.min = String(Math.floor(price.min)); r.max = String(Math.ceil(price.max)); });
-  }
-
-  if (THEME?.name === 'electronic') {
-    if (!facets.sizes?.length) {
-      pickAll('.widget-facet.facet-size').forEach((el) => show(el, false));
-    }
-    if (!facets.colors?.length) {
-      pickAll('.widget-facet.facet-color').forEach((el) => show(el, false));
-    }
-    if (!facets.brands?.length) {
-      pickAll('.widget-facet').forEach((el) => {
-        if (el.querySelector('#nike, #LV, #hermes, #gucci')) show(el, false);
-      });
-    }
   }
 }
 
@@ -5729,68 +6645,33 @@ function paintFilterGroup(list, group, values, state, run) {
   const shown = values.slice(0, Math.min(values.length, Math.max(room, 12)));
 
   list.replaceChildren();
-
-  // If this is category filter in electronic sidebar, prepend an "All Categories" option
-  if (group.key === 'category' && list.classList.contains('facet-content')) {
-    const allNode = template.cloneNode(true);
-    const allLink = allNode.querySelector('a') || allNode;
-    allLink.className = 'categories-item' + (!state.category ? ' active' : '');
-    allLink.setAttribute('href', pageUrl('listing'));
-    allLink.innerHTML = `All Categories`;
-    allLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      state.category = '';
-      state.page = 1;
-      pushState(state);
-      run();
-      pickAll('a', list).forEach((a) => a.classList.remove('active'));
-      allLink.classList.add('active');
-    });
-    list.appendChild(allNode);
-  }
-
   for (const v of shown) {
     const node = template.cloneNode(true);
     const input = node.querySelector('input[type="checkbox"], input[type="radio"]');
     const label = node.querySelector('label') || node.querySelector('a') || node;
 
-    const isMatch = String(state[group.key] || '').toLowerCase() === String(v.value).toLowerCase();
-
     if (input) {
       const id = 'merch-' + group.key + '-' + v.value.replace(/[^\w-]+/g, '-').toLowerCase();
       input.id = id;
-      input.checked = isMatch;
+      input.checked = String(state[group.key] || '') === String(v.value);
       if (label.tagName === 'LABEL') label.setAttribute('for', id);
     }
-
-    if (label.classList.contains('categories-item') || label.querySelector('.count-cate')) {
-      label.className = 'categories-item' + (isMatch ? ' active' : '');
-      label.innerHTML = `${escapeHtml(v.label)} ${v.count ? `<span class="count-cate">(${v.count})</span>` : ''}`;
-    } else {
-      setText(label, v.count ? `${v.label} (${v.count})` : v.label);
+    setText(label, v.count ? `${v.label} (${v.count})` : v.label);
     if (group.key === 'color') {
       const dot = colourDot(v.value, 12);
       if (dot) label.insertBefore(dot, label.firstChild);
     }
-      if (label.tagName === 'A') {
-        if (isMatch) label.classList.add('active');
-        else label.classList.remove('active');
-      }
-    }
-
     if (label.tagName === 'A') label.setAttribute('href', pageUrl('listing', { [group.key]: v.value }));
 
     const choose = (e) => {
       e.preventDefault();
       /* The store takes ONE value per filter, so picking another replaces it
          and picking the current one clears it. */
-      const already = String(state[group.key] || '').toLowerCase() === String(v.value).toLowerCase();
+      const already = String(state[group.key] || '') === String(v.value);
       state[group.key] = already ? '' : v.value;
       state.page = 1;
       pushState(state);
       run();
-      pickAll('a', list).forEach((a) => a.classList.remove('active'));
-      if (!already && label.tagName === 'A') label.classList.add('active');
       pickAll('input', list).forEach((i) => { i.checked = false; });
       if (input && !already) input.checked = true;
       syncHorizontalDropdownFromState(state);
@@ -5942,7 +6823,13 @@ async function paintCartTotals(spec, lines) {
 
   pickAll(t.discount).forEach((el) => setText(el, discount ? '-' + money(discount) : money(0)));
   pickAll(t.shipping).forEach((el) => setText(el, p.shipping == null ? 'Calculated at checkout' : (p.shipping ? money(p.shipping) : 'Free')));
-  pickAll(t.total).forEach((el) => setText(el, money(Math.max(0, subtotal - discount + (p.shipping || 0)))));
+  const finalTotal = Math.max(0, subtotal - discount + (p.shipping || 0));
+
+  if (THEME?.name === 'fashion') {
+    paintFashionCartTotals(subtotal, discount, p.shipping, finalTotal);
+  }
+
+  pickAll(t.total).forEach((el) => setText(el, money(finalTotal)));
 }
 
 function wireCoupon(spec, rerender) {
@@ -6055,7 +6942,15 @@ pages.checkout = async () => {
 function paintCheckoutSummary(spec, lines) {
   const s = spec.summary;
   const t = takeTemplate(s);
-  if (t) repeat(t, lines, (node, l) => fillFields(node, s.fields, l, { node }));
+  if (t) repeat(t, lines, (node, l) => {
+    fillFields(node, s.fields, l, { node });
+    if (THEME?.name === 'fashion') {
+      const metaRows = pickAll('.infor-prd .text-caption-01', node);
+      const label = l.variantLabel || (l.qty > 1 ? 'Qty ' + l.qty : '');
+      if (label && metaRows[0]) setText(metaRows[0], label);
+      metaRows.slice(label ? 1 : 0).forEach(remove);
+    }
+  });
 
   const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
   const p = pending.get();
@@ -6811,18 +7706,7 @@ pages.account = async () => {
   if (!token.get()) { showSignedOut(); return; }
 
   const cachedName = localStorage.getItem('merch.shopper_name');
-  const cachedFirst = localStorage.getItem('merch.shopper_first_name');
-  const cachedLast = localStorage.getItem('merch.shopper_last_name');
-  const cachedEmail = localStorage.getItem('merch.shopper_email');
-  const cachedPhone = localStorage.getItem('merch.shopper_phone');
-
-  if (cachedName || cachedFirst || cachedLast || cachedEmail) {
-    const fullName = cachedName || [cachedFirst, cachedLast].filter(Boolean).join(' ') || cachedEmail?.split('@')[0] || '';
-    pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, fullName));
-    if (cachedEmail) pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, cachedEmail));
-    updateAvatarInitials(cachedFirst, cachedLast, fullName, cachedEmail);
-    fillAccountDetails({ name: fullName, email: cachedEmail, phone: cachedPhone });
-  }
+  if (cachedName) pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, cachedName));
 
   let me = null;
   try { me = await api.me(); }
@@ -6835,23 +7719,9 @@ pages.account = async () => {
   wireAddressForm();
   wireSignOut();
 };
-pages.orders = async () => {
-  if (token.get()) {
-    const cachedFirst = localStorage.getItem('merch.shopper_first_name');
-    const cachedLast = localStorage.getItem('merch.shopper_last_name');
-    const cachedName = localStorage.getItem('merch.shopper_name');
-    const cachedEmail = localStorage.getItem('merch.shopper_email');
-    updateAvatarInitials(cachedFirst, cachedLast, cachedName, cachedEmail);
-    await paintOrders();
-  } else showSignedOut();
-};
+pages.orders = async () => { if (token.get()) await paintOrders(); else showSignedOut(); };
 pages.addresses = async () => {
   if (!token.get()) return showSignedOut();
-  const cachedFirst = localStorage.getItem('merch.shopper_first_name');
-  const cachedLast = localStorage.getItem('merch.shopper_last_name');
-  const cachedName = localStorage.getItem('merch.shopper_name');
-  const cachedEmail = localStorage.getItem('merch.shopper_email');
-  updateAvatarInitials(cachedFirst, cachedLast, cachedName, cachedEmail);
   wireAddressForm();
   await paintAddresses();
   const editId = new URLSearchParams(location.search).get('edit');
@@ -6884,97 +7754,6 @@ function showSignedIn(me) {
     if (savedEmail) localStorage.setItem('merch.shopper_email', savedEmail);
   } catch {}
   paintAccountHeader().catch(() => {});
-}
-
-function updateAvatarInitials(first, last, fullName, email) {
-  let f = (first || '').trim().charAt(0);
-  let l = (last || '').trim().charAt(0);
-  if (!f && !l && fullName) {
-    const parts = fullName.trim().split(/\s+/).filter(Boolean);
-    if (parts.length > 0) f = parts[0].charAt(0);
-    if (parts.length > 1) l = parts[parts.length - 1].charAt(0);
-  }
-  if (!f && email) f = email.trim().charAt(0);
-  const initials = ((f + l) || 'U').toUpperCase();
-
-  const avatarWraps = pickAll('.account-avatar');
-  avatarWraps.forEach((wrap) => {
-    let initEl = wrap.querySelector('.avatar-initials');
-    if (!initEl) {
-      const imgWrap = wrap.querySelector('.image');
-      if (imgWrap) imgWrap.style.display = 'none';
-      initEl = document.createElement('div');
-      initEl.className = 'avatar-initials';
-      initEl.style.cssText = 'width: 80px; height: 80px; border-radius: 50%; background: #181818; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; margin: 0 auto 16px; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);';
-      wrap.insertBefore(initEl, wrap.firstChild);
-    }
-    initEl.textContent = initials;
-
-    const nameEl = wrap.querySelector('h6, .customer-name, .account-name');
-    if (nameEl) nameEl.textContent = fullName || 'Account';
-    const emailEl = wrap.querySelector('.body-text-1, .customer-email, .account-email');
-    if (emailEl) emailEl.textContent = email || '';
-  });
-}
-
-function wireAccountDetailsForm() {
-  const form = pick('form.form-account-details') || $$('form').find((f) => {
-    return pick('input[placeholder*="first" i]', f) && pick('input[placeholder*="last" i]', f) && pick('input[type="email"]', f);
-  });
-  if (!form || form._merchDetailsWired) return;
-  form._merchDetailsWired = true;
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const fn = pick('input[placeholder*="first" i]|input[name*="first" i]', form)?.value.trim() || '';
-    const ln = pick('input[placeholder*="last" i]|input[name*="last" i]', form)?.value.trim() || '';
-    const em = pick('input[type="email"]|input[placeholder*="email address" i]', form)?.value.trim() || '';
-    const ph = pick('input[type="tel"]|input[placeholder*="phone" i]|input[name*="phone" i]|input[placeholder*="mobile" i]', form)?.value.trim() || '';
-    const stateEl = pick('#account-state, select[name*="state"]', form);
-    const stateVal = stateEl?.value || '';
-
-    const fullName = [fn, ln].filter(Boolean).join(' ') || em.split('@')[0] || '';
-
-    try {
-      if (fn) localStorage.setItem('merch.shopper_first_name', fn);
-      if (ln) localStorage.setItem('merch.shopper_last_name', ln);
-      if (fullName) localStorage.setItem('merch.shopper_name', fullName);
-      if (em) localStorage.setItem('merch.shopper_email', em);
-      if (ph) localStorage.setItem('merch.shopper_phone', ph);
-      if (stateVal && stateVal !== 'Choose State') localStorage.setItem('merch.shopper_state', stateVal);
-    } catch {}
-
-    updateAvatarInitials(fn, ln, fullName, em);
-    pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, fullName));
-    pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, em));
-    applyShopperHeader(fullName, em);
-
-    const currentPw = pick('input[placeholder*="current" i][type="password"], .account-password input[placeholder*="password*" i]', form);
-    const newPw = pick('input[placeholder*="new" i][type="password"]', form);
-    const confirmPw = pick('input[placeholder*="confirm" i][type="password"]', form);
-
-    if (currentPw?.value || newPw?.value || confirmPw?.value) {
-      if (!currentPw?.value || !newPw?.value) {
-        return notify('Please fill both current and new password to change password.', 'error');
-      }
-      if (confirmPw && confirmPw.value !== newPw.value) {
-        return notify('The two new passwords do not match.', 'error');
-      }
-      try {
-        await api.changePassword(currentPw.value, newPw.value);
-        currentPw.value = '';
-        newPw.value = '';
-        if (confirmPw) confirmPw.value = '';
-        notify('Account information and password updated successfully.', 'success');
-      } catch (err) {
-        showError(err);
-      }
-    } else {
-      notify('Account information updated successfully.', 'success');
-    }
-  });
 }
 
 function fillAccountDetails(me) {
@@ -7468,22 +8247,6 @@ pages.wishlist = async () => {
   }
   let items = [];
   try { items = await api.products(ids); } catch (e) { return showError(e); }
-
-  if (!items.length) {
-    const grid = pick(THEME.listing.container);
-    if (grid) {
-      grid.innerHTML = `
-        <div class="col-12 w-100 text-center py-5">
-          <i class="icon icon-heart fs-1 text-muted mb-3 d-inline-block" style="font-size:48px;"></i>
-          <h4 class="mb-2">Your wishlist is empty</h4>
-          <p class="text-secondary-2 mb-4">Explore more products and add your favorites to wishlist!</p>
-          <a href="${pageUrl('listing')}" class="tf-btn btn-fill radius-4 d-inline-flex px-4 py-2"><span class="text">Continue Shopping</span></a>
-        </div>
-      `;
-      return;
-    }
-  }
-
   /* A wishlist page is a product grid, and several themes render it as a cart
      table instead — try the grid first, then the table. */
   if (!renderProducts(items)) {
@@ -7501,10 +8264,10 @@ pages.wishlist = async () => {
         emptyDiv.className = 'merch-empty text-center';
         emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
         emptyDiv.innerHTML = `
-          <i class="icon icon-heart text-muted mb-3 d-inline-block" style="font-size:48px;"></i>
+          <i class="fa-regular fa-heart" style="font-size:48px;color:#94a3b8;margin-bottom:16px;display:block;"></i>
           <h4 style="margin-bottom:8px;font-weight:600;">Your wishlist is empty</h4>
           <p style="color:#64748b;margin-bottom:20px;">Explore more products and add your favorites to wishlist!</p>
-          <a href="${pageUrl('listing')}" class="tf-btn btn-fill radius-4" style="display:inline-block;padding:12px 28px;"><span class="text">Continue Shopping</span></a>
+          <a href="shop.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
         `;
         t.container.appendChild(emptyDiv);
       }
@@ -7965,24 +8728,6 @@ pages.collections = async () => {
   let list = [];
   try { list = (await api.collections()) || []; } catch (e) { return showError(e); }
 
-  if (!list.length && THEME?.name === 'electronic') {
-    try {
-      const cats = await getCategories();
-      if (cats?.length) {
-        list = cats.map((cat, i) => {
-          const name = typeof cat === 'string' ? cat : cat.name;
-          return {
-            title: name,
-            description: cat.description || `Explore our top-rated ${name} collection.`,
-            handle: name,
-            isCategory: true,
-            imageUrl: cat.imageUrl || `images/collections/collection-circle/cls-electronic${(i % 11) + 1}.jpg`
-          };
-        });
-      }
-    } catch (e) { warn('collections fallback to categories', e); }
-  }
-
   const spec = { container: '.collections-list', card: '.collection-title' };
   const t = takeTemplate({ container: '.collections-list', card: '.collection-title' });
   if (!t) return;
@@ -7990,15 +8735,9 @@ pages.collections = async () => {
   repeat(t, list, (node, c) => {
     setText(pick('.collection-title', node), c.title);
     setText(pick('.collection-description', node), c.description || '');
-    if (c.isCategory) {
-      pickAll('.collection-link', node).forEach((a) => a.setAttribute('href', pageUrl('listing', { category: c.title })));
-    } else {
-      pickAll('.collection-link', node).forEach((a) => a.setAttribute('href', pageUrl('listing', { collection: c.handle })));
-    }
+    pickAll('.collection-link', node).forEach((a) => a.setAttribute('href', pageUrl('listing', { collection: c.handle })));
     const img = pick('.collection-image', node) || pick('img', node);
-    if (img && c.imageUrl) {
-      img.src = c.imageUrl.startsWith('images/') ? c.imageUrl : mediaUrl(c.imageUrl);
-    }
+    if (img && c.imageUrl) setAttr(img, 'src', mediaUrl(c.imageUrl));
   });
 };
 
@@ -8096,39 +8835,6 @@ async function runDeferredThemeScripts() {
   }
 }
 
-function remapDeadLinks() {
-  const shopPages = [
-    'shop-default-grid.html', 'shop-default-list.html', 'shop-fullwidth-list.html',
-    'shop-fullwidth-grid.html', 'shop-right-sidebar.html', 'shop-filter-dropdown.html',
-    'shop-filter-canvas.html', 'shop-categories-top-02.html', 'shop-collection.html',
-    'shop-breadcrumb-img.html', 'shop-breadcrumb-left.html', 'shop-breadcrumb-background.html',
-    'shop-load-button.html', 'shop-pagination.html', 'shop-infinite-scrolling.html'
-  ];
-  const prodPages = [
-    'product-grid-1.html', 'product-grid-2.html', 'product-stacked.html',
-    'product-right-thumbnails.html', 'product-bottom-thumbnails.html',
-    'product-description-accordion.html', 'product-description-list.html',
-    'product-description-menutab.html', 'product-description-fullwidth.html',
-    'product-fixed-price.html', 'product-fixed-scroll.html', 'product-swatch-color.html',
-    'product-swatch-rounded.html', 'product-swatch-rounded-color.html',
-    'product-swatch-image.html', 'product-swatch-rounded-image.html',
-    'product-swatch-dropdown.html', 'product-swatch-dropdown-color.html',
-    'product-style-01.html', 'product-style-02.html', 'product-style-03.html',
-    'product-style-04.html', 'product-style-05.html', 'product-style-06.html', 'product-style-07.html'
-  ];
-
-  $$('a[href]').forEach((a) => {
-    const href = a.getAttribute('href');
-    if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
-    const cleanHref = href.split('?')[0].split('#')[0];
-    if (shopPages.includes(cleanHref)) {
-      a.setAttribute('href', href.replace(cleanHref, 'shop-left-sidebar.html'));
-    } else if (prodPages.includes(cleanHref)) {
-      a.setAttribute('href', href.replace(cleanHref, 'product-detail.html'));
-    }
-  });
-}
-
 async function boot() {
   /* No store address at the top of this file: the shop is not live yet. Touch
      nothing — every theme keeps its own demo products, prices, images and
@@ -8176,13 +8882,12 @@ async function boot() {
   }
 
   paintHeader();
-  cart.onChange(paintHeader);
+  /* paintFashionMiniCart self-gates on THEME.name, so this is a no-op on the other
+     three themes — it is wired here, unconditionally, because that is where the
+     fashion copy wired it and the guard already lives inside the function. */
+  cart.onChange(() => { paintHeader(); paintFashionMiniCart(); });
   wishlist.onChange(paintHeader);
-  wishlist.onChange(() => {
-    if (PAGE === 'wishlist') {
-      try { pages.wishlist(); } catch (e) { warn('wishlist re-render', e); }
-    }
-  });
+  paintFashionMiniCart();
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
   try { paintUsps(STORE); } catch (e) { warn('usps', e); }
