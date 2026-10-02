@@ -48,9 +48,7 @@
    Fill it in and the same pages show your real catalogue instead.
    =========================================================================== */
 
-// export const STOREFRONT_URL = '';
 export const STOREFRONT_URL = 'https://demo.wisetracktechnologies.com/admin';
-
 
 /* ---------------------------------------------------------------------------
    WHO OWNS THE LOOK — the admin panel, or this template?
@@ -84,7 +82,7 @@ export const USE_STORE_APPEARANCE = {
   usps: true,           // the "free delivery / 24-7 support" strip
   social: true,         // the social icons, and hiding the ones you do not use
   banners: true,        // the hero — the merchant's artwork, headline and button
-  writtenPages: true,   // Privacy, Terms, Refunds and Shipping
+  writtenPages: false,  // Privacy, Terms, Refunds and Shipping (keep designed HTML pages intact)
   aboutPage: false,     // About — OFF by default, see below
 };
 
@@ -322,6 +320,8 @@ export const token = {
   set: (t) => { try { localStorage.setItem(TOKEN_KEY, t); } catch { /* ignore */ } },
   clear: () => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } },
 };
+let STORE_ME = null;
+let STORE_ADDRESS = null;
 
 function qs(obj) {
   if (!obj) return '';
@@ -572,14 +572,21 @@ export const cart = {
 /* A local wishlist for guests, merged into the account's on sign-in. The store
    owns the real one; this is what makes the heart icon work signed out. */
 const WISH_KEY = 'merch.wishlist';
+const wishListeners = new Set();
+function writeWish(ids) {
+  writeJson(WISH_KEY, ids);
+  wishListeners.forEach((fn) => { try { fn(ids); } catch (e) { warn(e); } });
+}
+
 export const wishlist = {
   ids: () => readJson(WISH_KEY, []),
   has: (id) => wishlist.ids().includes(id),
+  onChange: (fn) => { wishListeners.add(fn); return () => wishListeners.delete(fn); },
   async toggle(itemId) {
     const on = !wishlist.has(itemId);
     const ids = wishlist.ids().filter((x) => x !== itemId);
     if (on) ids.push(itemId);
-    writeJson(WISH_KEY, ids);
+    writeWish(ids);
     if (token.get()) {
       try { on ? await api.addToWishlist(itemId) : await api.removeFromWishlist(itemId); }
       catch (e) { if (!(e instanceof ApiError && e.isUnauthenticated)) warn(e); }
@@ -592,7 +599,7 @@ export const wishlist = {
     const local = wishlist.ids();
     try {
       for (const id of local) await api.addToWishlist(id).catch(() => {});
-      writeJson(WISH_KEY, (await api.wishlist()) || []);
+      writeWish((await api.wishlist()) || []);
     } catch (e) { warn(e); }
   },
 };
@@ -1116,25 +1123,43 @@ const THEMES = {
     product: {
       fields: {
         title:    { sel: '.contents .product-title', text: (p) => p.name },
-        category: { sel: '.product-catagory', text: (p) => p.category || '' },
+        category: { sel: '.product-catagory', text: (p) => p.category || '', hideWhen: (p) => !p.category },
         desc:     { sel: '.contents > p', text: (p) => p.description || '' },
-        /* The price sits as a bare text node next to the struck-through one,
-           so we rewrite that node rather than the element — but only when it
-           really is text, because the quick-view modal shapes it differently
-           and `childNodes[0].nodeValue` throws there. */
         price:    { sel: '.product-price', each: (el, p) => {
-          const first = el.firstChild;
-          if (first && first.nodeType === 3) first.nodeValue = money(p.price) + ' ';
-          else el.insertBefore(document.createTextNode(money(p.price) + ' '), el.firstChild);
+          const cur = el.querySelector('.current-price');
+          if (cur) cur.textContent = money(p.price) + ' ';
+          else {
+            const first = el.firstChild;
+            if (first && first.nodeType === 3) first.nodeValue = money(p.price) + ' ';
+            else el.insertBefore(document.createTextNode(money(p.price) + ' '), el.firstChild);
+          }
+          const old = el.querySelector('.old-price');
+          if (old) {
+            if (p.mrp && p.mrp > p.price) {
+              old.textContent = money(p.mrp);
+              show(old, true);
+            } else {
+              show(old, false);
+            }
+          }
+          const tax = el.querySelector('.tax-note');
+          if (tax) {
+            if (p.taxNote) {
+              tax.textContent = '(' + p.taxNote + ')';
+              show(tax, true);
+            } else {
+              show(tax, false);
+            }
+          }
         } },
         mrp:      { sel: '.product-price .old-price', text: mrpText, hideWhen: hasNoMrp },
-        sku:      { sel: '.product-uniques .sku', text: (p) => p.unit ? 'Unit: ' + p.unit : '' },
         add:      { sel: '.product-bottom-action .rts-btn:not(.ml--20)', action: 'add' },
-        wish:     { sel: '.product-bottom-action .ml--20', action: 'wishlist' },
+        wish:     { sel: '.product-bottom-action .ml--20, .single-share-option:first-child', action: 'wishlist' },
         reviews:  { sel: '.rating-stars-group span', each: (el) => el.classList.add('review-count') },
       },
       gallery: { images: '.product-thumb-area .thumb-wrapper .product-thumb', thumbs: '.product-thumb-filter-group .thumb-filter' },
-      taxNote: '.product-price + .tax-note',
+      variants: { container: '.product-variants-container' },
+      taxNote: '.product-price .tax-note',
     },
 
     cart: {
@@ -1162,7 +1187,8 @@ const THEMES = {
         link:  { sel: 'a', attr: 'href', all: true, value: postHref },
         image: { sel: 'img', attr: 'src', value: postImage },
         title: { sel: '.title|h4|h5', text: (b) => b.title },
-        date:  { sel: '.date|.blog-date', text: postDate },
+        date:  { sel: '.date|.blog-date|.single-meta:first-child span', text: postDate },
+        category: { sel: '.single-meta:has(.fa-folder)', dropWhen: (b) => !b.category, text: (b) => b.category },
         excerpt: { sel: '.disc|p', text: (b) => b.excerpt || '' },
       },
     },
@@ -1478,6 +1504,7 @@ THEMES.electronic = {
       email: 'input[placeholder="Email Address*"]',
       phone: 'input[placeholder="Phone Number*"]',
       city: 'input[placeholder="Town/City*"]',
+      state: '#merch-state, select.text-title:not([name*="country"])',
       address1: 'input[placeholder="Street,..."]',
       pincode: 'input[placeholder="Postal Code*"]',
     },
@@ -1857,12 +1884,221 @@ async function loadStoreSettings() {
   }
 }
 
+function paintMiniCart() {
+  const popups = pickAll('.category-sub-menu.card-number-show');
+  if (!popups.length) return;
+
+  const lines = cart.lines();
+  const count = cart.count();
+  const subtotal = cart.localSubtotal();
+  const countPad = String(count).padStart(2, '0');
+
+  let itemsHtml = '';
+  if (lines.length > 0) {
+    itemsHtml = lines.map((l, i) => `
+      <div class="cart-item-1${i === 0 ? ' border-top' : ''}">
+          <div class="img-name">
+              <div class="thumbanil">
+                  <img src="${escapeHtml(mediaUrl(l.image) || 'assets/images/shop/cart-1.png')}" alt="${escapeHtml(l.name)}" style="width: 70px; height: 70px; object-fit: contain;">
+              </div>
+              <div class="details">
+                  <a href="${escapeHtml(productHref({ id: l.itemId }))}">
+                      <h5 class="title" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${escapeHtml(l.name)}</h5>
+                  </a>
+                  <div class="number">
+                      ${l.qty} <i class="fa-regular fa-x"></i>
+                      <span>${money(l.price)}</span>
+                  </div>
+              </div>
+          </div>
+          <div class="close-c1" data-remove-id="${escapeHtml(l.itemId)}" role="button" title="Remove item" style="cursor: pointer;">
+              <i class="fa-regular fa-x"></i>
+          </div>
+      </div>
+    `).join('');
+  }
+
+  const freeShippingLimit = 125;
+  const progressPct = Math.min(100, Math.round((subtotal / freeShippingLimit) * 100));
+  const shippingMsg = subtotal >= freeShippingLimit
+    ? 'You have reached <span>Free Shipping</span>!'
+    : `Spend More <span>${money(Math.max(0, freeShippingLimit - subtotal))}</span> to reach <span>Free Shipping</span>`;
+
+  popups.forEach((popup) => {
+    if (lines.length === 0) {
+      popup.innerHTML = `
+        <h5 class="shopping-cart-number">Shopping Cart (00)</h5>
+        <div class="empty-cart-popup" style="padding: 30px 15px; text-align: center;">
+            <i class="fa-sharp fa-regular fa-cart-shopping" style="font-size: 32px; color: #94a3b8; margin-bottom: 12px; display: inline-block;"></i>
+            <p style="color: #64748b; margin-bottom: 15px; font-size: 14px;">Your cart is currently empty.</p>
+            <a href="${pageUrl('listing')}" class="rts-btn btn-primary" style="padding: 8px 18px; font-size: 13px; display: inline-block;">Shop Now</a>
+        </div>
+      `;
+    } else {
+      popup.innerHTML = `
+        <h5 class="shopping-cart-number">Shopping Cart (${countPad})</h5>
+        <div class="cart-items-wrapper">
+            ${itemsHtml}
+        </div>
+        <div class="sub-total-cart-balance">
+            <div class="bottom-content-deals mt--10">
+                <div class="top">
+                    <span>Sub Total:</span>
+                    <span class="number-c">${money(subtotal)}</span>
+                </div>
+                <div class="single-progress-area-incard">
+                    <div class="progress">
+                        <div class="progress-bar wow fadeInLeft" role="progressbar" style="width: ${progressPct}%" aria-valuenow="${progressPct}" aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                </div>
+                <p>${shippingMsg}</p>
+            </div>
+            <div class="button-wrapper d-flex align-items-center justify-content-between">
+                <a href="${pageUrl('cart')}" class="rts-btn btn-primary">View Cart</a>
+                <a href="${pageUrl('checkout')}" class="rts-btn btn-primary border-only">CheckOut</a>
+            </div>
+        </div>
+      `;
+    }
+
+    popup.querySelectorAll('.close-c1[data-remove-id]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const id = btn.getAttribute('data-remove-id');
+        if (id) cart.remove(id);
+      });
+    });
+
+    popup.onclick = (e) => {
+      e.stopPropagation();
+    };
+  });
+}
+
 function paintHeader() {
   const h = THEME?.header || {};
-  const count = cart.count();
-  pickAll(h.cartCount).forEach((el) => setText(el, count));
-  pickAll(h.wishCount).forEach((el) => setText(el, wishlist.ids().length));
+  const cartCount = cart.count();
+  const wishCount = wishlist.ids().length;
+
+  pickAll('.btn-border-only.cart').forEach((btn) => {
+    let num = btn.querySelector('.number');
+    if (!num) {
+      num = document.createElement('span');
+      num.className = 'number';
+      const menu = btn.querySelector('.category-sub-menu');
+      if (menu) btn.insertBefore(num, menu);
+      else btn.appendChild(num);
+    }
+    setText(num, cartCount);
+  });
+  pickAll(h.cartCount).forEach((el) => setText(el, cartCount));
+
+  pickAll('.btn-border-only.wishlist').forEach((btn) => {
+    let num = btn.querySelector('.number');
+    if (!num) {
+      num = document.createElement('span');
+      num.className = 'number';
+      btn.appendChild(num);
+    }
+    setText(num, wishCount);
+  });
+  pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
+
   pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
+
+  paintMiniCart();
+  paintAccountHeader().catch(() => {});
+}
+
+async function paintAccountHeader() {
+  const accountBtns = $$('.btn-border-only.account');
+  const mobileAuthBottom = pick('.button-area-main-wrapper-menuy-sidebar .buton-area-bottom');
+
+  const t = token.get();
+  if (!t) {
+    accountBtns.forEach((btn) => {
+      const textEl = btn.querySelector('.account-btn-text');
+      if (textEl) textEl.textContent = 'Account';
+      const guestMenu = btn.querySelector('.account-guest-menu');
+      const userMenu = btn.querySelector('.account-user-menu');
+      if (guestMenu) guestMenu.style.display = 'block';
+      if (userMenu) userMenu.style.display = 'none';
+    });
+    if (mobileAuthBottom) {
+      mobileAuthBottom.innerHTML = '<a href="login.html" class="rts-btn btn-primary">Sign In</a><a href="register.html" class="rts-btn btn-secondary">Register</a>';
+    }
+    wireAccountBtnClick();
+    return;
+  }
+
+  // Signed in - update immediately from cache
+  let cachedName = null;
+  let cachedEmail = null;
+  try {
+    cachedName = localStorage.getItem('merch.shopper_name');
+    cachedEmail = localStorage.getItem('merch.shopper_email');
+  } catch {}
+
+  if (cachedName || cachedEmail) {
+    applyShopperHeader(cachedName || cachedEmail.split('@')[0], cachedEmail);
+  }
+
+  // Fresh load if not in memory
+  try {
+    const me = STORE_ME || await api.me();
+    STORE_ME = me;
+    const name = me?.name || (me?.email ? me.email.split('@')[0] : 'Account');
+    try {
+      localStorage.setItem('merch.shopper_name', name);
+      if (me?.email) localStorage.setItem('merch.shopper_email', me.email);
+    } catch {}
+    applyShopperHeader(name, me?.email);
+  } catch (e) {
+    if (e instanceof ApiError && e.isUnauthenticated) {
+      token.clear();
+      try {
+        localStorage.removeItem('merch.shopper_name');
+        localStorage.removeItem('merch.shopper_email');
+      } catch {}
+      paintAccountHeader();
+    }
+  }
+}
+
+function applyShopperHeader(name, email) {
+  const accountBtns = $$('.btn-border-only.account');
+  accountBtns.forEach((btn) => {
+    const textEl = btn.querySelector('.account-btn-text');
+    if (textEl) textEl.textContent = name;
+    const guestMenu = btn.querySelector('.account-guest-menu');
+    const userMenu = btn.querySelector('.account-user-menu');
+    if (guestMenu) guestMenu.style.display = 'none';
+    if (userMenu) {
+      userMenu.style.display = 'block';
+      const nameEl = userMenu.querySelector('.account-user-name');
+      if (nameEl) nameEl.textContent = name || email || 'User';
+    }
+  });
+
+  const mobileAuthBottom = pick('.button-area-main-wrapper-menuy-sidebar .buton-area-bottom');
+  if (mobileAuthBottom) {
+    mobileAuthBottom.innerHTML = '<a href="account.html" class="rts-btn btn-primary">My Account</a><a href="#" class="rts-btn btn-secondary account-logout-btn" data-signout>Logout</a>';
+  }
+
+  wireAccountBtnClick();
+  wireSignOut();
+}
+
+function wireAccountBtnClick() {
+  $$('.btn-border-only.account').forEach((btn) => {
+    if (btn.__wiredClick) return;
+    btn.__wiredClick = true;
+    btn.addEventListener('click', (e) => {
+      if (e.target.closest('.category-sub-menu')) return;
+      location.href = token.get() ? pageUrl('account') : pageUrl('login');
+    });
+  });
 }
 
 /* --- The shop's own identity -------------------------------------------------
@@ -2147,6 +2383,7 @@ async function paintCurrencySwitcher() {
      appended to it again — four copies of the currency list in the topbar. */
   const labels = $$('a, span, button, div, li').filter((el) => {
     if (el.dataset.merchCurrency || el.closest('[data-merch-currency]')) return false;
+    if (el.closest('.nav-h_top.language, .language')) return false;
     const t = ownText(el);
     return t && t.length <= 34 && isLabel(t);
   });
@@ -2232,8 +2469,14 @@ function displayCurrencyFor(role) {
    it ships nothing, put the sentence where the grid was, unstyled. */
 function renderEmpty(container, message, spec) {
   if (!container) return;
-  const own = pick('.no-results|.empty-state|.wrap-empty_text|.cart-empty', container.parentElement || document);
-  if (own) { show(own, true); show(container, false); return; }
+  const searchRoot = container.closest?.('.order-table-account, .shipping-address-billing-address-account, .saved-addresses-col, .tab-pane, .table-responsive, .cart-area, .cart-section, .col-lg-7, .col-lg-6') || container.parentElement || document;
+  const own = pick('.no-results|.empty-state|.wrap-empty_text|.cart-empty', searchRoot);
+  if (own) {
+    show(own, true);
+    const hideTarget = container.closest?.('.table-responsive, table') || container;
+    show(hideTarget, false);
+    return;
+  }
 
   /* Take out the ITEMS and nothing else. Replacing everything in the
      container destroyed whatever else lived there — on the account page that
@@ -2349,11 +2592,12 @@ function paintQuickViewExtras(panel, p) {
 let quickViewProduct = null;
 
 function wireQuickView() {
+  if (THEME?.name === 'fashion') return wireQuickViewFashion();
   /* A theme can ship more than one of these — fashion has a Quick View
      offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
      the shopper opens has to be the product they clicked. */
   const panels = [];
-  for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper', '.modal-quick-view']) {
+  for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper:not(.in-shopdetails)', '.modal-quick-view']) {
     $$(sel).forEach((el) => { if (!panels.includes(el)) panels.push(el); });
   }
   if (!panels.length || panels[0].dataset.merchQuickView) return;
@@ -2470,6 +2714,7 @@ pages.home = async () => {
   paintBanners(data);
   paintCategoryTiles(data);
   await renderRecentlyViewed(rails[rails.length - 1]);
+  await paintBlogStrip(4);
   wireQuickView();
 };
 
@@ -2548,6 +2793,37 @@ function paintCategoryTiles(data) {
     const room = Math.max(1, templateCount({ ...spec, el }));
     repeat(t, cats.slice(0, Math.max(room, Math.min(cats.length, room * 2))), (node, c) => {
       fillFields(node, spec.fields, c, { node });
+    });
+  }
+}
+
+/* Blog posts on pages outside the blog archive - e.g. the home page's
+   "Latest Blog Post Insights" strip. Shown with at most `max` posts (default 4). */
+const hydratedBlogs = new WeakSet();
+async function paintBlogStrip(max = 4) {
+  const spec = THEME?.blog;
+  if (!spec) return;
+  const cards = pickAll(spec.card);
+  if (!cards.length) return;
+
+  const containers = productContainers(spec).filter((el) => !hydratedBlogs.has(el));
+  if (!containers.length) return;
+
+  let posts = [];
+  try { posts = (await api.blog()) || []; } catch (e) { return warn('blog strip', e); }
+
+  if (!posts.length) {
+    containers.forEach((el) => show(el.closest('section, .section, .rts-section, .blog-area-start') || el, false));
+    return;
+  }
+
+  for (const el of containers) {
+    hydratedBlogs.add(el);
+    const t = takeTemplate({ ...spec, el });
+    if (!t) continue;
+    repeat(t, posts.slice(0, max), (node, post) => {
+      node.dataset.merchSlug = post.slug;
+      fillFields(node, spec.fields, post, { node });
     });
   }
 }
@@ -2642,10 +2918,12 @@ pages.listing = async () => {
     const items = Array.isArray(res) ? res : (res.products || res.items || []);
     for (const grid of pickAll(THEME.listing.container)) renderProducts(items, THEME.listing, grid);
     wireQuickView();
-    paintResultCount(items, state, pageSize);
+    const total = await paintResultCount(items, state, pageSize);
+    renderPagination(total, state, run, pageSize);
     THEME.reinit?.();
   };
 
+  wireHorizontalFilterBar(state, run, null);
   wireSearchInputs((q) => { state.q = q; state.page = 1; pushState(state); run(); });
   wireSortSelects((sort) => { state.sort = sort; state.page = 1; pushState(state); run(); });
   wireCategoryLinks();
@@ -2655,6 +2933,545 @@ pages.listing = async () => {
   await paintFilters(state, run);
   await run();
 };
+
+/* Render responsive dynamic pagination controls */
+function renderPagination(total, state, run, pageSize) {
+  const pager = pick('.pagination-area-main-wrappper, .pagination-area, .pagination');
+  if (!pager) return;
+  const ul = pager.tagName === 'UL' ? pager : pager.querySelector('ul');
+  if (!ul) return;
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(Math.max(1, state.page || 1), totalPages);
+
+  let startPage = Math.max(1, curPage - 2);
+  let endPage = Math.min(totalPages, startPage + 4);
+  if (endPage - startPage < 4) {
+    startPage = Math.max(1, endPage - 4);
+  }
+
+  let html = '';
+  html += `<li><button type="button" class="prev-page ${curPage <= 1 ? 'disabled' : ''}" ${curPage <= 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''} aria-label="Previous"><i class="fa-regular fa-chevron-left"></i></button></li>`;
+
+  if (startPage > 1) {
+    html += `<li><button type="button" class="page-num" data-page="1">1</button></li>`;
+    if (startPage > 2) {
+      html += `<li><span style="display:inline-block;padding:0 5px;color:#999;">...</span></li>`;
+    }
+  }
+
+  for (let p = startPage; p <= endPage; p++) {
+    html += `<li><button type="button" class="page-num ${p === curPage ? 'active' : ''}" data-page="${p}">${p}</button></li>`;
+  }
+
+  if (endPage < totalPages) {
+    if (endPage < totalPages - 1) {
+      html += `<li><span style="display:inline-block;padding:0 5px;color:#999;">...</span></li>`;
+    }
+    html += `<li><button type="button" class="page-num" data-page="${totalPages}">${totalPages}</button></li>`;
+  }
+
+  html += `<li><button type="button" class="next-page ${curPage >= totalPages ? 'disabled' : ''}" ${curPage >= totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''} aria-label="Next"><i class="fa-regular fa-chevron-right"></i></button></li>`;
+
+  ul.innerHTML = html;
+
+  ul.querySelectorAll('button.page-num').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const p = Number(btn.dataset.page);
+      if (p && p !== curPage) {
+        state.page = p;
+        pushState(state);
+        run();
+        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+        topEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  });
+
+  const prevBtn = ul.querySelector('button.prev-page:not(.disabled)');
+  if (prevBtn) {
+    prevBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (curPage > 1) {
+        state.page = curPage - 1;
+        pushState(state);
+        run();
+        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+        topEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  }
+
+  const nextBtn = ul.querySelector('button.next-page:not(.disabled)');
+  if (nextBtn) {
+    nextBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (curPage < totalPages) {
+        state.page = curPage + 1;
+        pushState(state);
+        run();
+        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+        topEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  }
+}
+
+/* Helper to sync horizontal filter bar with state */
+function syncHorizontalDropdownFromState(state) {
+  const bar = pick('.nice-select-area-wrapper-and-button');
+  if (!bar) return;
+
+  const types = [
+    { type: 'category', stateVal: state.category || '', defaultLabel: 'All Categories' },
+    { type: 'brand',    stateVal: state.brand || '',    defaultLabel: 'All Brands' },
+    { type: 'size',     stateVal: state.size || '',     defaultLabel: 'All Size' },
+    { type: 'weight',   stateVal: state.size || '',     defaultLabel: 'All Weight' },
+  ];
+
+  types.forEach(({ type, stateVal, defaultLabel }) => {
+    const dd = bar.querySelector(`.filter-dropdown[data-filter-type="${type}"]`);
+    if (!dd) return;
+
+    const toggle = dd.querySelector('.filter-dropdown-toggle');
+    const toggleText = dd.querySelector('.toggle-text');
+    let matchedItem = null;
+
+    dd.querySelectorAll('.filter-check').forEach((chk) => {
+      const isMatch = stateVal && (
+        chk.value.toLowerCase() === stateVal.toLowerCase() ||
+        (chk.dataset.slug && chk.dataset.slug.toLowerCase() === stateVal.toLowerCase()) ||
+        (chk.dataset.name && chk.dataset.name.toLowerCase() === stateVal.toLowerCase())
+      );
+      chk.checked = !!isMatch;
+      const itemRow = chk.closest('.filter-dropdown-item');
+      if (itemRow) {
+        if (isMatch) {
+          itemRow.classList.add('checked');
+          matchedItem = chk;
+        } else {
+          itemRow.classList.remove('checked');
+        }
+      }
+    });
+
+    if (matchedItem && stateVal) {
+      const labelText = matchedItem.closest('.filter-dropdown-item')?.querySelector('.item-text')?.textContent || stateVal;
+      if (toggleText) toggleText.textContent = labelText;
+      if (toggle) toggle.classList.add('has-value');
+    } else {
+      if (type === 'size' || type === 'weight') {
+        const hasAny = dd.querySelector('.filter-check:checked');
+        if (!hasAny) {
+          if (toggleText) toggleText.textContent = defaultLabel;
+          if (toggle) toggle.classList.remove('has-value');
+        }
+      } else {
+        if (toggleText) toggleText.textContent = defaultLabel;
+        if (toggle) toggle.classList.remove('has-value');
+      }
+    }
+  });
+}
+
+/* Helper to sync sidebar checkboxes when horizontal bar is changed */
+function syncSidebarCheckboxes(filterKey, value) {
+  const normVal = (value || '').toLowerCase().trim();
+  const rx = filterKey === 'category' ? /categor/i :
+             filterKey === 'brand' ? /brand|manufacturer/i : /size|weight/i;
+  const scope = filterGroupScope(rx);
+  if (!scope) return;
+
+  scope.querySelectorAll('input[type="checkbox"]').forEach((chk) => {
+    const row = chk.closest('label, li, .single-category') || chk.parentElement;
+    const txt = (row?.textContent || '').replace(/\(\d+\)/g, '').toLowerCase().trim();
+    if (normVal && txt === normVal) {
+      chk.checked = true;
+    } else {
+      chk.checked = false;
+    }
+  });
+}
+
+/* Wire horizontal filter bar with categories, brands, size, weight */
+function wireHorizontalFilterBar(state, run, facets) {
+  const bar = pick('.nice-select-area-wrapper-and-button');
+  if (!bar) return;
+
+  // 1. If the bar contains old <select> elements, transform them into custom .filter-dropdown structures
+  const dropdownConfigs = [
+    { type: 'category', defaultLabel: 'All Categories', searchPlaceholder: 'Search category...' },
+    { type: 'brand',    defaultLabel: 'All Brands',     searchPlaceholder: 'Search brand...' },
+    { type: 'size',     defaultLabel: 'All Size',       searchPlaceholder: 'Search size...' },
+    { type: 'weight',   defaultLabel: 'All Weight',     searchPlaceholder: 'Search weight...' },
+  ];
+
+  bar.querySelectorAll('.single-select').forEach((container, idx) => {
+    const cfg = dropdownConfigs[idx] || { type: 'filter-' + idx, defaultLabel: 'Filter', searchPlaceholder: 'Search...' };
+    if (!container.classList.contains('filter-dropdown')) {
+      container.classList.add('filter-dropdown');
+      container.setAttribute('data-filter-type', cfg.type);
+    }
+    const select = container.querySelector('select');
+    if (select && !container.querySelector('.filter-dropdown-toggle')) {
+      const options = [...select.options].filter((o) => o.value && !o.disabled);
+      let itemsHtml = '';
+      options.forEach((opt) => {
+        itemsHtml += `
+          <label class="filter-dropdown-item">
+            <input type="checkbox" class="filter-check" value="${escapeHtml(opt.value)}">
+            <span class="item-text">${escapeHtml(opt.text || opt.value)}</span>
+          </label>`;
+      });
+      container.innerHTML = `
+        <button type="button" class="filter-dropdown-toggle">
+          <span class="toggle-text">${escapeHtml(cfg.defaultLabel)}</span>
+          <i class="fa-regular fa-chevron-down"></i>
+        </button>
+        <div class="filter-dropdown-menu">
+          <div class="filter-dropdown-header-bar">
+            <input type="text" class="filter-dropdown-search" placeholder="${escapeHtml(cfg.searchPlaceholder)}">
+            <button type="button" class="btn-clear-dropdown" title="Clear filter">Clear</button>
+          </div>
+          <div class="filter-dropdown-list">
+            ${itemsHtml}
+          </div>
+        </div>`;
+    }
+  });
+
+  // 2. If facets are provided, dynamically populate/refresh the lists
+  if (facets) {
+    const catDd = bar.querySelector('.filter-dropdown[data-filter-type="category"] .filter-dropdown-list');
+    if (catDd && facets.categories && facets.categories.length) {
+      let html = '';
+      facets.categories.forEach((c) => {
+        html += `
+          <label class="filter-dropdown-item">
+            <input type="checkbox" class="filter-check" value="${escapeHtml(c.name)}">
+            <span class="item-text">${escapeHtml(c.name)}</span>
+            <span class="item-count">(${c.count})</span>
+          </label>`;
+      });
+      catDd.innerHTML = html;
+    }
+
+    const brandDd = bar.querySelector('.filter-dropdown[data-filter-type="brand"] .filter-dropdown-list');
+    if (brandDd && facets.brands && facets.brands.length) {
+      let html = '';
+      facets.brands.forEach((b) => {
+        const val = b.slug || b.name;
+        html += `
+          <label class="filter-dropdown-item">
+            <input type="checkbox" class="filter-check" value="${escapeHtml(val)}" data-name="${escapeHtml(b.name)}" data-slug="${escapeHtml(b.slug || '')}">
+            <span class="item-text">${escapeHtml(b.name)}</span>
+            <span class="item-count">(${b.count})</span>
+          </label>`;
+      });
+      brandDd.innerHTML = html;
+    }
+
+    const sizeAttr = (facets.attributes || []).find((a) => (a.key || '').toLowerCase() === 'size');
+    if (sizeAttr && sizeAttr.values && sizeAttr.values.length) {
+      const sizeDd = bar.querySelector('.filter-dropdown[data-filter-type="size"] .filter-dropdown-list');
+      if (sizeDd) {
+        let html = '';
+        const sizes = sizeAttr.values.filter((v) => !/^\d+\s*(gm|kg|ltr|ml)$/i.test(v.value.trim())).slice(0, 40);
+        const listToUse = sizes.length ? sizes : sizeAttr.values.slice(0, 40);
+        listToUse.forEach((s) => {
+          html += `
+            <label class="filter-dropdown-item">
+              <input type="checkbox" class="filter-check" value="${escapeHtml(s.value)}">
+              <span class="item-text">${escapeHtml(s.value)}</span>
+              <span class="item-count">(${s.count})</span>
+            </label>`;
+        });
+        sizeDd.innerHTML = html;
+      }
+
+      const weightDd = bar.querySelector('.filter-dropdown[data-filter-type="weight"] .filter-dropdown-list');
+      if (weightDd) {
+        const weights = sizeAttr.values.filter((v) => /gm|kg|ltr|ml/i.test(v.value)).slice(0, 40);
+        if (weights.length) {
+          let html = '';
+          weights.forEach((w) => {
+            html += `
+              <label class="filter-dropdown-item">
+                <input type="checkbox" class="filter-check" value="${escapeHtml(w.value)}">
+                <span class="item-text">${escapeHtml(w.value)}</span>
+                <span class="item-count">(${w.count})</span>
+              </label>`;
+          });
+          weightDd.innerHTML = html;
+        }
+      }
+    }
+  }
+
+  // 3. Setup event listeners on each dropdown
+  bar.querySelectorAll('.filter-dropdown').forEach((dd) => {
+    const filterType = dd.getAttribute('data-filter-type');
+    const toggle = dd.querySelector('.filter-dropdown-toggle');
+    const searchInput = dd.querySelector('.filter-dropdown-search');
+    const clearBtn = dd.querySelector('.btn-clear-dropdown');
+    const list = dd.querySelector('.filter-dropdown-list');
+
+    // Toggle open / close
+    if (toggle && !toggle.__wiredToggle) {
+      toggle.__wiredToggle = true;
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wasActive = dd.classList.contains('active');
+        bar.querySelectorAll('.filter-dropdown.active').forEach((other) => {
+          if (other !== dd) other.classList.remove('active');
+        });
+        dd.classList.toggle('active', !wasActive);
+        if (!wasActive && searchInput) {
+          setTimeout(() => searchInput.focus(), 50);
+        }
+      });
+    }
+
+    // Stop propagation inside menu
+    const menu = dd.querySelector('.filter-dropdown-menu');
+    if (menu && !menu.__wiredMenu) {
+      menu.__wiredMenu = true;
+      menu.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
+    }
+
+    // Search inside dropdown
+    if (searchInput && !searchInput.__wiredSearch) {
+      searchInput.__wiredSearch = true;
+      searchInput.addEventListener('input', () => {
+        const q = searchInput.value.toLowerCase().trim();
+        const items = list?.querySelectorAll('.filter-dropdown-item') || [];
+        let visibleCount = 0;
+        items.forEach((item) => {
+          const text = item.querySelector('.item-text')?.textContent.toLowerCase() || '';
+          const match = text.includes(q);
+          item.style.display = match ? 'flex' : 'none';
+          if (match) visibleCount++;
+        });
+
+        let emptyMsg = list?.querySelector('.filter-empty-message');
+        if (visibleCount === 0) {
+          if (!emptyMsg) {
+            emptyMsg = document.createElement('div');
+            emptyMsg.className = 'filter-empty-message';
+            emptyMsg.textContent = 'No matching options found';
+            list?.appendChild(emptyMsg);
+          }
+          emptyMsg.style.display = 'block';
+        } else if (emptyMsg) {
+          emptyMsg.style.display = 'none';
+        }
+      });
+    }
+
+    // Checkbox change event (INSTANT FILTERING ON SELECT)
+    if (list && !list.__wiredCheckChange) {
+      list.__wiredCheckChange = true;
+      list.addEventListener('change', (e) => {
+        const target = e.target;
+        if (!target || !target.classList.contains('filter-check')) return;
+
+        const isChecked = target.checked;
+        const val = target.value;
+
+        // Uncheck all other checkboxes in this dropdown
+        list.querySelectorAll('.filter-check').forEach((chk) => {
+          if (chk !== target) {
+            chk.checked = false;
+            chk.closest('.filter-dropdown-item')?.classList.remove('checked');
+          }
+        });
+
+        const row = target.closest('.filter-dropdown-item');
+        if (isChecked) {
+          row?.classList.add('checked');
+        } else {
+          row?.classList.remove('checked');
+        }
+
+        // Also if this is size or weight, uncheck the other one because state.size is shared
+        if (filterType === 'size') {
+          const weightDd = bar.querySelector('.filter-dropdown[data-filter-type="weight"]');
+          weightDd?.querySelectorAll('.filter-check').forEach((c) => {
+            c.checked = false;
+            c.closest('.filter-dropdown-item')?.classList.remove('checked');
+          });
+          const weightToggle = weightDd?.querySelector('.filter-dropdown-toggle');
+          const weightText = weightDd?.querySelector('.toggle-text');
+          if (weightText) weightText.textContent = 'All Weight';
+          weightToggle?.classList.remove('has-value');
+        } else if (filterType === 'weight') {
+          const sizeDd = bar.querySelector('.filter-dropdown[data-filter-type="size"]');
+          sizeDd?.querySelectorAll('.filter-check').forEach((c) => {
+            c.checked = false;
+            c.closest('.filter-dropdown-item')?.classList.remove('checked');
+          });
+          const sizeToggle = sizeDd?.querySelector('.filter-dropdown-toggle');
+          const sizeText = sizeDd?.querySelector('.toggle-text');
+          if (sizeText) sizeText.textContent = 'All Size';
+          sizeToggle?.classList.remove('has-value');
+        }
+
+        // Update state
+        if (filterType === 'category') {
+          state.category = isChecked ? val : '';
+        } else if (filterType === 'brand') {
+          state.brand = isChecked ? val : '';
+        } else if (filterType === 'size' || filterType === 'weight') {
+          state.size = isChecked ? val : '';
+        }
+
+        // Sync button text & highlight
+        const toggleText = dd.querySelector('.toggle-text');
+        const defaultLabel = filterType === 'category' ? 'All Categories' :
+                             filterType === 'brand' ? 'All Brands' :
+                             filterType === 'size' ? 'All Size' : 'All Weight';
+
+        if (isChecked) {
+          const labelName = row?.querySelector('.item-text')?.textContent || val;
+          if (toggleText) toggleText.textContent = labelName;
+          toggle?.classList.add('has-value');
+        } else {
+          if (toggleText) toggleText.textContent = defaultLabel;
+          toggle?.classList.remove('has-value');
+        }
+
+        // Sync sidebar checkboxes
+        syncSidebarCheckboxes(filterType, isChecked ? val : '');
+
+        // Trigger INSTANT FILTER
+        state.page = 1;
+        pushState(state);
+        run();
+      });
+    }
+
+    // Clear button inside dropdown
+    if (clearBtn && !clearBtn.__wiredClear) {
+      clearBtn.__wiredClear = true;
+      clearBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        list?.querySelectorAll('.filter-check').forEach((chk) => {
+          chk.checked = false;
+          chk.closest('.filter-dropdown-item')?.classList.remove('checked');
+        });
+
+        if (searchInput) {
+          searchInput.value = '';
+          searchInput.dispatchEvent(new Event('input'));
+        }
+
+        const defaultLabel = filterType === 'category' ? 'All Categories' :
+                             filterType === 'brand' ? 'All Brands' :
+                             filterType === 'size' ? 'All Size' : 'All Weight';
+        const toggleText = dd.querySelector('.toggle-text');
+        if (toggleText) toggleText.textContent = defaultLabel;
+        toggle?.classList.remove('has-value');
+
+        if (filterType === 'category') state.category = '';
+        else if (filterType === 'brand') state.brand = '';
+        else if (filterType === 'size' || filterType === 'weight') state.size = '';
+
+        syncSidebarCheckboxes(filterType, '');
+
+        state.page = 1;
+        pushState(state);
+        run();
+      });
+    }
+  });
+
+  // Global click outside to close open dropdowns
+  if (!window.__filterDropdownGlobalWired) {
+    window.__filterDropdownGlobalWired = true;
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.filter-dropdown')) {
+        document.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        document.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+      }
+    });
+  }
+
+  // Initial sync with state (e.g. from URL params or page reload)
+  syncHorizontalDropdownFromState(state);
+
+  // Apply Filter Button
+  const filterBtn = bar.querySelector('.btn-filter-apply, .button-area button:first-child');
+  if (filterBtn && !filterBtn.__wiredFilter) {
+    filterBtn.__wiredFilter = true;
+    filterBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      bar.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+      state.page = 1;
+      pushState(state);
+      run();
+      const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+      topEl.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
+
+  // Reset Filter Button
+  const resetBtn = bar.querySelector('.btn-filter-reset, .button-area button:last-child');
+  if (resetBtn && !resetBtn.__wiredReset) {
+    resetBtn.__wiredReset = true;
+    resetBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      bar.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+
+      // Uncheck all checkboxes in all horizontal dropdowns
+      bar.querySelectorAll('.filter-check').forEach((chk) => {
+        chk.checked = false;
+        chk.closest('.filter-dropdown-item')?.classList.remove('checked');
+      });
+
+      // Reset search inputs
+      bar.querySelectorAll('.filter-dropdown-search').forEach((s) => {
+        s.value = '';
+        s.dispatchEvent(new Event('input'));
+      });
+
+      // Reset labels & highlight classes
+      bar.querySelectorAll('.filter-dropdown').forEach((d) => {
+        const type = d.getAttribute('data-filter-type');
+        const defaultLabel = type === 'category' ? 'All Categories' :
+                             type === 'brand' ? 'All Brands' :
+                             type === 'size' ? 'All Size' : 'All Weight';
+        const txt = d.querySelector('.toggle-text');
+        if (txt) txt.textContent = defaultLabel;
+        d.querySelector('.filter-dropdown-toggle')?.classList.remove('has-value');
+      });
+
+      // Uncheck all sidebar checkboxes
+      document.querySelectorAll('.single-filter-box input[type="checkbox"]').forEach((i) => { i.checked = false; });
+
+      // Reset state
+      state.category = '';
+      state.brand = '';
+      state.size = '';
+      state.color = '';
+      state.minPrice = '';
+      state.maxPrice = '';
+      state.page = 1;
+      pushState(state);
+      run();
+      const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+      topEl.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
+}
 
 /* Every theme ships a static pager. We keep its markup and give its numbers
    meaning; a page beyond the last simply comes back empty, which the store
@@ -2682,9 +3499,9 @@ function wirePagination(state, run, pageSize) {
    up with rather than driving it, because each theme uses a different widget
    and re-implementing four of them would change how they feel. */
 function wirePriceFilter(state, run) {
-  const apply = pick('.price-filter button|.filter-btn|.button-area .rts-btn');
-  const from = pick('.price-range .from|#slider-range-value1|input[name="min_price"]');
-  const to = pick('.price-range .to|#slider-range-value2|input[name="max_price"]');
+  const apply = pick('.price-input-area button, .filter-value-min-max button, .price-filter button, .filter-btn');
+  const from = pick('.price-range .from|#slider-range-value1|input[name="min_price"]|#min');
+  const to = pick('.price-range .to|#slider-range-value2|input[name="max_price"]|#max');
   if (!apply || (!from && !to)) return;
   apply.addEventListener('click', (e) => {
     e.preventDefault();
@@ -2708,7 +3525,6 @@ async function paintResultCount(items, state, pageSize) {
   const sentence = named.length ? named : $$('*').filter(
     (el) => el.children.length === 0 && /showing\s+[\d,]+\s*[-\u2013]\s*[\d,]+\s+of\s+[\d,]+/i.test(el.textContent || ''),
   );
-  if (!sentence.length) return;
 
   let total = items.length;
   try {
@@ -2723,7 +3539,10 @@ async function paintResultCount(items, state, pageSize) {
 
   const from = items.length ? (state.page - 1) * pageSize + 1 : 0;
   const to = (state.page - 1) * pageSize + items.length;
-  sentence.forEach((el) => setText(el, 'Showing ' + from + '\u2013' + to + ' of ' + total + ' results'));
+  if (sentence.length) {
+    sentence.forEach((el) => setText(el, 'Showing ' + from + '\u2013' + to + ' of ' + total + ' results'));
+  }
+  return total;
 }
 
 function pushState(state) {
@@ -2776,14 +3595,39 @@ function wireSortSelects(onSort) {
   });
 }
 
+let headerCategoriesPainted = false;
+let categoriesPromise = null;
+function getCategories() {
+  if (!categoriesPromise) categoriesPromise = api.categories().catch(() => []);
+  return categoriesPromise;
+}
+
+function paintHeaderCategories(cats) {
+  if (headerCategoriesPainted || !cats?.length) return;
+  const menus = [...new Set(document.querySelectorAll('.category-btn > ul.category-sub-menu, #category-active-four, #category-active-menu'))];
+  if (!menus.length) return;
+
+  const html = cats.map((cat, i) => {
+    const iconNum = String((i % 10) + 1).padStart(2, '0');
+    const href = pageUrl('listing', { category: cat });
+    return `<li><a href="${escapeHtml(href)}" class="menu-item"><img src="assets/images/icons/${iconNum}.svg" alt="icons"><span>${escapeHtml(cat)}</span></a></li>`;
+  }).join('');
+
+  menus.forEach((menu) => {
+    menu.innerHTML = html;
+  });
+  headerCategoriesPainted = true;
+}
+
 /* The category menus in every theme's header are static links to demo pages.
    Point them at the real categories without touching how they look. */
 async function wireCategoryLinks() {
   let cats = [];
-  try { cats = await api.categories(); } catch { return; }
+  try { cats = await getCategories(); } catch { return; }
   /* This endpoint answers an array of plain STRINGS — category names, which
      are also what ?category= takes. There is no id or slug to look up. */
   if (!cats?.length) return;
+  paintHeaderCategories(cats);
   const known = new Map(cats.map((name) => [String(name).trim().toLowerCase(), name]));
   pickAll('.menu-item a|.sub-menu a|.category-list a|.single-category a|.categories a').forEach((a) => {
     const name = known.get((a.textContent || '').trim().toLowerCase());
@@ -2808,8 +3652,11 @@ pages.product = async () => {
   fillFields(document, spec.fields, p, { node: document, qtyEl: pick(THEME.qtyInput) });
   document.title = p.name + document.title.replace(/^[^|–-]*/, '');
 
+  paintBreadcrumbs(p);
   paintGallery(spec.gallery, p);
   await paintVariants(spec, p);
+  paintProductUniques(p);
+  paintProductTabs(p);
   await paintReviews(p);
   await paintRelated(p);
 
@@ -2821,6 +3668,21 @@ pages.product = async () => {
   THEME.reinit?.();
   onThemeReady(() => paintPriceButtons(p));
 };
+
+function paintBreadcrumbs(p) {
+  const wrapper = pick('.navigator-breadcrumb-wrapper');
+  if (!wrapper) return;
+  const catLink = pick('.breadcrumb-cat, a:nth-of-type(2)', wrapper);
+  if (catLink && p.category) {
+    setText(catLink, p.category);
+    catLink.setAttribute('href', pageUrl('listing', { category: p.category }));
+  }
+  const prodLink = pick('.breadcrumb-prod, .current', wrapper);
+  if (prodLink) {
+    setText(prodLink, p.name);
+    prodLink.setAttribute('href', 'javascript:void(0);');
+  }
+}
 
 /* Any control whose LABEL carries the price. The theme rewrites these from the
    price element after it loads, so they are corrected here, last. */
@@ -2855,6 +3717,52 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
   if (!gallery) return;
   const urls = (p.imageUrls || []).map(mediaUrl);
   if (!urls.length) return;
+
+  // Grocery interactive zoom gallery with dynamic thumbnails
+  const thumbArea = pick('.product-thumb-area');
+  const filterGroup = pick('.product-thumb-filter-group', thumbArea || document);
+  if (thumbArea && filterGroup) {
+    const existingWrappers = pickAll('.thumb-wrapper', thumbArea);
+    existingWrappers.forEach((el) => remove(el));
+    filterGroup.replaceChildren();
+
+    urls.forEach((url, i) => {
+      const wrapper = document.createElement('div');
+      wrapper.className = `thumb-wrapper thumb-idx-${i} filterd-items ${i === 0 ? 'figure' : 'hide'}`;
+      wrapper.innerHTML = `
+        <div class="product-thumb zoom" onmousemove="zoom(event)" style="background-image: url('${url}')">
+          <img src="${url}" alt="${escapeHtml(p.name)}">
+        </div>
+      `;
+      thumbArea.insertBefore(wrapper, filterGroup);
+
+      if (urls.length > 1) {
+        const filterBtn = document.createElement('div');
+        filterBtn.className = `thumb-filter filter-btn ${i === 0 ? 'active' : ''}`;
+        filterBtn.dataset.show = `.thumb-idx-${i}`;
+        filterBtn.innerHTML = `<img src="${url}" alt="${escapeHtml(p.name)} thumb ${i + 1}">`;
+
+        filterBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          pickAll('.thumb-wrapper.filterd-items', thumbArea).forEach((w) => {
+            w.classList.add('hide');
+            w.classList.remove('figure');
+          });
+          wrapper.classList.remove('hide');
+          wrapper.classList.add('figure');
+          pickAll('.thumb-filter.filter-btn', filterGroup).forEach((b) => b.classList.remove('active'));
+          filterBtn.classList.add('active');
+        });
+        filterGroup.appendChild(filterBtn);
+      }
+    });
+
+    if (urls.length <= 1) {
+      show(filterGroup, false);
+    }
+    return;
+  }
+
   for (const sel of [gallery.images, gallery.thumbs]) {
     const nodes = within(sel);
     if (!nodes.length) continue;
@@ -2882,87 +3790,372 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
   }
 }
 
-/* Variants. Where a theme has a picker we relabel its options; where it has
-   none we leave the page alone and the add button sends the base item. */
-/* Variants are not option combinations to be assembled: the store answers
-   { groupId, title, options: [{ id, name, label, price, availability, current }] }
-   and every option IS a product in its own right. Choosing one is therefore a
-   navigation, not a state change — which is also why the price never has to be
-   recomputed here. */
+/* Variants & Attributes. Displays variant choices (navigates between products in a group)
+   and dynamic product attributes (e.g. Size, Color) with responsive styling. */
 async function paintVariants(spec, p) {
-  if (!spec.variants) return;
-  /* `variantCount` stays 0 even for a product that IS in one of the store's
-     own variant groups — the catalogue projection does not carry them — so
-     gating on it meant the selector never appeared for any product. The
-     endpoint answers 200 with an empty list when there is no group, so the
-     honest thing is to ask, once, on the product page. */
+  if (THEME?.name === 'fashion') return paintVariantsFashion(spec, p);
   let group = null;
-  try { group = await api.variants(p.id); } catch { return; }
+  try { group = await api.variants(p.id); } catch { /* best effort */ }
   const options = group?.options || [];
-  if (options.length < 2) return;
+  const attrs = Array.isArray(p.attributes) ? p.attributes.filter((a) => a.key && a.value) : [];
 
-  const container = pick(spec.variants.container);
+  const container = pick('.product-variants-container') || (spec?.variants?.container ? pick(spec.variants.container) : null);
   if (!container) return;
-  const picker = pickAll(spec.variants.group, container)[0];
-  if (!picker) return;
-  /* Hide the theme's other pickers: it ships one per option type (colour,
-     size) and this store has exactly one axis. */
-  pickAll(spec.variants.group, container).slice(1).forEach((el) => show(el, false));
 
-  setText(pick('.variant-picker-label|.option-title|h6', picker), (group.title || 'Options') + ':');
-  const values = pick('.variant-picker-values|select|ul', picker);
-  if (!values) return;
+  container.replaceChildren();
 
-  if (values.tagName === 'SELECT') {
-    values.replaceChildren(...options.map((o) => {
-      const el = document.createElement('option');
-      el.value = o.id; el.textContent = o.label || o.name;
-      el.selected = !!o.current;
-      return el;
-    }));
-    values.addEventListener('change', () => { location.href = productHref({ id: values.value }); });
-    return;
+  // 1. Variant Group Selector (Mustard Oil: Groundnut, Mustard, Sunflower)
+  if (options.length >= 2) {
+    const cur = options.find((o) => o.current) || options[0];
+    const groupDiv = document.createElement('div');
+    groupDiv.className = 'variant-selection mb--20';
+    groupDiv.innerHTML = `
+      <div class="variant-label mb--10" style="font-weight: 600; font-size: 15px; color: #222;">
+        <span>${escapeHtml(group.title || 'Options')}:</span> 
+        <span class="selected-variant-label" style="font-weight: 500; color: var(--color-primary); margin-left: 6px;">${escapeHtml(cur?.label || cur?.name || '')}</span>
+      </div>
+      <div class="variant-options d-flex flex-wrap gap-2"></div>
+    `;
+    const optsRow = groupDiv.querySelector('.variant-options');
+    options.forEach((o) => {
+      const isCur = !!o.current;
+      const a = document.createElement('a');
+      a.href = productHref({ id: o.id });
+      a.className = `rts-btn ${isCur ? 'btn-primary' : 'btn-outline-primary'}`;
+      a.style.cssText = `padding: 7px 18px; font-size: 14px; border-radius: 6px; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; border: 1.5px solid var(--color-primary); cursor: pointer; transition: all 0.2s ease; ${isCur ? 'background: var(--color-primary); color: #fff;' : 'background: #fff; color: var(--color-primary);'}`;
+      a.innerHTML = `${escapeHtml(o.label || o.name)}${o.price ? ` <span style="font-size: 12px; margin-left: 6px; opacity: 0.85;">(${money(o.price)})</span>` : ''}`;
+      const optDot = colourDot(labelColour(o.label || o.name), 13);
+      if (optDot) a.insertBefore(optDot, a.firstChild);
+      if (isCur) {
+        a.addEventListener('click', (e) => e.preventDefault());
+      }
+      optsRow.appendChild(a);
+    });
+    container.appendChild(groupDiv);
   }
 
-  /* Clone the theme's own swatch — input + label, or whatever single node it
-     uses — once per option. */
-  const unit = [...values.children].slice(0, values.firstElementChild?.tagName === 'INPUT' ? 2 : 1);
-  if (!unit.length) return;
-  values.replaceChildren();
-  options.forEach((o, i) => {
-    const id = 'merch-variant-' + i;
-    for (const proto of unit) {
-      const node = proto.cloneNode(true);
-      if (node.tagName === 'INPUT') { node.id = id; node.value = o.id; node.name = 'merch-variant'; node.checked = !!o.current; }
-      else {
-        if (node.tagName === 'LABEL') node.setAttribute('for', id);
-        node.dataset.value = o.label || o.name;
-        const t = pick('.text-title|.tooltip|span', node);
-        setText(t || node, o.label || o.name);
-        if (o.availability === 'out') node.classList.add('disabled');
+  // 2. Product Attributes Display (Size: 500 gm, Color: ..., etc.)
+  if (attrs.length) {
+    const attrsDiv = document.createElement('div');
+    attrsDiv.className = 'product-attributes-row mb--20';
+    attrs.forEach((attr) => {
+      /* The code paints the swatch beside the colour; printed on its own it is
+         a hex string in a spec table, which is noise to a shopper. */
+      if (/^colou?r[_ ]?code$/i.test(attr.key)) return;
+      const row = document.createElement('div');
+      row.className = 'd-flex align-items-center mb--10';
+      const label = attr.key.charAt(0).toUpperCase() + attr.key.slice(1);
+      row.innerHTML = `
+        <span style="font-weight: 600; font-size: 15px; color: #222; min-width: 70px;">${escapeHtml(label)}:</span>
+        <span class="attr-pill" style="display: inline-flex; align-items: center; padding: 6px 16px; border: 1.5px solid var(--color-primary); background: rgba(98, 155, 41, 0.08); color: var(--color-primary); border-radius: 6px; font-weight: 600; font-size: 14px;">
+          ${escapeHtml(attr.value)}
+        </span>
+      `;
+      if (/^colou?r$/i.test(attr.key)) {
+        const code = attrs.find((a) => /^colou?r[_ ]?code$/i.test(a.key))?.value;
+        const dot = colourDot(attr.value, 14, code);
+        const pill = row.querySelector('.attr-pill');
+        if (dot && pill) pill.insertBefore(dot, pill.firstChild);
       }
-      node.addEventListener('click', () => { if (!o.current) location.href = productHref({ id: o.id }); });
-      values.appendChild(node);
-    }
+      attrsDiv.appendChild(row);
+    });
+    container.appendChild(attrsDiv);
+  }
+}
+
+function paintProductUniques(p) {
+  const container = pick('.product-uniques');
+  if (!container) return;
+  container.replaceChildren();
+
+  const list = [];
+  if (p.id) {
+    list.push({ label: 'Product Code', value: p.id.split('-')[0].toUpperCase() });
+  }
+  if (p.brandName) {
+    list.push({ label: 'Brand', value: p.brandName });
+  }
+  if (p.category) {
+    list.push({ label: 'Category', value: p.category });
+  }
+  if (p.unit) {
+    list.push({ label: 'Unit', value: p.unit });
+  }
+  if (Array.isArray(p.attributes)) {
+    p.attributes.forEach((attr) => {
+      if (attr.key && attr.value) {
+        list.push({
+          label: attr.key.charAt(0).toUpperCase() + attr.key.slice(1),
+          value: attr.value
+        });
+      }
+    });
+  }
+  list.push({
+    label: 'Availability',
+    value: p.availability === 'in_stock' ? 'In Stock' : 'Out of Stock'
   });
+
+  list.forEach((item) => {
+    const span = document.createElement('span');
+    span.className = 'product-unipue mb--10';
+    span.innerHTML = `<span style="font-weight: 600; margin-right: 10px; color: #222;">${escapeHtml(item.label)}:</span> <span style="font-weight: 400; color: #666;">${escapeHtml(item.value)}</span>`;
+    container.appendChild(span);
+  });
+}
+
+function paintProductTabs(p) {
+  // --- Tab 1: Product Details (#home-tab-pane) ---
+  const homeTab = pick('#home-tab-pane');
+  if (homeTab) {
+    const desc = (p.description || '').trim();
+    let topDisc = desc;
+    let bodyDesc = desc;
+
+    if (desc) {
+      // Split on sentence boundaries so overview and detailed text are distinct
+      const sentences = desc.match(/[^.!?]+[.!?]+/g)?.map((s) => s.trim()) || [desc];
+      if (sentences.length >= 3) {
+        topDisc = sentences.slice(0, 2).join(' ');
+        bodyDesc = sentences.slice(2).join(' ');
+      } else if (sentences.length === 2) {
+        topDisc = sentences[0];
+        bodyDesc = sentences[1];
+      } else {
+        topDisc = desc;
+        bodyDesc = `Discover the authentic taste and unmatched quality of ${p.name || 'this product'}. Carefully sourced and packed to preserve freshness and nutrition for you and your family.`;
+      }
+    }
+
+    const disc = pick('.disc', homeTab);
+    if (disc) setText(disc, topDisc || '');
+
+    const detailsRow = pick('.details-row-2', homeTab);
+    if (detailsRow) {
+      const primaryImg = (p.imageUrls && p.imageUrls[0]) || (p.images && p.images[0]) || '';
+      const img = pick('.left-area img', detailsRow);
+      if (img && primaryImg) {
+        setAttr(img, 'src', mediaUrl(primaryImg));
+        setAttr(img, 'alt', p.name || 'product');
+      }
+      const title = pick('.right .title', detailsRow);
+      if (title) setText(title, p.name || '');
+
+      const pDesc = pick('.right p', detailsRow);
+      if (pDesc) setText(pDesc, bodyDesc || '');
+
+      const ul = pick('.bottom-ul', detailsRow);
+      if (ul) {
+        ul.replaceChildren();
+        const bullets = [
+          '100% Genuine and Quality Assured',
+          p.brandName ? `Brand: ${p.brandName}` : null,
+          p.category ? `Category: ${p.category}` : null,
+          p.unit ? `Packaging Unit: ${p.unit}` : null,
+          ...(Array.isArray(p.attributes) ? p.attributes.filter((a) => a.key && a.value).map((a) => `${a.key.charAt(0).toUpperCase() + a.key.slice(1)}: ${a.value}`) : []),
+          p.taxNote ? `Tax: ${p.taxNote}` : 'Inclusive of all taxes',
+          `Availability: ${p.availability === 'in_stock' ? 'In Stock' : 'Out of Stock'}`
+        ].filter(Boolean);
+
+        bullets.forEach((text) => {
+          const li = document.createElement('li');
+          const colonIdx = text.indexOf(':');
+          if (colonIdx > -1) {
+            const label = text.slice(0, colonIdx);
+            const val = text.slice(colonIdx + 1);
+            li.innerHTML = `<strong>${escapeHtml(label)}:</strong>${escapeHtml(val)}`;
+          } else {
+            li.textContent = text;
+          }
+          ul.appendChild(li);
+        });
+      }
+    }
+  }
+
+  // --- Tab 2: Additional Information (#profile-tab-pane) ---
+  const profileTab = pick('#profile-tab-pane');
+  if (profileTab) {
+    const disc = pick('.disc', profileTab);
+    if (disc) disc.remove(); // Remove static lorem ipsum
+
+    const table = pick('table', profileTab);
+    if (table) {
+      const thead = pick('thead', table);
+      if (thead) {
+        thead.innerHTML = `<tr><th style="font-weight: 700; color: #222;">Specification</th><th style="font-weight: 700; color: #222;">Details</th></tr>`;
+      }
+      const tbody = pick('tbody', table) || table;
+      tbody.replaceChildren();
+
+      const specs = [
+        { key: 'Product Name', val: p.name },
+        p.brandName ? { key: 'Brand', val: p.brandName } : null,
+        p.category ? { key: 'Category', val: p.category } : null,
+        p.unit ? { key: 'Unit', val: p.unit } : null,
+        ...(Array.isArray(p.attributes) ? p.attributes.filter((a) => a.key && a.value).map((a) => ({ key: a.key.charAt(0).toUpperCase() + a.key.slice(1), val: a.value })) : []),
+        { key: 'Price', val: money(p.price) },
+        p.taxNote ? { key: 'Tax Note', val: p.taxNote } : null,
+        { key: 'Stock Status', val: p.availability === 'in_stock' ? 'In Stock' : 'Out of Stock' }
+      ].filter(Boolean);
+
+      specs.forEach((s) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td style="font-weight: 600; color: #444; width: 35%;">${escapeHtml(s.key)}</td><td style="color: #666;">${escapeHtml(s.val)}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+  }
 }
 
 async function paintReviews(p) {
   let data = null;
   try { data = await api.reviews(p.id); } catch { return; }
-  /* { summary: { average, count }, reviews: [...] } — not a bare array. */
   const reviews = data?.reviews || [];
   const summary = data?.summary || { average: 0, count: 0 };
+  const avg = Number(summary.average || 0);
+  const count = Number(summary.count || 0);
 
-  pickAll('.rating-count|.review-count|[data-review-count]').forEach((el) => setText(el, summary.count + ' Reviews'));
-  pickAll('.rating-average|[data-review-average]').forEach((el) => setText(el, (summary.average || 0).toFixed(1)));
+  // Tab Header: Customer Reviews (01)
+  pickAll('#profile-tabt, [aria-controls="profile-tab-panes"]').forEach((el) => {
+    setText(el, `Customer Reviews (${count})`);
+  });
 
-  const spec = { container: '.review-list|.product-reviews|.comment-list|.tab-reviews', card: '.review-item|.single-review|li' };
+  // Top Stars & Count
+  pickAll('.rating-count|.review-count|[data-review-count]').forEach((el) => setText(el, count + ' Reviews'));
+  pickAll('.rating-average|[data-review-average]').forEach((el) => setText(el, avg.toFixed(1)));
+
+  // Rating stars above title in product status:
+  const headerRating = pick('.product-status .rating-stars-group');
+  if (headerRating) {
+    const countSpan = pick('span', headerRating);
+    if (countSpan) setText(countSpan, `${count} Review${count === 1 ? '' : 's'}`);
+    const starsDivs = pickAll('.rating-star', headerRating);
+    starsDivs.forEach((starEl, idx) => {
+      const starNum = idx + 1;
+      if (avg >= starNum) {
+        starEl.innerHTML = '<i class="fas fa-star" style="color: #ffb800;"></i>';
+      } else if (avg >= starNum - 0.5) {
+        starEl.innerHTML = '<i class="fas fa-star-half-alt" style="color: #ffb800;"></i>';
+      } else {
+        starEl.innerHTML = '<i class="far fa-star" style="color: #ffb800;"></i>';
+      }
+    });
+  }
+
+  // Reviews Tab: Average number & stars in review section
+  const reviewScore = pick('#profile-tab-panes .top-stars-wrapper .review');
+  if (reviewScore) setText(reviewScore, count > 0 ? avg.toFixed(1) : '0.0');
+
+  const reviewStars = pick('#profile-tab-panes .top-stars-wrapper .stars');
+  if (reviewStars) {
+    let starsHtml = '';
+    for (let i = 1; i <= 5; i++) {
+      if (avg >= i) starsHtml += '<i class="fa-solid fa-star" style="color: #ffb800;"></i> ';
+      else if (avg >= i - 0.5) starsHtml += '<i class="fa-solid fa-star-half-alt" style="color: #ffb800;"></i> ';
+      else starsHtml += '<i class="fa-regular fa-star" style="color: #ffb800;"></i> ';
+    }
+    starsHtml += `<span>(${count} Review${count === 1 ? '' : 's'})</span>`;
+    reviewStars.innerHTML = starsHtml;
+  }
+
+  // Recommended percentage
+  const avgArea = pick('#profile-tab-panes .average-stars-area');
+  if (avgArea) {
+    if (count > 0) {
+      const highRatings = reviews.filter((r) => (r.rating || 5) >= 4).length;
+      const pct = Math.round((highRatings / count) * 100);
+      const h4 = pick('.average', avgArea);
+      if (h4) setText(h4, `${pct}%`);
+      const span = pick('span', avgArea);
+      if (span) setText(span, `Recommended (${highRatings} of ${count})`);
+      show(avgArea, true);
+    } else {
+      show(avgArea, false);
+    }
+  }
+
+  // Breakdown bars (5 to 1)
+  const barRows = pickAll('#profile-tab-panes .review-charts-details .single-review');
+  if (barRows.length === 5) {
+    for (let star = 5; star >= 1; star--) {
+      const idx = 5 - star;
+      const row = barRows[idx];
+      const starCount = reviews.filter((r) => Math.round(r.rating || 5) === star).length;
+      const pct = count > 0 ? Math.round((starCount / count) * 100) : 0;
+      const bar = pick('.progress-bar', row);
+      if (bar) bar.style.width = pct + '%';
+      const pac = pick('.pac', row);
+      if (pac) setText(pac, pct + '%');
+    }
+  }
+
+  // List of real customer reviews:
+  const reviewStyle = pick('.product-details-review-product-style');
+  if (reviewStyle) {
+    let listContainer = pick('.customer-reviews-list-container', reviewStyle);
+    if (!listContainer) {
+      listContainer = document.createElement('div');
+      listContainer.className = 'customer-reviews-list-container mt--40 mb--40';
+      const submitArea = pick('.submit-review-area', reviewStyle);
+      if (submitArea) {
+        reviewStyle.insertBefore(listContainer, submitArea);
+      } else {
+        reviewStyle.appendChild(listContainer);
+      }
+    }
+
+    listContainer.replaceChildren();
+    const heading = document.createElement('h5');
+    heading.className = 'title mb--20';
+    heading.style.fontWeight = '700';
+    heading.textContent = `Customer Reviews (${count})`;
+    listContainer.appendChild(heading);
+
+    if (reviews.length === 0) {
+      const emptyMsg = document.createElement('p');
+      emptyMsg.className = 'text-muted';
+      emptyMsg.textContent = 'There are no reviews for this product yet. Be the first to review!';
+      listContainer.appendChild(emptyMsg);
+    } else {
+      reviews.forEach((r) => {
+        const item = document.createElement('div');
+        item.className = 'single-customer-review-card mb--20 p-4';
+        item.style.cssText = 'border: 1px solid #eef0f4; border-radius: 8px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.03);';
+
+        let stars = '';
+        const rating = r.rating || 5;
+        for (let i = 1; i <= 5; i++) {
+          stars += i <= rating 
+            ? '<i class="fa-solid fa-star" style="color: #ffb800; font-size: 13px; margin-right: 2px;"></i>' 
+            : '<i class="fa-regular fa-star" style="color: #ffb800; font-size: 13px; margin-right: 2px;"></i>';
+        }
+
+        const dateStr = r.createdAt ? new Date(r.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+
+        item.innerHTML = `
+          <div class="d-flex justify-content-between align-items-center mb--10">
+            <div>
+              <h6 class="mb-1" style="font-size: 16px; font-weight: 700; color: #222;">${escapeHtml(r.reviewer || r.name || 'Verified Buyer')}</h6>
+              <span class="text-muted" style="font-size: 13px;">${escapeHtml(dateStr)}</span>
+            </div>
+            <div class="stars">${stars}</div>
+          </div>
+          ${r.title ? `<h6 style="font-size: 15px; font-weight: 600; color: #333; margin-bottom: 6px;">${escapeHtml(r.title)}</h6>` : ''}
+          <p class="mb-0" style="color: #555; font-size: 14px; line-height: 1.6;">${escapeHtml(r.body || r.comment || '')}</p>
+        `;
+        listContainer.appendChild(item);
+      });
+    }
+  }
+
+  // Also maintain template repeater if present:
+  const spec = { container: '.review-list|.product-reviews|.comment-list|.tab-reviews', card: '.review-item|li' };
   const t = takeTemplate(spec);
   if (!t) return;
   if (!reviews.length) return renderEmpty(t.container, 'No reviews yet.', spec);
   repeat(t, reviews, (node, r) => {
-    setText(pick('.review-author|.author|h5|h6', node), r.author || r.name || 'Verified buyer');
+    setText(pick('.review-author|.author|h5|h6', node), r.reviewer || r.author || r.name || 'Verified buyer');
     setText(pick('.review-body|.comment-text|p', node), r.body || r.comment || '');
     setText(pick('.review-date|.date', node), r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '');
   });
@@ -3036,16 +4229,126 @@ pages.cart = async () => {
     const t = takeTemplate(spec);
     const current = cart.lines();
     if (!t) return;
-    if (!current.length) {
-      renderEmpty(t.container, 'Your cart is empty.');
+
+    const renderCartEmpty = () => {
+      // 1. Hide table headers
+      const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+      if (head) show(head, false);
+
+      // 2. Remove all product rows
+      const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
+      rows.forEach((r) => r.remove());
+
+      // 3. Hide coupon code area
+      const couponArea = pick('.bottom-cupon-code-cart-area', t.container) || pick('.bottom-cupon-code-cart-area');
+      if (couponArea) show(couponArea, false);
+
+      // 4. Hide shipping note & progress bar
+      const noteArea = pick('.cart-area-main-wrapper, .cart-top-area-note');
+      if (noteArea) show(noteArea, false);
+
+      // 5. Hide right sidebar (Cart Totals)
+      const rightSidebar = pick('.cart-total-area-start-right');
+      if (rightSidebar) {
+        const sideCol = rightSidebar.closest('[class*="col-xl-3"]') || rightSidebar.parentElement || rightSidebar;
+        show(sideCol, false);
+      }
+
+      // 6. Expand left column to full width so the empty state is centered
+      const leftCol = t.container.closest('[class*="col-xl-9"]');
+      if (leftCol) {
+        leftCol.classList.remove('col-xl-9');
+        leftCol.classList.add('col-xl-12');
+      }
+
+      // 7. Render empty message with Continue Shopping button (matching wishlist design!)
+      if (!pick('.merch-empty', t.container)) {
+        const emptyDiv = document.createElement('div');
+        emptyDiv.className = 'merch-empty text-center';
+        emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
+        emptyDiv.innerHTML = `
+          <i class="fa-sharp fa-regular fa-cart-shopping" style="font-size:48px;color:#94a3b8;margin-bottom:16px;display:block;"></i>
+          <h4 style="margin-bottom:8px;font-weight:600;">Your cart is empty</h4>
+          <p style="color:#64748b;margin-bottom:20px;">Looks like you haven't added anything to your cart yet.</p>
+          <a href="shop.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
+        `;
+        t.container.prepend(emptyDiv);
+      }
       paintCartTotals(spec, current);
-      try { paintFreeShippingBar(current); } catch (e) { warn('free-shipping bar', e); }
+      paintHeader();
+    };
+
+    if (!current.length) {
+      renderCartEmpty();
       return;
     }
+
+    // Restore left column width if previously modified
+    const leftCol = t.container.closest('[class*="col-xl-12"]');
+    if (leftCol) {
+      leftCol.classList.remove('col-xl-12');
+      leftCol.classList.add('col-xl-9');
+    }
+
+    // Show table head
+    const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+    if (head) show(head, true);
+
+    // Show coupon bar
+    const couponArea = pick('.bottom-cupon-code-cart-area', t.container) || pick('.bottom-cupon-code-cart-area');
+    if (couponArea) show(couponArea, true);
+
+    // Show right sidebar
+    const rightSidebar = pick('.cart-total-area-start-right');
+    if (rightSidebar) {
+      const sideCol = rightSidebar.closest('[class*="col-xl-3"]') || rightSidebar.parentElement || rightSidebar;
+      show(sideCol, true);
+    }
+
+    // Remove empty state container
+    pickAll('.merch-empty', t.container).forEach(remove);
+
+    // Render cart items
     repeat(t, current, (node, l) => {
       node.dataset.merchId = l.itemId;
       fillFields(node, spec.fields, l, { node, rerender: draw });
+
+      // Image & thumbnail link
+      const imgEl = pick('.thumbnail img, .pro-thumbnail img', node);
+      if (imgEl) {
+        if (l.image) imgEl.src = mediaUrl(l.image);
+        imgEl.alt = l.name || 'product';
+        imgEl.style.cssText = 'width:65px;height:65px;object-fit:contain;border-radius:4px;';
+      }
+      const thumbLink = pick('.thumbnail a, .pro-thumbnail a', node);
+      if (thumbLink) {
+        thumbLink.href = productHref({ id: l.itemId });
+      } else if (imgEl && imgEl.parentElement) {
+        const a = document.createElement('a');
+        a.href = productHref({ id: l.itemId });
+        imgEl.parentElement.insertBefore(a, imgEl);
+        a.appendChild(imgEl);
+      }
+
+      // Title link
+      const titleEl = pick('.information .title, .pro-title', node);
+      if (titleEl) {
+        titleEl.innerHTML = `<a href="${escapeHtml(productHref({ id: l.itemId }))}" style="color:inherit;">${escapeHtml(l.name)}</a>`;
+      }
     });
+
+    // Wire Clear All button
+    const clearBtn = pick('.bottom-cupon-code-cart-area a', t.container);
+    if (clearBtn && !clearBtn._merchWired) {
+      clearBtn._merchWired = true;
+      clearBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        cart.clear();
+        draw();
+        notify('Cart cleared.', 'info');
+      });
+    }
+
     wireQuantityWidgets(t.container, draw);
     paintCartTotals(spec, current);
     try { paintFreeShippingBar(current); } catch (e) { warn('free-shipping bar', e); }
@@ -3180,6 +4483,898 @@ function labelColour(label) {
   return colourHex(first) ? first : null;
 }
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FASHION THEME — ported up from fashion/merch.js, which had forked.
+
+   The fashion theme ships separate colour and size pickers, its own offcanvas
+   basket and its own cart/checkout totals. That work lived only in the theme's
+   own copy, so the master could not be synced onto it without deleting it. It
+   is reproduced here VERBATIM, reached only behind a theme guard, so the other
+   three themes behave exactly as they did before.
+
+   `paintVariantsFashion` and `wireQuickViewFashion` are DELEGATED to wholesale
+   rather than merged into their master counterparts. The theme's versions carry
+   changes that are not theme-gated — a different quick-view selector, an extra
+   painter call — and applying those to all four themes would be a decision
+   about intent that belongs to whoever wrote them, not to this merge.
+
+   Note for whoever owns this: COLOR_PALETTE here and COLOUR_HEX below are two
+   colour tables. `resolveColorSwatch` already prefers this one and falls back
+   to `colourBackground`, so nothing is broken — but they are worth reconciling.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* --- Fashion Color & Size Variant Swatch Engine --- */
+const COLOR_IMAGE_CACHE = new Map();
+
+const COLOR_PRODUCT_CACHE = new Map();
+
+const COLOR_PALETTE = {
+  black: '#111111',
+  white: '#ffffff',
+  grey: '#808080',
+  gray: '#808080',
+  charcoal: '#36454f',
+  mustard: '#e1ad01',
+  teal: '#008080',
+  maroon: '#800000',
+  olive: '#808000',
+  navy: '#000080',
+  sage: '#9caf88',
+  beige: '#f5f5dc',
+  rust: '#b7410e',
+  blue: '#2563eb',
+  red: '#dc2626',
+  green: '#16a34a',
+  yellow: '#eab308',
+  orange: '#ea580c',
+  purple: '#9333ea',
+  pink: '#ec4899',
+  brown: '#78350f',
+  cream: '#fffdd0',
+  khaki: '#c3b091',
+  neon: '#39ff14',
+  lavender: '#e6e6fa',
+  burgundy: '#800020',
+  ivory: '#fffff0',
+  silver: '#c0c0c0',
+  'royal blue': '#2b4fa2',
+  denim: '#3b5b86',
+  mint: '#8fd9b6',
+  sand: '#dcc9a6',
+  stone: '#d2cabb',
+  coffee: '#4b352a',
+  peach: '#ffb997',
+  wine: '#722f37',
+  'red wine': '#6b2230',
+  turquoise: '#30bfc4',
+  coral: '#ff7f50',
+  cyan: '#06b6d4',
+  magenta: '#d946ef',
+  gold: '#ffd700',
+};
+
+/* Variant options are returned as products. A selected size/color therefore
+   supplies the product id and price used by both cart views. */
+let PDP_VARIANT_REQUIRED = false;
+
+let PDP_SELECTED_VARIANT = null;
+
+let FASHION_MINI_CART_TEMPLATE = null;
+
+function resolveColorSwatch(colorName) {
+  if (!colorName) return '#e5e5e5';
+  const clean = String(colorName).trim().toLowerCase();
+  if (COLOR_PALETTE[clean]) return COLOR_PALETTE[clean];
+  if (typeof colourBackground === 'function') {
+    const bg = colourBackground(colorName);
+    if (bg) return bg;
+  }
+  if (window.CSS?.supports?.('color', colorName)) return colorName;
+  const parts = clean.split(/\s+/);
+  if (parts.length > 1 && COLOR_PALETTE[parts[parts.length - 1]]) {
+    return COLOR_PALETTE[parts[parts.length - 1]];
+  }
+  return '#eee';
+}
+
+function isSizeString(str) {
+  if (!str) return false;
+  const clean = String(str).trim();
+  return /^(\d{1,2}\s*XL|XXS|XS|S|M|L|XL|XXL|XXXL|EXTRA\s*SMALL|SMALL|MEDIUM|LARGE|EXTRA\s*LARGE|ONE\s*SIZE|FREE\s*SIZE|OS|\d{1,2}(?:\.\d+)?(?:\s?(?:US|UK|EU))?)$/i.test(clean);
+}
+
+function parseVariantOption(option, baseProduct) {
+  let color = '';
+  let size = '';
+
+  const attrs = option?.attributes || option?.product?.attributes || [];
+  const colorAttr = attrs.find((a) => /^colou?r$/i.test(a.key || a.name))?.value;
+  const sizeAttr = attrs.find((a) => /^size$/i.test(a.key || a.name))?.value;
+  if (colorAttr) color = String(colorAttr).trim();
+  if (sizeAttr) size = String(sizeAttr).trim();
+
+  let text = String(option?.label || option?.name || option?.title || '').trim();
+  if (text.includes('—')) text = text.split('—').pop().trim();
+  else if (text.includes(' - ') && !text.includes(' / ')) {
+    const parts = text.split(' - ');
+    if (parts.length > 1 && (parts[1].includes('/') || isSizeString(parts[1]))) {
+      text = parts.slice(1).join(' - ').trim();
+    }
+  }
+
+  if ((!color || !size) && text.includes(' / ')) {
+    const parts = text.split(' / ').map((s) => s.trim());
+    if (parts.length >= 2) {
+      if (isSizeString(parts[0]) && !isSizeString(parts[1])) {
+        if (!size) size = parts[0];
+        if (!color) color = parts[1];
+      } else {
+        if (!color) color = parts[0];
+        if (!size) size = parts[1];
+      }
+    }
+  } else if (!color && !size && text) {
+    if (isSizeString(text)) size = text;
+    else color = text;
+  }
+
+  return { color, size, option };
+}
+
+function variantProduct(option, base) {
+  const detail = option.product && typeof option.product === 'object' ? option.product : {};
+  return {
+    ...base,
+    ...detail,
+    id: option.id ?? detail.id ?? base.id,
+    name: detail.name || option.productName || base.name,
+    price: option.price ?? detail.price ?? base.price,
+    availability: option.availability || detail.availability || base.availability,
+    imageUrls: detail.imageUrls || option.imageUrls || base.imageUrls,
+  };
+}
+
+function updateContainerImages(root, imageUrls) {
+  if (!imageUrls || !imageUrls.length) return;
+  const urls = imageUrls.map(mediaUrl);
+  const targets = pickAll(
+    '.tf-product-media-main img, .tf-product-media-thumbs img, .thumbs-slider img, ' +
+    '.mini-quick-image img, .item-scroll-quickview img, .quickView-item img, ' +
+    '.prd-image img, .img-product',
+    root || document
+  );
+  if (targets.length) {
+    targets.forEach((img, i) => {
+      const url = urls[i % urls.length];
+      setAttr(img, 'src', url);
+      if (img.hasAttribute('data-src')) setAttr(img, 'data-src', url);
+      img.removeAttribute('srcset');
+    });
+  }
+  pickAll('.tf-zoom-main, .drift-zoom-pane', root || document).forEach((pane) => {
+    if (urls[0]) pane.style.backgroundImage = 'url("' + urls[0] + '")';
+  });
+  const stickyImg = pick('.tf-sticky-atc-product .prd_img img');
+  if (stickyImg && urls[0]) {
+    setAttr(stickyImg, 'src', urls[0]);
+    if (stickyImg.hasAttribute('data-src')) setAttr(stickyImg, 'data-src', urls[0]);
+  }
+}
+
+async function loadSampleColorImages(parsedList, baseProduct, onLoaded) {
+  const missingIds = [];
+  const colorToOption = new Map();
+  for (const item of parsedList) {
+    if (!item.color) continue;
+    const key = item.color.toLowerCase();
+    if (!COLOR_IMAGE_CACHE.has(key) && !colorToOption.has(key)) {
+      colorToOption.set(key, item.option);
+      if (item.option?.id) missingIds.push(item.option.id);
+    }
+  }
+
+  const baseColor = (baseProduct?.attributes?.find((a) => /^colou?r$/i.test(a.key || a.name))?.value)
+    || parseVariantOption({ name: baseProduct?.name }, baseProduct).color;
+  if (baseColor && baseProduct?.imageUrls?.length) {
+    const key = baseColor.toLowerCase();
+    if (!COLOR_IMAGE_CACHE.has(key)) {
+      COLOR_IMAGE_CACHE.set(key, baseProduct.imageUrls[0]);
+      COLOR_PRODUCT_CACHE.set(key, baseProduct);
+    }
+  }
+
+  if (missingIds.length) {
+    try {
+      const res = await api.products(missingIds);
+      const items = Array.isArray(res) ? res : (res?.items || []);
+      for (const prod of items) {
+        const parsed = parseVariantOption({ name: prod.name, attributes: prod.attributes }, prod);
+        const c = parsed.color || '';
+        if (c && prod.imageUrls?.length) {
+          const key = c.toLowerCase();
+          COLOR_IMAGE_CACHE.set(key, prod.imageUrls[0]);
+          COLOR_PRODUCT_CACHE.set(key, prod);
+        }
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  if (onLoaded) onLoaded();
+}
+
+function renderVariantPickers({
+  host,
+  p,
+  options,
+  isQuick = false,
+  onSelect,
+  onClear,
+}) {
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const uniqueColors = [...new Set(parsedList.map((x) => x.color).filter(Boolean))];
+  const uniqueSizes = [...new Set(parsedList.map((x) => x.size).filter(Boolean))];
+
+  if (!uniqueColors.length && !uniqueSizes.length) {
+    const rawTitle = String(options[0]?.groupTitle || options[0]?.optionType || 'Options');
+    const optTarget = document.createElement('div');
+    optTarget.className = 'variant-picker-item variant-option quick-variant-picker';
+    const optLabel = document.createElement('div');
+    optLabel.className = 'variant-picker-label variant-picker_label mb-12';
+    optLabel.append(document.createTextNode(rawTitle + ': '));
+    const optValSpan = document.createElement('span');
+    optValSpan.className = 'variant-picker-label-value variant__value fw-medium';
+    optValSpan.textContent = 'Select option';
+    optLabel.appendChild(optValSpan);
+    optTarget.appendChild(optLabel);
+
+    const optValues = document.createElement('div');
+    optValues.className = 'variant-picker-values variant-picker_values';
+    optTarget.appendChild(optValues);
+
+    options.forEach((opt) => {
+      const btn = document.createElement('span');
+      btn.className = 'size-btn size_btn';
+      btn.dataset.variantId = String(opt.id);
+      const name = opt.label || opt.name || opt.title || '';
+      btn.textContent = name;
+      if (opt.availability === 'out') btn.classList.add('disabled');
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (opt.availability === 'out') return notify('That option is sold out.', 'error');
+        optValues.querySelectorAll('.size-btn, .size_btn').forEach((n) => n.classList.remove('active'));
+        btn.classList.add('active');
+        setText(optValSpan, name);
+        const variant = variantProduct(opt, p);
+        if (onSelect) onSelect(variant, rawTitle + ': ' + name, opt);
+      });
+      optValues.appendChild(btn);
+    });
+
+    if (isQuick) {
+      const quantity = pick('.tf-product-total-quantity, .product-total-quantity', host);
+      if (quantity) host.insertBefore(optTarget, quantity);
+      else host.appendChild(optTarget);
+    } else {
+      host.appendChild(optTarget);
+    }
+    return;
+  }
+
+  const baseParsed = parseVariantOption({ name: p.name, attributes: p.attributes }, p);
+  const baseColor = baseParsed.color;
+  const baseSize = baseParsed.size;
+
+  let activeColor = uniqueColors.find((c) => c.toLowerCase() === (baseColor || '').toLowerCase()) || uniqueColors[0] || '';
+  let selectedSize = '';
+  if (baseSize) {
+    const hasInitialSize = parsedList.some(
+      (item) => (!item.color || item.color.toLowerCase() === activeColor.toLowerCase()) && item.size.toLowerCase() === baseSize.toLowerCase() && item.option.availability !== 'out'
+    );
+    if (hasInitialSize) selectedSize = baseSize;
+  }
+
+  const colorTarget = document.createElement('div');
+  colorTarget.className = 'variant-picker-item variant-color quick-variant-picker picker_color';
+
+  const colorLabel = document.createElement('div');
+  colorLabel.className = 'variant-picker-label variant-picker_label mb-12';
+  const colorTitleBox = document.createElement('div');
+  colorTitleBox.append(document.createTextNode('Colors: '));
+  const colorValueSpan = document.createElement('span');
+  colorValueSpan.className = 'variant-picker-label-value variant__value value-currentColor text-capitalize fw-medium';
+  colorValueSpan.textContent = activeColor || 'Select color';
+  colorTitleBox.appendChild(colorValueSpan);
+  colorLabel.appendChild(colorTitleBox);
+  colorTarget.appendChild(colorLabel);
+
+  const colorValues = document.createElement('div');
+  colorValues.className = 'variant-picker-values variant-picker_values';
+  colorTarget.appendChild(colorValues);
+
+  const sizeTarget = document.createElement('div');
+  sizeTarget.className = 'variant-picker-item variant-size quick-variant-picker picker_size';
+
+  const sizeLabel = document.createElement('div');
+  sizeLabel.className = 'variant-picker-label variant-picker_label mb-12 d-flex align-items-center justify-content-between';
+  const sizeTitleBox = document.createElement('div');
+  sizeTitleBox.append(document.createTextNode('Size: '));
+  const sizeValueSpan = document.createElement('span');
+  sizeValueSpan.className = 'variant-picker-label-value variant__value value-currentSize text-capitalize fw-medium';
+  sizeValueSpan.textContent = selectedSize || 'Select size';
+  sizeTitleBox.appendChild(sizeValueSpan);
+  sizeLabel.appendChild(sizeTitleBox);
+
+  const sizeGuideLink = document.createElement('a');
+  sizeGuideLink.href = '#findSize';
+  sizeGuideLink.setAttribute('data-bs-toggle', 'modal');
+  sizeGuideLink.className = 'tf-btn-line-2 style-primary text-caption-01 fw-semibold';
+  sizeGuideLink.textContent = 'Size Guide';
+  sizeLabel.appendChild(sizeGuideLink);
+
+  sizeTarget.appendChild(sizeLabel);
+
+  const sizeValues = document.createElement('div');
+  sizeValues.className = 'variant-picker-values variant-picker_values';
+  sizeTarget.appendChild(sizeValues);
+
+  function applyOption(option) {
+    const product = variantProduct(option, p);
+    const labelParts = [];
+    if (activeColor) labelParts.push('Color: ' + activeColor);
+    if (selectedSize) labelParts.push('Size: ' + selectedSize);
+    const label = labelParts.length ? labelParts.join(' / ') : (option.label || option.name || '');
+    if (onSelect) onSelect(product, label, option);
+  }
+
+  function renderSizesForColor() {
+    sizeValues.replaceChildren();
+    const colorItems = uniqueColors.length
+      ? parsedList.filter((item) => item.color.toLowerCase() === activeColor.toLowerCase())
+      : parsedList;
+
+    const matching = colorItems.find((item) => item.size.toLowerCase() === (selectedSize || '').toLowerCase());
+    if (!matching || matching.option.availability === 'out') {
+      selectedSize = '';
+    }
+
+    setText(sizeValueSpan, selectedSize || 'Select size');
+
+    colorItems.forEach((item) => {
+      const btn = document.createElement('span');
+      btn.className = 'size-btn size_btn';
+      btn.dataset.size = item.size;
+      btn.dataset.variantId = String(item.option.id);
+      btn.textContent = item.size;
+
+      if (item.option.availability === 'out') btn.classList.add('disabled');
+      if (selectedSize && item.size.toLowerCase() === selectedSize.toLowerCase() && item.option.availability !== 'out') {
+        btn.classList.add('active');
+      }
+
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (item.option.availability === 'out') {
+          return notify('That option is sold out.', 'error');
+        }
+        selectedSize = item.size;
+        setText(sizeValueSpan, selectedSize);
+        sizeValues.querySelectorAll('.size-btn, .size_btn').forEach((n) => {
+          n.classList.toggle('active', n.dataset.size === selectedSize);
+        });
+        applyOption(item.option);
+      });
+
+      sizeValues.appendChild(btn);
+    });
+
+    if (selectedSize && matching && matching.option.availability !== 'out') {
+      applyOption(matching.option);
+    } else {
+      if (onClear) onClear();
+    }
+  }
+
+  if (uniqueColors.length) {
+    uniqueColors.forEach((color) => {
+      const isCurrentActive = color.toLowerCase() === activeColor.toLowerCase();
+      const btn = document.createElement('div');
+      btn.className = 'hover-tooltip tooltip-bot color-btn color_btn style-image' + (isCurrentActive ? ' active' : '');
+      btn.dataset.color = color;
+      btn.title = color;
+
+      const swatch = document.createElement('span');
+      swatch.className = 'img';
+      const swatchBg = resolveColorSwatch(color);
+      swatch.style.backgroundColor = swatchBg;
+      swatch.style.background = swatchBg;
+      btn.appendChild(swatch);
+
+      const tooltip = document.createElement('span');
+      tooltip.className = 'tooltip';
+      tooltip.textContent = color;
+      btn.appendChild(tooltip);
+
+      btn.addEventListener('mouseenter', () => {
+        setText(colorValueSpan, color);
+      });
+      btn.addEventListener('mouseleave', () => {
+        setText(colorValueSpan, activeColor || 'Select color');
+      });
+
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (activeColor.toLowerCase() === color.toLowerCase()) return;
+        activeColor = color;
+        setText(colorValueSpan, activeColor);
+        colorValues.querySelectorAll('.color-btn, .color_btn').forEach((n) => {
+          n.classList.toggle('active', n.dataset.color.toLowerCase() === activeColor.toLowerCase());
+        });
+
+        const colorProd = COLOR_PRODUCT_CACHE.get(activeColor.toLowerCase());
+        const rootContainer = host.closest('.modal, .offcanvas') || document;
+        if (colorProd?.imageUrls?.length) {
+          updateContainerImages(rootContainer, colorProd.imageUrls);
+        } else {
+          const sampleOpt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+          if (sampleOpt?.id) {
+            api.product(sampleOpt.id).then((detail) => {
+              if (detail?.imageUrls?.length) {
+                COLOR_IMAGE_CACHE.set(activeColor.toLowerCase(), detail.imageUrls[0]);
+                COLOR_PRODUCT_CACHE.set(activeColor.toLowerCase(), detail);
+                updateContainerImages(rootContainer, detail.imageUrls);
+              }
+            }).catch(() => {});
+          }
+        }
+
+        if (uniqueSizes.length) {
+          renderSizesForColor();
+        } else {
+          const opt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+          if (opt) applyOption(opt);
+        }
+      });
+
+      colorValues.appendChild(btn);
+    });
+  }
+
+  // Insert into host container before quantity widget if present
+  const quantity = pick('.tf-product-total-quantity, .product-total-quantity', host);
+  if (uniqueColors.length) {
+    if (quantity) host.insertBefore(colorTarget, quantity);
+    else host.appendChild(colorTarget);
+  }
+  if (uniqueSizes.length) {
+    if (quantity) host.insertBefore(sizeTarget, quantity);
+    else host.appendChild(sizeTarget);
+  }
+
+  if (uniqueSizes.length) {
+    renderSizesForColor();
+  } else if (uniqueColors.length) {
+    const initialOpt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+    if (initialOpt) applyOption(initialOpt);
+  }
+
+  loadSampleColorImages(parsedList, p);
+}
+
+async function paintQuickVariants(panel, p) {
+  let group = null;
+  try { group = await api.variants(p.id); } catch { /* remove demo controls below */ }
+  const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
+  pickAll('.quick-variant-picker, .tf-product-variant .variant-picker-item', panel).forEach(remove);
+  panel._merchSelectedVariant = null;
+  panel.dataset.merchSizeRequired = 'false';
+  if (!options.length) return;
+
+  const host = pick('.tf-product-variant', panel) || pick('.tf-product-quick_add, .tf-product-quick_view', panel) || panel;
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const hasSizes = parsedList.some((x) => x.size);
+  panel.dataset.merchSizeRequired = hasSizes ? 'true' : 'false';
+
+  renderVariantPickers({
+    host,
+    p,
+    options,
+    isQuick: true,
+    onSelect: (variant, label) => {
+      panel._merchSelectedVariant = { product: variant, label };
+      setText(pick('.product-infor-name|.prd-name', panel), variant.name);
+      paintQuickViewExtras(panel, variant);
+      const newPrice = pick('.price-on-sale|.price-new', panel);
+      if (newPrice) setText(newPrice, money(variant.price));
+    },
+    onClear: () => {
+      panel._merchSelectedVariant = null;
+    },
+  });
+}
+
+/* Keep the fashion offcanvas basket in step with the actual basket. Its HTML
+   ships with demo rows, including demo sizes and prices, so use one row only
+   as a visual template and rebuild the contents from local cart data. */
+function paintFashionMiniCart() {
+  if (THEME?.name !== 'fashion') return;
+  const host = pick('.popup-shopping-cart .tf-mini-cart-items');
+  if (!host) return;
+  const rows = pickAll('.tf-mini-cart-item', host);
+  if (!FASHION_MINI_CART_TEMPLATE && rows[0]) FASHION_MINI_CART_TEMPLATE = rows[0].cloneNode(true);
+  rows.forEach(remove);
+  const lines = cart.lines();
+  const empty = pick('.box-text_empty', host);
+  show(empty, !lines.length);
+  host.classList.toggle('list-empty', !lines.length);
+  if (lines.length && FASHION_MINI_CART_TEMPLATE) {
+    const frag = document.createDocumentFragment();
+    lines.forEach((line) => {
+      const row = FASHION_MINI_CART_TEMPLATE.cloneNode(true);
+      row.dataset.merchId = line.itemId;
+      const img = pick('.tf-mini-cart-image img', row);
+      if (line.image) {
+        setAttr(img, 'src', mediaUrl(line.image));
+        img?.removeAttribute('data-src');
+      } else remove(img);
+      const name = pick('.tf-mini-cart-info .name', row);
+      setText(name, line.name);
+      setAttr(name, 'href', productHref({ id: line.itemId }));
+      pickAll('.tf-prd-select', row).forEach(remove);
+      if (line.variantLabel) {
+        const variant = document.createElement('div');
+        variant.className = 'tf-prd-select text-caption-01';
+        setText(variant, line.variantLabel);
+        pick('.tf-mini-cart-info', row)?.appendChild(variant);
+      }
+      setText(pick('.tf-mini-cart-price .number', row), line.qty);
+      setText(pick('.tf-mini-card-price', row), money(line.price));
+      pick('.tf-mini-cart-price .remove', row)?.addEventListener('click', () => cart.remove(line.itemId));
+      frag.appendChild(row);
+    });
+    host.appendChild(frag);
+  }
+  pickAll('.popup-shopping-cart .tf-mini-cart-total .total-price').forEach((el) =>
+    setText(el, money(cart.localSubtotal())),
+  );
+
+  pickAll('.popup-shopping-cart').forEach((popup) => {
+    let bottom = pick('.tf-mini-cart-bottom', popup);
+    const wrap = pick('.wrap-empty_text', popup) || pick('.wrap', popup) || popup;
+    if (!bottom && wrap) {
+      bottom = document.createElement('div');
+      bottom.className = 'tf-mini-cart-bottom box-empty_clear';
+      bottom.innerHTML = `
+        <div class="tf-mini-cart-bottom-wrap">
+          <div class="tf-mini-cart-total">
+            <h5 class="text-total d-flex align-content-center justify-content-between">
+              <span class="subtotal">Subtotal</span>
+              <span class="total-price tf-totals-total-value">${money(cart.localSubtotal())}</span>
+            </h5>
+          </div>
+          <div class="tf-mini-cart-view-checkout">
+            <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
+            <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
+          </div>
+        </div>
+      `;
+      wrap.appendChild(bottom);
+    }
+
+    if (bottom) {
+      if (lines.length) {
+        bottom.style.display = 'block';
+        bottom.classList.remove('d-none');
+      } else {
+        bottom.style.display = 'none';
+      }
+
+      const bottomWrap = pick('.tf-mini-cart-bottom-wrap', bottom) || bottom;
+      let viewCheckout = pick('.tf-mini-cart-view-checkout', bottomWrap);
+      if (!viewCheckout) {
+        viewCheckout = document.createElement('div');
+        viewCheckout.className = 'tf-mini-cart-view-checkout';
+        viewCheckout.innerHTML = `
+          <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
+          <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
+        `;
+        const continueLink = pick('a[href*="shop"]', bottomWrap);
+        if (continueLink) bottomWrap.insertBefore(viewCheckout, continueLink);
+        else bottomWrap.appendChild(viewCheckout);
+      }
+
+      let viewCartBtn = pick('a[href*="cart"], .btn-stroke', viewCheckout);
+      if (!viewCartBtn) {
+        viewCartBtn = document.createElement('a');
+        viewCartBtn.className = 'tf-btn btn-stroke';
+        viewCartBtn.textContent = 'View cart';
+        viewCheckout.insertBefore(viewCartBtn, viewCheckout.firstChild);
+      }
+      setAttr(viewCartBtn, 'href', pageUrl('cart'));
+      if (!viewCartBtn._merchWired) {
+        viewCartBtn._merchWired = true;
+        viewCartBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          location.href = pageUrl('cart');
+        });
+      }
+
+      let checkoutBtn = pick('a[href*="checkout"], .animate-btn', viewCheckout);
+      if (!checkoutBtn) {
+        checkoutBtn = document.createElement('a');
+        checkoutBtn.className = 'tf-btn animate-btn';
+        checkoutBtn.textContent = 'Check Out';
+        viewCheckout.appendChild(checkoutBtn);
+      }
+      setAttr(checkoutBtn, 'href', pageUrl('checkout'));
+      if (!checkoutBtn._merchWired) {
+        checkoutBtn._merchWired = true;
+        checkoutBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        });
+      }
+    }
+  });
+}
+
+function paintFashionCartTotals(subtotal, discount, shipping, total) {
+  const box = pick('.box-order-summary');
+  if (!box) return;
+
+  const subtotalEl = pick('.subtotal .total', box);
+  if (subtotalEl) setText(subtotalEl, money(subtotal));
+
+  const discountEl = pick('.discount .total', box);
+  if (discountEl) setText(discountEl, discount > 0 ? '-' + money(discount) : money(0));
+
+  const freeLabelPrice = pick('label[for="free"] .price', box);
+  if (freeLabelPrice) setText(freeLabelPrice, money(0));
+  const localLabelPrice = pick('label[for="local"] .price', box);
+  if (localLabelPrice) setText(localLabelPrice, money(35));
+  const rateLabelPrice = pick('label[for="rate"] .price', box);
+  if (rateLabelPrice) setText(rateLabelPrice, money(35));
+
+  const p = pending.get();
+  let shipAmount = p.shipping;
+  const localRadio = pick('#local', box);
+  const rateRadio = pick('#rate', box);
+  const freeRadio = pick('#free', box);
+
+  if (shipAmount === undefined || shipAmount === null) {
+    if (localRadio?.checked) shipAmount = 35;
+    else if (rateRadio?.checked) shipAmount = 35;
+    else shipAmount = 0;
+    pending.set({ shipping: shipAmount });
+  }
+
+  if (shipAmount === 0 && freeRadio) freeRadio.checked = true;
+  else if (shipAmount === 35) {
+    if (!localRadio?.checked && !rateRadio?.checked) {
+      if (localRadio) localRadio.checked = true;
+      else if (rateRadio) rateRadio.checked = true;
+    }
+  }
+
+  if (!box._merchShippingWired) {
+    box._merchShippingWired = true;
+    pickAll('input[name="ship-check"]', box).forEach((radio) => {
+      radio.addEventListener('change', () => {
+        let newShip = 0;
+        if (radio.id === 'local' || radio.id === 'rate') newShip = 35;
+        pending.set({ shipping: newShip });
+        const curDisc = pending.get().discount || 0;
+        const curSub = cart.lines().reduce((n, l) => n + l.price * l.qty, 0);
+        const newTotal = Math.max(0, curSub - curDisc + newShip);
+        const totalEl = pick('.total-order .total, .each-total-price', box);
+        if (totalEl) setText(totalEl, money(newTotal));
+      });
+    });
+  }
+
+  const finalTotal = Math.max(0, subtotal - discount + (shipAmount || 0));
+  const totalEl = pick('.total-order .total, .each-total-price', box);
+  if (totalEl) setText(totalEl, money(finalTotal));
+
+  const freeAbove = Number(STORE?.shipping?.freeAbove) || 70;
+  const left = Math.max(0, freeAbove - subtotal);
+  const progressP = pick('.notification-progress p', box);
+  if (progressP) {
+    if (left > 0) {
+      progressP.innerHTML = `Buy <span class="text-primary fw-bold">${money(left)}</span> more to get freeship`;
+    } else {
+      progressP.innerHTML = `Your order qualifies for <span class="text-primary fw-bold">Free Shipping</span>!`;
+    }
+  }
+  const progressBar = pick('.progress-cart .value', box);
+  if (progressBar) {
+    const pct = Math.min(100, Math.round((subtotal / freeAbove) * 100));
+    progressBar.style.width = pct + '%';
+    progressBar.setAttribute('data-progress', pct);
+  }
+}
+
+function paintFashionCheckoutTotals(subtotal, discount, shipping, total) {
+  const box = pick('.box-your-order');
+  if (!box) return;
+
+  const listTotal = pick('.list-total', box);
+  if (listTotal) {
+    let subtotalItem = pick('.total-item-subtotal', listTotal);
+    if (!subtotalItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/subtotal/i.test(pick('span:first-child', li)?.textContent || '')) {
+          subtotalItem = li;
+          subtotalItem.classList.add('total-item-subtotal');
+          break;
+        }
+      }
+    }
+    if (!subtotalItem) {
+      subtotalItem = document.createElement('li');
+      subtotalItem.className = 'total-item lh-24 fw-medium total-item-subtotal';
+      subtotalItem.innerHTML = `<span>Subtotal</span><span>${money(subtotal)}</span>`;
+      listTotal.insertBefore(subtotalItem, listTotal.firstChild);
+    } else {
+      const valSpan = pick('span:last-child', subtotalItem);
+      if (valSpan) setText(valSpan, money(subtotal));
+    }
+
+    let shippingItem = pick('.total-item-shipping', listTotal);
+    if (!shippingItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/shipping/i.test(pick('span:first-child', li)?.textContent || '')) {
+          shippingItem = li;
+          shippingItem.classList.add('total-item-shipping');
+          break;
+        }
+      }
+    }
+    if (shippingItem) {
+      const valSpan = pick('span:last-child', shippingItem);
+      if (valSpan) setText(valSpan, shipping == null ? 'Free' : (shipping > 0 ? money(shipping) : 'Free'));
+    }
+
+    let discountItem = pick('.total-item-discount', listTotal);
+    if (!discountItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/discount/i.test(pick('span:first-child', li)?.textContent || '')) {
+          discountItem = li;
+          discountItem.classList.add('total-item-discount');
+          break;
+        }
+      }
+    }
+    if (discountItem) {
+      const valSpan = pick('span:last-child', discountItem);
+      if (valSpan) setText(valSpan, discount > 0 ? '-' + money(discount) : money(0));
+    }
+  }
+
+  const lastTotal = pick('.last-total', box);
+  if (lastTotal) {
+    const valSpan = pick('span:last-child', lastTotal);
+    if (valSpan) setText(valSpan, money(total));
+  }
+}
+
+async function paintVariantsFashion(spec, p) {
+  if (!spec.variants) return;
+  PDP_VARIANT_REQUIRED = false;
+  PDP_SELECTED_VARIANT = null;
+  remove(pick('.tf-sticky-atc-variant-price'));
+
+  let group = null;
+  try { group = await api.variants(p.id); } catch { group = null; }
+  const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
+  const container = pick(spec.variants.container);
+  if (!container) return;
+
+  pickAll(spec.variants.group, container).forEach(remove);
+  if (!options.length) { remove(container); return; }
+
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const hasSizes = parsedList.some((x) => x.size);
+  PDP_VARIANT_REQUIRED = hasSizes;
+
+  renderVariantPickers({
+    host: container,
+    p,
+    options,
+    isQuick: false,
+    onSelect: (variant, label) => {
+      PDP_SELECTED_VARIANT = { product: variant, label };
+      $$('.btn-action-price, .btn-add-to-cart').forEach((btn) => setText(btn, 'Add to cart'));
+      const detailPrice = pick('.product-infor-price .price-on-sale');
+      if (detailPrice) setText(detailPrice, money(variant.price));
+      const stickyVariant = pick('.tf-sticky-atc-product .distribute__prd');
+      if (stickyVariant) setText(stickyVariant, label);
+      const stickyPrice = pick('.tf-sticky-atc-product .price__prd');
+      if (stickyPrice) setText(stickyPrice, money(variant.price));
+    },
+    onClear: () => {
+      PDP_SELECTED_VARIANT = null;
+    },
+  });
+}
+
+function wireQuickViewFashion() {
+  /* A theme can ship more than one of these — fashion has a Quick View
+     offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
+     the shopper opens has to be the product they clicked. */
+  const panels = [];
+  for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper', '.modal-quick-view']) {
+    $$(sel).forEach((el) => { if (!panels.includes(el)) panels.push(el); });
+  }
+  if (!panels.length || panels[0].dataset.merchQuickView) return;
+  panels.forEach((el) => { el.dataset.merchQuickView = '1'; });
+
+  /* The text fields only. Anything carrying an `action` is wired once, below,
+     against whichever product is currently showing — re-running wireAction per
+     open would either be ignored (it guards against double-wiring) or stack a
+     handler per open. */
+  const fields = Object.fromEntries(
+    Object.entries(THEME.product?.fields || {}).filter(([, f]) => f && !f.action),
+  );
+
+  document.addEventListener('click', async (e) => {
+    const trigger = e.target.closest(
+      '.quickview, .cta-quickview, .product-details-popup-btn, [data-quickview], ' +
+      'a[href="#quickView"], a[href="#quick_view"], a[href="#quickAdd"], ' +
+      '[data-bs-target="#quick_view"], [data-bs-target="#quickAdd"]',
+    );
+    if (!trigger) return;
+    const id = trigger.closest('[data-merch-id]')?.dataset.merchId;
+    if (!id) return;                       // a trigger on markup we never filled
+
+    try {
+      const p = await api.product(id);
+      quickViewProduct = p;
+      for (const panel of panels) {
+        fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
+        paintGalleryIn(panel, THEME.product?.gallery, p);
+        paintQuickViewExtras(panel, p);
+        await paintQuickVariants(panel, p);
+      }
+    } catch (err) { showError(err); }
+  }, true);                                 // capture, so we fill BEFORE the theme opens it
+
+  /* One handler for the panels' own buttons, reading whatever is showing. */
+  for (const modal of panels) modal.addEventListener('click', (e) => {
+    const add = e.target.closest(THEME?.name === 'fashion'
+      ? '.btn-add-to-cart, .btn-action-price'
+      : '.btn-add-to-cart, .btn-action-price, .btn-cart2, .btn-cart, .rts-btn.btn-primary, .tf-btn');
+    if (!add || !quickViewProduct) return;
+    if (/wish/i.test(add.className)) return;
+    e.preventDefault();
+    const selected = modal._merchSelectedVariant;
+    if (modal.dataset.merchSizeRequired === 'true' && !selected) return notify('Please select a size first.', 'error');
+    const item = selected?.product || quickViewProduct;
+    if (item.availability === 'out') return notify('That option is sold out.', 'error');
+    const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
+    cart.add(item, qty, selected?.label || '');
+    notify(item.name + ' added to your cart.', 'success');
+    track('add_to_cart', { itemId: item.id, qty, via: 'quickview' });
+    if (THEME?.name === 'fashion') {
+      try {
+        if (window.bootstrap?.Modal) {
+          window.bootstrap.Modal.getInstance(modal)?.hide();
+        }
+        if (window.bootstrap?.Offcanvas) {
+          window.bootstrap.Offcanvas.getInstance(modal)?.hide();
+        }
+        const cartEl = document.getElementById('shoppingCart');
+        if (cartEl && window.bootstrap?.Offcanvas) {
+          const bsOffcanvas = window.bootstrap.Offcanvas.getInstance(cartEl) || new window.bootstrap.Offcanvas(cartEl);
+          bsOffcanvas.show();
+        }
+      } catch { /* ignore */ }
+    }
+  });
+}
+
 /* --- THE FILTER SIDEBAR ---------------------------------------------------
    Every template ships one, listing brands and categories its designer made
    up — "Bags (112)", "Clothing (42)" — and clicking them did nothing at all.
@@ -3229,6 +5424,8 @@ async function paintFilters(state, run) {
   try { facets = await api.facets({ search: state.q || undefined, category: state.category || undefined }); }
   catch { return; }
   if (!facets) return;
+
+  wireHorizontalFilterBar(state, run, facets);
 
   for (const group of FILTER_GROUPS) {
     const values = group.values(facets);
@@ -3310,6 +5507,7 @@ function paintFilterGroup(list, group, values, state, run) {
       run();
       pickAll('input', list).forEach((i) => { i.checked = false; });
       if (input && !already) input.checked = true;
+      syncHorizontalDropdownFromState(state);
     };
     (input || label).addEventListener('click', choose);
     if (input) input.addEventListener('change', choose);
@@ -3392,28 +5590,34 @@ function wireQuantityWidgets(container, rerender) {
    ships a line like it, with a progress bar, quoting a figure the template's
    designer made up. The store knows the real threshold. */
 function paintFreeShippingBar(lines) {
-  const free = Number(STORE?.shipping?.freeAbove) || 0;
-  const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
-
-  const notes = $$('p, span, div').filter(
-    (el) => el.children.length === 0 && /free (shipping|delivery)/i.test(el.textContent || ''),
-  );
-  const bars = $$('.progress-bar, .progress .bar, .tf-progress-bar > div');
-
-  /* The merchant has not set a threshold: the promise is not theirs to make. */
-  if (!free) {
-    notes.forEach((el) => show(el.closest('.cart-top-area-note, .free-shipping, .tf-progress-msg') || el, false));
-    bars.forEach((el) => show(el.closest('.progress, .tf-progress-bar') || el, false));
+  const noteArea = pick('.cart-top-area-note, .cart-area-main-wrapper, .free-shipping, .tf-progress-msg');
+  if (!lines || !lines.length) {
+    if (noteArea) show(noteArea, false);
     return;
   }
 
+  const free = Number(STORE?.shipping?.freeAbove) || 125;
+  const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
   const left = Math.max(0, free - subtotal);
-  notes.forEach((el) => {
-    setText(el, left > 0
-      ? 'Add ' + money(left) + ' more to your cart and get free delivery'
-      : 'Your order qualifies for free delivery');
+  const pct = Math.min(100, Math.round((subtotal / free) * 100));
+
+  if (noteArea) show(noteArea, true);
+
+  const noteP = pick('.cart-top-area-note p, .tf-progress-msg, .free-shipping p') ||
+                $$('p, span, div').find((el) => /free (shipping|delivery)/i.test(el.textContent || ''));
+  if (noteP) {
+    if (left > 0) {
+      noteP.innerHTML = `Add <span>${money(left)}</span> to cart and get free shipping`;
+    } else {
+      noteP.innerHTML = `Your order qualifies for <span>Free Shipping</span>!`;
+    }
+  }
+
+  const bars = $$('.cart-top-area-note .progress-bar, .progress .bar, .tf-progress-bar > div, .progress-bar');
+  bars.forEach((bar) => {
+    bar.style.width = pct + '%';
+    bar.setAttribute('aria-valuenow', pct);
   });
-  bars.forEach((el) => { el.style.width = Math.min(100, Math.round((subtotal / free) * 100)) + '%'; });
 }
 
 async function paintCartTotals(spec, lines) {
@@ -3455,7 +5659,13 @@ async function paintCartTotals(spec, lines) {
 
   pickAll(t.discount).forEach((el) => setText(el, discount ? '-' + money(discount) : money(0)));
   pickAll(t.shipping).forEach((el) => setText(el, p.shipping == null ? 'Calculated at checkout' : (p.shipping ? money(p.shipping) : 'Free')));
-  pickAll(t.total).forEach((el) => setText(el, money(Math.max(0, subtotal - discount + (p.shipping || 0)))));
+  const finalTotal = Math.max(0, subtotal - discount + (p.shipping || 0));
+
+  if (THEME?.name === 'fashion') {
+    paintFashionCartTotals(subtotal, discount, p.shipping, finalTotal);
+  }
+
+  pickAll(t.total).forEach((el) => setText(el, money(finalTotal)));
 }
 
 function wireCoupon(spec, rerender) {
@@ -3568,7 +5778,15 @@ pages.checkout = async () => {
 function paintCheckoutSummary(spec, lines) {
   const s = spec.summary;
   const t = takeTemplate(s);
-  if (t) repeat(t, lines, (node, l) => fillFields(node, s.fields, l, { node }));
+  if (t) repeat(t, lines, (node, l) => {
+    fillFields(node, s.fields, l, { node });
+    if (THEME?.name === 'fashion') {
+      const metaRows = pickAll('.infor-prd .text-caption-01', node);
+      const label = l.variantLabel || (l.qty > 1 ? 'Qty ' + l.qty : '');
+      if (label && metaRows[0]) setText(metaRows[0], label);
+      metaRows.slice(label ? 1 : 0).forEach(remove);
+    }
+  });
 
   const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
   const p = pending.get();
@@ -3596,20 +5814,77 @@ function paintCheckoutSummary(spec, lines) {
 /* Fill the address form from the account, so a signed-in shopper types nothing. */
 async function prefillCustomer(spec) {
   const f = spec.form || {};
-  const set = (key, value) => { const el = pick(f[key]); if (el && value) el.value = value; };
+  const set = (key, value) => { const el = pick(f[key]); if (el && value != null) el.value = value; };
   if (!token.get()) return;
   try {
     const [me, addresses] = await Promise.all([api.me(), api.addresses().catch(() => [])]);
-    const a = (addresses || []).find((x) => x.isDefault) || (addresses || [])[0];
     set('email', me?.email);
-    const [first, ...rest] = String(me?.name || '').split(' ');
-    set('firstName', first); set('lastName', rest.join(' ')); set('name', me?.name);
-    set('phone', me?.phone || a?.phone);
-    if (a) {
-      /* A saved address is { name, phone, line, city, state, pincode } — one
-         `line`, matching what checkout sends back. */
-      set('address1', a.line);
-      set('city', a.city); set('state', a.state); set('pincode', a.pincode);
+
+    const applyAddress = (a) => {
+      if (!a) return;
+      const [first, ...rest] = String(a.name || me?.name || '').trim().split(/\s+/);
+      set('firstName', first || '');
+      set('lastName', rest.join(' ') || '');
+      set('name', a.name || me?.name || '');
+      set('phone', a.phone || me?.phone || '');
+      set('address1', a.line || a.line1 || '');
+      set('city', a.city || '');
+      set('state', a.state || '');
+      set('pincode', a.pincode || '');
+    };
+
+    const addrSection = pick('#checkout-saved-addresses-area');
+    const cardsContainer = pick('.checkout-address-cards', addrSection);
+
+    if (addresses && addresses.length > 0 && addrSection && cardsContainer) {
+      show(addrSection, true);
+      let selectedId = (addresses.find((x) => x.isDefault) || addresses[0]).id;
+
+      cardsContainer.innerHTML = addresses.map((addr) => {
+        const isSelected = String(addr.id) === String(selectedId);
+        const formattedLine = [addr.line, addr.line1, addr.line2, addr.city, addr.state, addr.pincode, addr.country].filter(Boolean).join(', ');
+        return `
+          <div class="col-md-6 col-12">
+            <div class="checkout-addr-card ${isSelected ? 'is-selected' : ''}" data-addr-id="${escapeHtml(String(addr.id))}">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="d-flex align-items-center gap-2">
+                  <input type="radio" name="checkout_selected_address" class="addr-radio-custom" ${isSelected ? 'checked' : ''} value="${escapeHtml(String(addr.id))}">
+                  <strong class="addr-recipient-name" style="font-size: 15px; color: #1e293b;">${escapeHtml(addr.name || 'Saved Address')}</strong>
+                </div>
+                ${addr.isDefault ? '<span class="badge-default"><i class="fa-solid fa-circle-check"></i> Default</span>' : ''}
+              </div>
+              <p class="text-muted mb-1" style="font-size: 13px; line-height: 1.5; margin-left: 26px;">${escapeHtml(formattedLine)}</p>
+              ${addr.phone ? `<p class="text-muted mb-0" style="font-size: 12px; margin-left: 26px;"><i class="fa-light fa-phone me-1"></i> ${escapeHtml(addr.phone)}</p>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      pickAll('.checkout-addr-card', cardsContainer).forEach((card) => {
+        card.addEventListener('click', () => {
+          const addrId = card.dataset.addrId;
+          const chosen = addresses.find((x) => String(x.id) === String(addrId));
+          if (!chosen) return;
+          selectedId = chosen.id;
+          pickAll('.checkout-addr-card', cardsContainer).forEach((c) => {
+            const match = c === card;
+            c.classList.toggle('is-selected', match);
+            const radio = c.querySelector('input[type="radio"]');
+            if (radio) radio.checked = match;
+          });
+          applyAddress(chosen);
+          notify(`Delivery address selected: ${chosen.name || 'Address'}`, 'success');
+        });
+      });
+
+      const initialAddr = addresses.find((x) => String(x.id) === String(selectedId)) || addresses[0];
+      applyAddress(initialAddr);
+    } else {
+      const a = (addresses || []).find((x) => x.isDefault) || (addresses || [])[0];
+      const [first, ...rest] = String(me?.name || '').trim().split(/\s+/);
+      set('firstName', first || ''); set('lastName', rest.join(' ') || ''); set('name', me?.name);
+      set('phone', me?.phone || a?.phone);
+      if (a) applyAddress(a);
     }
   } catch (e) { if (!(e instanceof ApiError && e.isUnauthenticated)) warn(e); }
 }
@@ -3631,7 +5906,7 @@ async function prefillCustomer(spec) {
    spacing, so the design is untouched and the field belongs to the theme. */
 function cloneFieldAfter(source, { id, name, placeholder, label }) {
   if (!source) return null;
-  const wrapper = source.closest('[class*="col-"], .form-group, .field, .tf-field, p') || source;
+  const wrapper = source.closest('.form-group, .field, .tf-field, .single-input-item, p') || source;
   const clone = wrapper.cloneNode(true);
   const input = clone.matches('input') ? clone : clone.querySelector('input');
   if (!input || !wrapper.parentElement) return null;
@@ -4246,6 +6521,9 @@ pages.account = async () => {
   wirePasswordChange();
   if (!token.get()) { showSignedOut(); return; }
 
+  const cachedName = localStorage.getItem('merch.shopper_name');
+  if (cachedName) pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, cachedName));
+
   let me = null;
   try { me = await api.me(); }
   catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { showSignedOut(); return; } showError(e); return; }
@@ -4262,6 +6540,11 @@ pages.addresses = async () => {
   if (!token.get()) return showSignedOut();
   wireAddressForm();
   await paintAddresses();
+  const editId = new URLSearchParams(location.search).get('edit');
+  if (editId) {
+    const item = pick(`.address-item[data-address-id="${editId}"]`, document);
+    if (item) pick('.address-edit', item)?.click();
+  }
 };
 pages.orderDetail = pages.order;
 
@@ -4275,6 +6558,11 @@ function showSignedIn(me) {
   pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, me.name || me.email));
   pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, me.email));
   fillAccountDetails(me);
+  try {
+    if (me.name) localStorage.setItem('merch.shopper_name', me.name);
+    if (me.email) localStorage.setItem('merch.shopper_email', me.email);
+  } catch {}
+  paintAccountHeader().catch(() => {});
 }
 
 /* None of these themes ships a "you are signed in" element, so the classes
@@ -4318,7 +6606,11 @@ async function paintOrders() {
   const spec = { container: '.order-list|.account-orders tbody|table tbody|.tf-table-page-cart tbody', card: 'tr|.order-item' };
   const t = takeTemplate(spec);
   if (!t) return;
+  const emptyState = pick('.empty-state', t.container?.closest?.('.order-table-account, .tab-pane') || t.container?.parentElement);
   if (!orders.length) return renderEmpty(t.container, 'You have not placed an order yet.', spec);
+  if (emptyState) show(emptyState, false);
+  const tableWrapper = t.container?.closest?.('.table-responsive, table');
+  if (tableWrapper) show(tableWrapper, true);
   repeat(t, orders, (node, o) => {
     const cells = pickAll('td', node);
     const texts = [o.reference || o.id, new Date(o.createdAt).toLocaleDateString(), o.orderStatus || o.status, money(o.total ?? o.totalAmount)];
@@ -4335,23 +6627,59 @@ async function paintAddresses() {
   const spec = { container: '.address-list|.account-addresses|.list-address', card: '.address-item|.single-address|.account-address-item' };
   const t = takeTemplate(spec);
   if (!t) return;
+  const emptyState = pick('.empty-state', t.container?.closest?.('.shipping-address-billing-address-account, .saved-addresses-col, .tab-pane, .col-lg-7, .col-lg-6') || t.container?.parentElement);
   if (!list.length) return renderEmpty(t.container, 'No saved addresses yet.', spec);
+  if (emptyState) show(emptyState, false);
+  show(t.container, true);
   repeat(t, list, (node, a) => {
+    node.dataset.addressId = a.id;
     setText(pick('.address-name|h5|h6', node), a.name || '');
     /* A saved address uses `line`, SINGULAR — the edit handler below already
        knew that; this line did not, so every saved address was shown without
        its street: "Noida, Uttar Pradesh, 201301" and nothing to deliver to. */
     setText(pick('.address-body|p|address', node),
       [a.line, a.line1, a.line2, a.city, a.state, a.pincode, a.country].filter(Boolean).join(', '));
+
+    // Handle Phone
+    const phoneEl = pick('.phone-val|.address-phone-number', node);
+    const phoneContainer = pick('.address-phone-line|.address-phone', node);
+    if (a.phone) {
+      if (phoneEl) setText(phoneEl, a.phone);
+      if (phoneContainer) show(phoneContainer, true);
+    } else if (phoneContainer) {
+      show(phoneContainer, false);
+    }
+
+    // Handle Default badge & button
+    const defaultBadge = pick('.badge-default-addr|.address-default-badge', node);
+    const defaultBtn = pick('.address-default|[data-default]', node);
+    const cardWrap = pick('.address-card-wrap', node);
+    if (a.isDefault) {
+      if (defaultBadge) show(defaultBadge, true);
+      if (defaultBtn) show(defaultBtn, false);
+      if (cardWrap) cardWrap.classList.add('is-default');
+    } else {
+      if (defaultBadge) show(defaultBadge, false);
+      if (defaultBtn) show(defaultBtn, true);
+      if (cardWrap) cardWrap.classList.remove('is-default');
+    }
+
     pick('.address-default|[data-default]', node)?.addEventListener('click', async (e) => {
       e.preventDefault();
-      try { await api.makeAddressDefault(a.id); notify('Default address updated.', 'success'); }
-      catch (err) { showError(err); }
+      try {
+        await api.makeAddressDefault(a.id);
+        notify('Default address updated.', 'success');
+        await paintAddresses();
+      } catch (err) { showError(err); }
     });
+
     pick('.address-edit|[data-edit]', node)?.addEventListener('click', (e) => {
       e.preventDefault();
       const form = $$('form').find((f) => f.dataset.merchAddress);
-      if (!form) return;
+      if (!form) {
+        location.href = `addresses.html?edit=${encodeURIComponent(a.id)}`;
+        return;
+      }
       form.dataset.merchEditing = a.id;
       const set = (sel, v) => { const el = pick(sel, form); if (el) el.value = v || ''; };
       set('input[placeholder*="name" i]:not([placeholder*="user" i])', a.name);
@@ -4360,12 +6688,29 @@ async function paintAddresses() {
       set('input[placeholder*="city" i]|input[placeholder*="town" i]', a.city);
       set('input[placeholder*="state" i]', a.state);
       set('input[placeholder*="zip" i]|input[placeholder*="post" i]|input[placeholder*="pin" i]', a.pincode);
+
+      const titleEl = pick('.address-form-title', form.parentElement?.parentElement || form.parentElement || document);
+      if (titleEl) setText(titleEl, 'Edit address');
+      const submitBtn = pick('button[type="submit"]', form);
+      if (submitBtn) setText(submitBtn, 'Update address');
+      const cancelBtn = pick('.cancel-edit-btn', form.parentElement?.parentElement || form.parentElement || document);
+      if (cancelBtn) show(cancelBtn, true);
+
       form.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
+
     pick('.address-delete|[data-delete]', node)?.addEventListener('click', async (e) => {
       e.preventDefault();
-      try { await api.deleteAddress(a.id); node.remove(); }
-      catch (err) { showError(err); }
+      if (!confirm('Are you sure you want to delete this address?')) return;
+      try {
+        await api.deleteAddress(a.id);
+        node.remove();
+        notify('Address deleted successfully.', 'success');
+        const remaining = pickAll(spec.card, t.container);
+        if (!remaining.length) {
+          renderEmpty(t.container, 'No saved addresses yet.', spec);
+        }
+      } catch (err) { showError(err); }
     });
   });
 }
@@ -4389,6 +6734,20 @@ function wireAddressForm() {
        Save submitted it natively. */
     if (!fields.line || !(fields.city || fields.pincode)) continue;
     form.dataset.merchAddress = '1';
+
+    const cancelBtn = pick('.cancel-edit-btn', form.parentElement?.parentElement || form.parentElement || document);
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        delete form.dataset.merchEditing;
+        form.reset();
+        const titleEl = pick('.address-form-title', form.parentElement?.parentElement || form.parentElement || document);
+        if (titleEl) setText(titleEl, 'Add an address');
+        const submitBtn = pick('button[type="submit"]', form);
+        if (submitBtn) setText(submitBtn, 'Save address');
+        show(cancelBtn, false);
+      });
+    }
 
     /* The store will not save an address without a postcode, and one of these
        templates asks only for Address and City. Give the form the boxes the
@@ -4433,6 +6792,11 @@ function wireAddressForm() {
         notify(editing ? 'Address updated.' : 'Address saved.', 'success');
         delete form.dataset.merchEditing;
         form.reset();
+        const titleEl = pick('.address-form-title', form.parentElement?.parentElement || form.parentElement || document);
+        if (titleEl) setText(titleEl, 'Add an address');
+        const submitBtn = pick('button[type="submit"]', form);
+        if (submitBtn) setText(submitBtn, 'Save address');
+        if (cancelBtn) show(cancelBtn, false);
         await paintAddresses();
       } catch (err) { showError(err); }
     });
@@ -4443,14 +6807,20 @@ function wireSignOut() {
   /* Matched on href before, but these themes point Logout at `login.html` and
      only the WORDS say what it does. */
   const links = new Set([
-    ...$$('a[href*="logout"], a[href*="sign-out"], .sign-out, [data-signout]'),
+    ...$$('a[href*="logout"], a[href*="sign-out"], .sign-out, [data-signout], .account-logout-btn'),
     ...$$('a, button').filter((el) => /^(log ?out|sign ?out)$/i.test((el.textContent || '').trim())),
   ]);
   links.forEach((a) => {
+    if (a.__wiredSignOut) return;
+    a.__wiredSignOut = true;
     a.addEventListener('click', async (e) => {
       e.preventDefault();
       try { await api.signOutEverywhere(); } catch { /* the local token goes either way */ }
       token.clear();
+      try {
+        localStorage.removeItem('merch.shopper_name');
+        localStorage.removeItem('merch.shopper_email');
+      } catch {}
       location.href = pageUrl('home');
     });
   });
@@ -4530,6 +6900,13 @@ function wireLoginForm(form, email, password) {
     try {
       const res = await api.login(email.value.trim(), password.value);
       token.set(res.token);
+      const name = res?.shopper?.name || res?.user?.name || res?.name || email.value.trim().split('@')[0];
+      try {
+        localStorage.setItem('merch.shopper_name', name);
+        if (res?.shopper?.email || res?.user?.email || email.value.trim()) {
+          localStorage.setItem('merch.shopper_email', res?.shopper?.email || res?.user?.email || email.value.trim());
+        }
+      } catch {}
       await wishlist.sync();
       notify('Signed in.', 'success');
       location.href = param('next') || pageUrl('account');
@@ -4548,6 +6925,11 @@ function wireRegisterForm(form, email, password, nameEl) {
     try {
       const res = await api.register(email.value.trim(), password.value, nameEl?.value.trim() || '', phoneEl?.value.trim() || '');
       if (res?.token) token.set(res.token);
+      const name = nameEl?.value.trim() || res?.shopper?.name || email.value.trim().split('@')[0];
+      try {
+        localStorage.setItem('merch.shopper_name', name);
+        if (email.value.trim()) localStorage.setItem('merch.shopper_email', email.value.trim());
+      } catch {}
       notify('Welcome. Your account is ready.', 'success');
       location.href = pageUrl('account');
     } catch (err) { showError(err); }
@@ -4659,9 +7041,140 @@ pages.wishlist = async () => {
     const spec = THEME.cart;
     const t = takeTemplate(spec);
     if (!t) return;
-    if (!items.length) return renderEmpty(t.container, 'Your wishlist is empty.');
-    repeat(t, items, (node, p) => fillFields(node, spec.fields,
-      { itemId: p.id, name: p.name, price: p.price, qty: 1, image: (p.imageUrls || [])[0] }, { node }));
+
+    const renderWishlistEmpty = () => {
+      const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+      if (head) show(head, false);
+      const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
+      rows.forEach((r) => r.remove());
+      if (!pick('.merch-empty', t.container)) {
+        const emptyDiv = document.createElement('div');
+        emptyDiv.className = 'merch-empty text-center';
+        emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
+        emptyDiv.innerHTML = `
+          <i class="fa-regular fa-heart" style="font-size:48px;color:#94a3b8;margin-bottom:16px;display:block;"></i>
+          <h4 style="margin-bottom:8px;font-weight:600;">Your wishlist is empty</h4>
+          <p style="color:#64748b;margin-bottom:20px;">Explore more products and add your favorites to wishlist!</p>
+          <a href="shop.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
+        `;
+        t.container.appendChild(emptyDiv);
+      }
+    };
+
+    if (!items.length) {
+      renderWishlistEmpty();
+      return;
+    }
+
+    const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+    if (head) show(head, true);
+    pickAll('.merch-empty', t.container).forEach(remove);
+
+    const wishFields = { ...(spec.fields || {}) };
+    delete wishFields.remove;
+
+    repeat(t, items, (node, p) => {
+      node.dataset.merchId = p.id;
+      fillFields(node, wishFields,
+        { itemId: p.id, name: p.name, price: p.price, qty: 1, image: (p.imageUrls || [])[0] }, { node });
+
+      // Image & thumbnail
+      const imageUrl = (p.imageUrls && p.imageUrls[0]) || '';
+      const imgEl = pick('.thumbnail img, .pro-thumbnail img', node);
+      if (imgEl) {
+        imgEl.src = imageUrl ? mediaUrl(imageUrl) : 'assets/images/shop/01.png';
+        imgEl.alt = p.name || 'product';
+        imgEl.style.cssText = 'width:65px;height:65px;object-fit:contain;border-radius:4px;';
+      }
+      const thumbLink = pick('.thumbnail a, .pro-thumbnail a', node);
+      if (thumbLink) {
+        thumbLink.href = productHref(p);
+      } else if (imgEl && imgEl.parentElement) {
+        const a = document.createElement('a');
+        a.href = productHref(p);
+        imgEl.parentElement.insertBefore(a, imgEl);
+        a.appendChild(imgEl);
+      }
+
+      // Title link
+      const titleEl = pick('.information .title, .pro-title', node);
+      if (titleEl) {
+        titleEl.innerHTML = `<a href="${escapeHtml(productHref(p))}" style="color:inherit;">${escapeHtml(p.name)}</a>`;
+      }
+
+      // SKU / unit
+      const skuEl = pick('.information span', node);
+      if (skuEl) {
+        skuEl.textContent = p.unit ? ('Unit: ' + p.unit) : (p.sku ? ('SKU: ' + p.sku) : '');
+      }
+
+      // Price & Subtotal
+      const priceEl = pick('.price p, .pro-price span, .pro-price', node);
+      if (priceEl) priceEl.textContent = money(p.price);
+
+      const qtyInput = pick('.quantity .input, .pro-quantity input', node);
+      const subtotalEl = pick('.subtotal p, .pro-subtotal span', node);
+      const updateSubtotal = () => {
+        const qty = Math.max(1, parseInt(qtyInput?.value) || 1);
+        if (subtotalEl) subtotalEl.textContent = money(p.price * qty);
+      };
+      if (qtyInput) {
+        qtyInput.value = '1';
+        qtyInput.oninput = updateSubtotal;
+      }
+      updateSubtotal();
+
+      // Quantity buttons
+      const minusBtn = pick('.quantity-edit .button:not(.plus), .dec.qtybtn', node);
+      const plusBtn = pick('.quantity-edit .button.plus, .inc.qtybtn', node);
+      if (minusBtn && qtyInput) {
+        minusBtn.onclick = (e) => {
+          e.preventDefault();
+          const cur = Math.max(1, parseInt(qtyInput.value) || 1);
+          if (cur > 1) { qtyInput.value = cur - 1; updateSubtotal(); }
+        };
+      }
+      if (plusBtn && qtyInput) {
+        plusBtn.onclick = (e) => {
+          e.preventDefault();
+          const cur = Math.max(1, parseInt(qtyInput.value) || 1);
+          qtyInput.value = cur + 1;
+          updateSubtotal();
+        };
+      }
+
+      // Close / Remove Cross button
+      const removeBtn = pick('.close, .pro-remove a, .remove', node);
+      if (removeBtn) {
+        if (!removeBtn.querySelector('i') && !removeBtn.textContent.trim()) {
+          removeBtn.innerHTML = '<i class="fa-regular fa-x"></i>';
+        }
+        removeBtn.title = 'Remove from wishlist';
+        removeBtn.style.cursor = 'pointer';
+        removeBtn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          await wishlist.toggle(p.id);
+          node.remove();
+          notify(p.name + ' removed from wishlist.', 'success');
+          const remaining = pickAll('.single-cart-area-list.main, tbody tr', t.container);
+          if (!remaining.length) {
+            renderWishlistEmpty();
+          }
+        };
+      }
+
+      // Add to Cart
+      const addCartBtn = pick('.button-area a, .pro-cart a, .add-to-cart', node);
+      if (addCartBtn) {
+        addCartBtn.onclick = (e) => {
+          e.preventDefault();
+          const qty = Math.max(1, parseInt(qtyInput?.value) || 1);
+          cart.add(p, qty);
+          notify(p.name + ' added to your cart.', 'success');
+        };
+      }
+    });
   }
 };
 
@@ -4997,8 +7510,6 @@ function readSubscriber() {
     pincode: a.pincode || '',
   };
 }
-let STORE_ME = null;
-let STORE_ADDRESS = null;
 
 /* --- COLLECTIONS ---------------------------------------------------------- */
 pages.collections = async () => {
@@ -5159,7 +7670,12 @@ async function boot() {
   }
 
   paintHeader();
-  cart.onChange(paintHeader);
+  /* paintFashionMiniCart self-gates on THEME.name, so this is a no-op on the other
+     three themes — it is wired here, unconditionally, because that is where the
+     fashion copy wired it and the guard already lives inside the function. */
+  cart.onChange(() => { paintHeader(); paintFashionMiniCart(); });
+  wishlist.onChange(paintHeader);
+  paintFashionMiniCart();
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
   try { paintUsps(STORE); } catch (e) { warn('usps', e); }
@@ -5169,7 +7685,8 @@ async function boot() {
      so at this point there is nothing on the page to find and the header went
      on claiming USD over rupee prices. Run it again once they have. */
   onThemeReady(() => { paintCurrencySwitcher().catch((e) => warn('currency switcher', e)); });
-  if (PAGE !== 'listing') { wireSearchInputs(null); wireCategoryLinks(); }
+  if (PAGE !== 'listing') { wireSearchInputs(null); }
+  try { await wireCategoryLinks(); } catch (e) { warn('category links', e); }
 
   const run = PAGE.startsWith('policy:') ? () => pages.policy(PAGE.slice(7)) : (pages[PAGE] || pages.unknown);
   try { await run(); }
@@ -5181,6 +7698,7 @@ async function boot() {
 
   /* Whatever the role did not reach. */
   try { await fillStrayStrips(); } catch (e) { warn('stray strips', e); }
+  if (PAGE !== 'blog') { try { await paintBlogStrip(4); } catch (e) { warn('blog strip', e); } }
   try { wireQuickView(); } catch (e) { warn('quick view', e); }
 
   await runDeferredThemeScripts();

@@ -2592,6 +2592,7 @@ function paintQuickViewExtras(panel, p) {
 let quickViewProduct = null;
 
 function wireQuickView() {
+  if (THEME?.name === 'fashion') return wireQuickViewFashion();
   /* A theme can ship more than one of these — fashion has a Quick View
      offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
      the shopper opens has to be the product they clicked. */
@@ -3792,6 +3793,7 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
 /* Variants & Attributes. Displays variant choices (navigates between products in a group)
    and dynamic product attributes (e.g. Size, Color) with responsive styling. */
 async function paintVariants(spec, p) {
+  if (THEME?.name === 'fashion') return paintVariantsFashion(spec, p);
   let group = null;
   try { group = await api.variants(p.id); } catch { /* best effort */ }
   const options = group?.options || [];
@@ -4481,6 +4483,898 @@ function labelColour(label) {
   return colourHex(first) ? first : null;
 }
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FASHION THEME — ported up from fashion/merch.js, which had forked.
+
+   The fashion theme ships separate colour and size pickers, its own offcanvas
+   basket and its own cart/checkout totals. That work lived only in the theme's
+   own copy, so the master could not be synced onto it without deleting it. It
+   is reproduced here VERBATIM, reached only behind a theme guard, so the other
+   three themes behave exactly as they did before.
+
+   `paintVariantsFashion` and `wireQuickViewFashion` are DELEGATED to wholesale
+   rather than merged into their master counterparts. The theme's versions carry
+   changes that are not theme-gated — a different quick-view selector, an extra
+   painter call — and applying those to all four themes would be a decision
+   about intent that belongs to whoever wrote them, not to this merge.
+
+   Note for whoever owns this: COLOR_PALETTE here and COLOUR_HEX below are two
+   colour tables. `resolveColorSwatch` already prefers this one and falls back
+   to `colourBackground`, so nothing is broken — but they are worth reconciling.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* --- Fashion Color & Size Variant Swatch Engine --- */
+const COLOR_IMAGE_CACHE = new Map();
+
+const COLOR_PRODUCT_CACHE = new Map();
+
+const COLOR_PALETTE = {
+  black: '#111111',
+  white: '#ffffff',
+  grey: '#808080',
+  gray: '#808080',
+  charcoal: '#36454f',
+  mustard: '#e1ad01',
+  teal: '#008080',
+  maroon: '#800000',
+  olive: '#808000',
+  navy: '#000080',
+  sage: '#9caf88',
+  beige: '#f5f5dc',
+  rust: '#b7410e',
+  blue: '#2563eb',
+  red: '#dc2626',
+  green: '#16a34a',
+  yellow: '#eab308',
+  orange: '#ea580c',
+  purple: '#9333ea',
+  pink: '#ec4899',
+  brown: '#78350f',
+  cream: '#fffdd0',
+  khaki: '#c3b091',
+  neon: '#39ff14',
+  lavender: '#e6e6fa',
+  burgundy: '#800020',
+  ivory: '#fffff0',
+  silver: '#c0c0c0',
+  'royal blue': '#2b4fa2',
+  denim: '#3b5b86',
+  mint: '#8fd9b6',
+  sand: '#dcc9a6',
+  stone: '#d2cabb',
+  coffee: '#4b352a',
+  peach: '#ffb997',
+  wine: '#722f37',
+  'red wine': '#6b2230',
+  turquoise: '#30bfc4',
+  coral: '#ff7f50',
+  cyan: '#06b6d4',
+  magenta: '#d946ef',
+  gold: '#ffd700',
+};
+
+/* Variant options are returned as products. A selected size/color therefore
+   supplies the product id and price used by both cart views. */
+let PDP_VARIANT_REQUIRED = false;
+
+let PDP_SELECTED_VARIANT = null;
+
+let FASHION_MINI_CART_TEMPLATE = null;
+
+function resolveColorSwatch(colorName) {
+  if (!colorName) return '#e5e5e5';
+  const clean = String(colorName).trim().toLowerCase();
+  if (COLOR_PALETTE[clean]) return COLOR_PALETTE[clean];
+  if (typeof colourBackground === 'function') {
+    const bg = colourBackground(colorName);
+    if (bg) return bg;
+  }
+  if (window.CSS?.supports?.('color', colorName)) return colorName;
+  const parts = clean.split(/\s+/);
+  if (parts.length > 1 && COLOR_PALETTE[parts[parts.length - 1]]) {
+    return COLOR_PALETTE[parts[parts.length - 1]];
+  }
+  return '#eee';
+}
+
+function isSizeString(str) {
+  if (!str) return false;
+  const clean = String(str).trim();
+  return /^(\d{1,2}\s*XL|XXS|XS|S|M|L|XL|XXL|XXXL|EXTRA\s*SMALL|SMALL|MEDIUM|LARGE|EXTRA\s*LARGE|ONE\s*SIZE|FREE\s*SIZE|OS|\d{1,2}(?:\.\d+)?(?:\s?(?:US|UK|EU))?)$/i.test(clean);
+}
+
+function parseVariantOption(option, baseProduct) {
+  let color = '';
+  let size = '';
+
+  const attrs = option?.attributes || option?.product?.attributes || [];
+  const colorAttr = attrs.find((a) => /^colou?r$/i.test(a.key || a.name))?.value;
+  const sizeAttr = attrs.find((a) => /^size$/i.test(a.key || a.name))?.value;
+  if (colorAttr) color = String(colorAttr).trim();
+  if (sizeAttr) size = String(sizeAttr).trim();
+
+  let text = String(option?.label || option?.name || option?.title || '').trim();
+  if (text.includes('—')) text = text.split('—').pop().trim();
+  else if (text.includes(' - ') && !text.includes(' / ')) {
+    const parts = text.split(' - ');
+    if (parts.length > 1 && (parts[1].includes('/') || isSizeString(parts[1]))) {
+      text = parts.slice(1).join(' - ').trim();
+    }
+  }
+
+  if ((!color || !size) && text.includes(' / ')) {
+    const parts = text.split(' / ').map((s) => s.trim());
+    if (parts.length >= 2) {
+      if (isSizeString(parts[0]) && !isSizeString(parts[1])) {
+        if (!size) size = parts[0];
+        if (!color) color = parts[1];
+      } else {
+        if (!color) color = parts[0];
+        if (!size) size = parts[1];
+      }
+    }
+  } else if (!color && !size && text) {
+    if (isSizeString(text)) size = text;
+    else color = text;
+  }
+
+  return { color, size, option };
+}
+
+function variantProduct(option, base) {
+  const detail = option.product && typeof option.product === 'object' ? option.product : {};
+  return {
+    ...base,
+    ...detail,
+    id: option.id ?? detail.id ?? base.id,
+    name: detail.name || option.productName || base.name,
+    price: option.price ?? detail.price ?? base.price,
+    availability: option.availability || detail.availability || base.availability,
+    imageUrls: detail.imageUrls || option.imageUrls || base.imageUrls,
+  };
+}
+
+function updateContainerImages(root, imageUrls) {
+  if (!imageUrls || !imageUrls.length) return;
+  const urls = imageUrls.map(mediaUrl);
+  const targets = pickAll(
+    '.tf-product-media-main img, .tf-product-media-thumbs img, .thumbs-slider img, ' +
+    '.mini-quick-image img, .item-scroll-quickview img, .quickView-item img, ' +
+    '.prd-image img, .img-product',
+    root || document
+  );
+  if (targets.length) {
+    targets.forEach((img, i) => {
+      const url = urls[i % urls.length];
+      setAttr(img, 'src', url);
+      if (img.hasAttribute('data-src')) setAttr(img, 'data-src', url);
+      img.removeAttribute('srcset');
+    });
+  }
+  pickAll('.tf-zoom-main, .drift-zoom-pane', root || document).forEach((pane) => {
+    if (urls[0]) pane.style.backgroundImage = 'url("' + urls[0] + '")';
+  });
+  const stickyImg = pick('.tf-sticky-atc-product .prd_img img');
+  if (stickyImg && urls[0]) {
+    setAttr(stickyImg, 'src', urls[0]);
+    if (stickyImg.hasAttribute('data-src')) setAttr(stickyImg, 'data-src', urls[0]);
+  }
+}
+
+async function loadSampleColorImages(parsedList, baseProduct, onLoaded) {
+  const missingIds = [];
+  const colorToOption = new Map();
+  for (const item of parsedList) {
+    if (!item.color) continue;
+    const key = item.color.toLowerCase();
+    if (!COLOR_IMAGE_CACHE.has(key) && !colorToOption.has(key)) {
+      colorToOption.set(key, item.option);
+      if (item.option?.id) missingIds.push(item.option.id);
+    }
+  }
+
+  const baseColor = (baseProduct?.attributes?.find((a) => /^colou?r$/i.test(a.key || a.name))?.value)
+    || parseVariantOption({ name: baseProduct?.name }, baseProduct).color;
+  if (baseColor && baseProduct?.imageUrls?.length) {
+    const key = baseColor.toLowerCase();
+    if (!COLOR_IMAGE_CACHE.has(key)) {
+      COLOR_IMAGE_CACHE.set(key, baseProduct.imageUrls[0]);
+      COLOR_PRODUCT_CACHE.set(key, baseProduct);
+    }
+  }
+
+  if (missingIds.length) {
+    try {
+      const res = await api.products(missingIds);
+      const items = Array.isArray(res) ? res : (res?.items || []);
+      for (const prod of items) {
+        const parsed = parseVariantOption({ name: prod.name, attributes: prod.attributes }, prod);
+        const c = parsed.color || '';
+        if (c && prod.imageUrls?.length) {
+          const key = c.toLowerCase();
+          COLOR_IMAGE_CACHE.set(key, prod.imageUrls[0]);
+          COLOR_PRODUCT_CACHE.set(key, prod);
+        }
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  if (onLoaded) onLoaded();
+}
+
+function renderVariantPickers({
+  host,
+  p,
+  options,
+  isQuick = false,
+  onSelect,
+  onClear,
+}) {
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const uniqueColors = [...new Set(parsedList.map((x) => x.color).filter(Boolean))];
+  const uniqueSizes = [...new Set(parsedList.map((x) => x.size).filter(Boolean))];
+
+  if (!uniqueColors.length && !uniqueSizes.length) {
+    const rawTitle = String(options[0]?.groupTitle || options[0]?.optionType || 'Options');
+    const optTarget = document.createElement('div');
+    optTarget.className = 'variant-picker-item variant-option quick-variant-picker';
+    const optLabel = document.createElement('div');
+    optLabel.className = 'variant-picker-label variant-picker_label mb-12';
+    optLabel.append(document.createTextNode(rawTitle + ': '));
+    const optValSpan = document.createElement('span');
+    optValSpan.className = 'variant-picker-label-value variant__value fw-medium';
+    optValSpan.textContent = 'Select option';
+    optLabel.appendChild(optValSpan);
+    optTarget.appendChild(optLabel);
+
+    const optValues = document.createElement('div');
+    optValues.className = 'variant-picker-values variant-picker_values';
+    optTarget.appendChild(optValues);
+
+    options.forEach((opt) => {
+      const btn = document.createElement('span');
+      btn.className = 'size-btn size_btn';
+      btn.dataset.variantId = String(opt.id);
+      const name = opt.label || opt.name || opt.title || '';
+      btn.textContent = name;
+      if (opt.availability === 'out') btn.classList.add('disabled');
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (opt.availability === 'out') return notify('That option is sold out.', 'error');
+        optValues.querySelectorAll('.size-btn, .size_btn').forEach((n) => n.classList.remove('active'));
+        btn.classList.add('active');
+        setText(optValSpan, name);
+        const variant = variantProduct(opt, p);
+        if (onSelect) onSelect(variant, rawTitle + ': ' + name, opt);
+      });
+      optValues.appendChild(btn);
+    });
+
+    if (isQuick) {
+      const quantity = pick('.tf-product-total-quantity, .product-total-quantity', host);
+      if (quantity) host.insertBefore(optTarget, quantity);
+      else host.appendChild(optTarget);
+    } else {
+      host.appendChild(optTarget);
+    }
+    return;
+  }
+
+  const baseParsed = parseVariantOption({ name: p.name, attributes: p.attributes }, p);
+  const baseColor = baseParsed.color;
+  const baseSize = baseParsed.size;
+
+  let activeColor = uniqueColors.find((c) => c.toLowerCase() === (baseColor || '').toLowerCase()) || uniqueColors[0] || '';
+  let selectedSize = '';
+  if (baseSize) {
+    const hasInitialSize = parsedList.some(
+      (item) => (!item.color || item.color.toLowerCase() === activeColor.toLowerCase()) && item.size.toLowerCase() === baseSize.toLowerCase() && item.option.availability !== 'out'
+    );
+    if (hasInitialSize) selectedSize = baseSize;
+  }
+
+  const colorTarget = document.createElement('div');
+  colorTarget.className = 'variant-picker-item variant-color quick-variant-picker picker_color';
+
+  const colorLabel = document.createElement('div');
+  colorLabel.className = 'variant-picker-label variant-picker_label mb-12';
+  const colorTitleBox = document.createElement('div');
+  colorTitleBox.append(document.createTextNode('Colors: '));
+  const colorValueSpan = document.createElement('span');
+  colorValueSpan.className = 'variant-picker-label-value variant__value value-currentColor text-capitalize fw-medium';
+  colorValueSpan.textContent = activeColor || 'Select color';
+  colorTitleBox.appendChild(colorValueSpan);
+  colorLabel.appendChild(colorTitleBox);
+  colorTarget.appendChild(colorLabel);
+
+  const colorValues = document.createElement('div');
+  colorValues.className = 'variant-picker-values variant-picker_values';
+  colorTarget.appendChild(colorValues);
+
+  const sizeTarget = document.createElement('div');
+  sizeTarget.className = 'variant-picker-item variant-size quick-variant-picker picker_size';
+
+  const sizeLabel = document.createElement('div');
+  sizeLabel.className = 'variant-picker-label variant-picker_label mb-12 d-flex align-items-center justify-content-between';
+  const sizeTitleBox = document.createElement('div');
+  sizeTitleBox.append(document.createTextNode('Size: '));
+  const sizeValueSpan = document.createElement('span');
+  sizeValueSpan.className = 'variant-picker-label-value variant__value value-currentSize text-capitalize fw-medium';
+  sizeValueSpan.textContent = selectedSize || 'Select size';
+  sizeTitleBox.appendChild(sizeValueSpan);
+  sizeLabel.appendChild(sizeTitleBox);
+
+  const sizeGuideLink = document.createElement('a');
+  sizeGuideLink.href = '#findSize';
+  sizeGuideLink.setAttribute('data-bs-toggle', 'modal');
+  sizeGuideLink.className = 'tf-btn-line-2 style-primary text-caption-01 fw-semibold';
+  sizeGuideLink.textContent = 'Size Guide';
+  sizeLabel.appendChild(sizeGuideLink);
+
+  sizeTarget.appendChild(sizeLabel);
+
+  const sizeValues = document.createElement('div');
+  sizeValues.className = 'variant-picker-values variant-picker_values';
+  sizeTarget.appendChild(sizeValues);
+
+  function applyOption(option) {
+    const product = variantProduct(option, p);
+    const labelParts = [];
+    if (activeColor) labelParts.push('Color: ' + activeColor);
+    if (selectedSize) labelParts.push('Size: ' + selectedSize);
+    const label = labelParts.length ? labelParts.join(' / ') : (option.label || option.name || '');
+    if (onSelect) onSelect(product, label, option);
+  }
+
+  function renderSizesForColor() {
+    sizeValues.replaceChildren();
+    const colorItems = uniqueColors.length
+      ? parsedList.filter((item) => item.color.toLowerCase() === activeColor.toLowerCase())
+      : parsedList;
+
+    const matching = colorItems.find((item) => item.size.toLowerCase() === (selectedSize || '').toLowerCase());
+    if (!matching || matching.option.availability === 'out') {
+      selectedSize = '';
+    }
+
+    setText(sizeValueSpan, selectedSize || 'Select size');
+
+    colorItems.forEach((item) => {
+      const btn = document.createElement('span');
+      btn.className = 'size-btn size_btn';
+      btn.dataset.size = item.size;
+      btn.dataset.variantId = String(item.option.id);
+      btn.textContent = item.size;
+
+      if (item.option.availability === 'out') btn.classList.add('disabled');
+      if (selectedSize && item.size.toLowerCase() === selectedSize.toLowerCase() && item.option.availability !== 'out') {
+        btn.classList.add('active');
+      }
+
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (item.option.availability === 'out') {
+          return notify('That option is sold out.', 'error');
+        }
+        selectedSize = item.size;
+        setText(sizeValueSpan, selectedSize);
+        sizeValues.querySelectorAll('.size-btn, .size_btn').forEach((n) => {
+          n.classList.toggle('active', n.dataset.size === selectedSize);
+        });
+        applyOption(item.option);
+      });
+
+      sizeValues.appendChild(btn);
+    });
+
+    if (selectedSize && matching && matching.option.availability !== 'out') {
+      applyOption(matching.option);
+    } else {
+      if (onClear) onClear();
+    }
+  }
+
+  if (uniqueColors.length) {
+    uniqueColors.forEach((color) => {
+      const isCurrentActive = color.toLowerCase() === activeColor.toLowerCase();
+      const btn = document.createElement('div');
+      btn.className = 'hover-tooltip tooltip-bot color-btn color_btn style-image' + (isCurrentActive ? ' active' : '');
+      btn.dataset.color = color;
+      btn.title = color;
+
+      const swatch = document.createElement('span');
+      swatch.className = 'img';
+      const swatchBg = resolveColorSwatch(color);
+      swatch.style.backgroundColor = swatchBg;
+      swatch.style.background = swatchBg;
+      btn.appendChild(swatch);
+
+      const tooltip = document.createElement('span');
+      tooltip.className = 'tooltip';
+      tooltip.textContent = color;
+      btn.appendChild(tooltip);
+
+      btn.addEventListener('mouseenter', () => {
+        setText(colorValueSpan, color);
+      });
+      btn.addEventListener('mouseleave', () => {
+        setText(colorValueSpan, activeColor || 'Select color');
+      });
+
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (activeColor.toLowerCase() === color.toLowerCase()) return;
+        activeColor = color;
+        setText(colorValueSpan, activeColor);
+        colorValues.querySelectorAll('.color-btn, .color_btn').forEach((n) => {
+          n.classList.toggle('active', n.dataset.color.toLowerCase() === activeColor.toLowerCase());
+        });
+
+        const colorProd = COLOR_PRODUCT_CACHE.get(activeColor.toLowerCase());
+        const rootContainer = host.closest('.modal, .offcanvas') || document;
+        if (colorProd?.imageUrls?.length) {
+          updateContainerImages(rootContainer, colorProd.imageUrls);
+        } else {
+          const sampleOpt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+          if (sampleOpt?.id) {
+            api.product(sampleOpt.id).then((detail) => {
+              if (detail?.imageUrls?.length) {
+                COLOR_IMAGE_CACHE.set(activeColor.toLowerCase(), detail.imageUrls[0]);
+                COLOR_PRODUCT_CACHE.set(activeColor.toLowerCase(), detail);
+                updateContainerImages(rootContainer, detail.imageUrls);
+              }
+            }).catch(() => {});
+          }
+        }
+
+        if (uniqueSizes.length) {
+          renderSizesForColor();
+        } else {
+          const opt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+          if (opt) applyOption(opt);
+        }
+      });
+
+      colorValues.appendChild(btn);
+    });
+  }
+
+  // Insert into host container before quantity widget if present
+  const quantity = pick('.tf-product-total-quantity, .product-total-quantity', host);
+  if (uniqueColors.length) {
+    if (quantity) host.insertBefore(colorTarget, quantity);
+    else host.appendChild(colorTarget);
+  }
+  if (uniqueSizes.length) {
+    if (quantity) host.insertBefore(sizeTarget, quantity);
+    else host.appendChild(sizeTarget);
+  }
+
+  if (uniqueSizes.length) {
+    renderSizesForColor();
+  } else if (uniqueColors.length) {
+    const initialOpt = parsedList.find((x) => x.color.toLowerCase() === activeColor.toLowerCase())?.option;
+    if (initialOpt) applyOption(initialOpt);
+  }
+
+  loadSampleColorImages(parsedList, p);
+}
+
+async function paintQuickVariants(panel, p) {
+  let group = null;
+  try { group = await api.variants(p.id); } catch { /* remove demo controls below */ }
+  const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
+  pickAll('.quick-variant-picker, .tf-product-variant .variant-picker-item', panel).forEach(remove);
+  panel._merchSelectedVariant = null;
+  panel.dataset.merchSizeRequired = 'false';
+  if (!options.length) return;
+
+  const host = pick('.tf-product-variant', panel) || pick('.tf-product-quick_add, .tf-product-quick_view', panel) || panel;
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const hasSizes = parsedList.some((x) => x.size);
+  panel.dataset.merchSizeRequired = hasSizes ? 'true' : 'false';
+
+  renderVariantPickers({
+    host,
+    p,
+    options,
+    isQuick: true,
+    onSelect: (variant, label) => {
+      panel._merchSelectedVariant = { product: variant, label };
+      setText(pick('.product-infor-name|.prd-name', panel), variant.name);
+      paintQuickViewExtras(panel, variant);
+      const newPrice = pick('.price-on-sale|.price-new', panel);
+      if (newPrice) setText(newPrice, money(variant.price));
+    },
+    onClear: () => {
+      panel._merchSelectedVariant = null;
+    },
+  });
+}
+
+/* Keep the fashion offcanvas basket in step with the actual basket. Its HTML
+   ships with demo rows, including demo sizes and prices, so use one row only
+   as a visual template and rebuild the contents from local cart data. */
+function paintFashionMiniCart() {
+  if (THEME?.name !== 'fashion') return;
+  const host = pick('.popup-shopping-cart .tf-mini-cart-items');
+  if (!host) return;
+  const rows = pickAll('.tf-mini-cart-item', host);
+  if (!FASHION_MINI_CART_TEMPLATE && rows[0]) FASHION_MINI_CART_TEMPLATE = rows[0].cloneNode(true);
+  rows.forEach(remove);
+  const lines = cart.lines();
+  const empty = pick('.box-text_empty', host);
+  show(empty, !lines.length);
+  host.classList.toggle('list-empty', !lines.length);
+  if (lines.length && FASHION_MINI_CART_TEMPLATE) {
+    const frag = document.createDocumentFragment();
+    lines.forEach((line) => {
+      const row = FASHION_MINI_CART_TEMPLATE.cloneNode(true);
+      row.dataset.merchId = line.itemId;
+      const img = pick('.tf-mini-cart-image img', row);
+      if (line.image) {
+        setAttr(img, 'src', mediaUrl(line.image));
+        img?.removeAttribute('data-src');
+      } else remove(img);
+      const name = pick('.tf-mini-cart-info .name', row);
+      setText(name, line.name);
+      setAttr(name, 'href', productHref({ id: line.itemId }));
+      pickAll('.tf-prd-select', row).forEach(remove);
+      if (line.variantLabel) {
+        const variant = document.createElement('div');
+        variant.className = 'tf-prd-select text-caption-01';
+        setText(variant, line.variantLabel);
+        pick('.tf-mini-cart-info', row)?.appendChild(variant);
+      }
+      setText(pick('.tf-mini-cart-price .number', row), line.qty);
+      setText(pick('.tf-mini-card-price', row), money(line.price));
+      pick('.tf-mini-cart-price .remove', row)?.addEventListener('click', () => cart.remove(line.itemId));
+      frag.appendChild(row);
+    });
+    host.appendChild(frag);
+  }
+  pickAll('.popup-shopping-cart .tf-mini-cart-total .total-price').forEach((el) =>
+    setText(el, money(cart.localSubtotal())),
+  );
+
+  pickAll('.popup-shopping-cart').forEach((popup) => {
+    let bottom = pick('.tf-mini-cart-bottom', popup);
+    const wrap = pick('.wrap-empty_text', popup) || pick('.wrap', popup) || popup;
+    if (!bottom && wrap) {
+      bottom = document.createElement('div');
+      bottom.className = 'tf-mini-cart-bottom box-empty_clear';
+      bottom.innerHTML = `
+        <div class="tf-mini-cart-bottom-wrap">
+          <div class="tf-mini-cart-total">
+            <h5 class="text-total d-flex align-content-center justify-content-between">
+              <span class="subtotal">Subtotal</span>
+              <span class="total-price tf-totals-total-value">${money(cart.localSubtotal())}</span>
+            </h5>
+          </div>
+          <div class="tf-mini-cart-view-checkout">
+            <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
+            <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
+          </div>
+        </div>
+      `;
+      wrap.appendChild(bottom);
+    }
+
+    if (bottom) {
+      if (lines.length) {
+        bottom.style.display = 'block';
+        bottom.classList.remove('d-none');
+      } else {
+        bottom.style.display = 'none';
+      }
+
+      const bottomWrap = pick('.tf-mini-cart-bottom-wrap', bottom) || bottom;
+      let viewCheckout = pick('.tf-mini-cart-view-checkout', bottomWrap);
+      if (!viewCheckout) {
+        viewCheckout = document.createElement('div');
+        viewCheckout.className = 'tf-mini-cart-view-checkout';
+        viewCheckout.innerHTML = `
+          <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
+          <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
+        `;
+        const continueLink = pick('a[href*="shop"]', bottomWrap);
+        if (continueLink) bottomWrap.insertBefore(viewCheckout, continueLink);
+        else bottomWrap.appendChild(viewCheckout);
+      }
+
+      let viewCartBtn = pick('a[href*="cart"], .btn-stroke', viewCheckout);
+      if (!viewCartBtn) {
+        viewCartBtn = document.createElement('a');
+        viewCartBtn.className = 'tf-btn btn-stroke';
+        viewCartBtn.textContent = 'View cart';
+        viewCheckout.insertBefore(viewCartBtn, viewCheckout.firstChild);
+      }
+      setAttr(viewCartBtn, 'href', pageUrl('cart'));
+      if (!viewCartBtn._merchWired) {
+        viewCartBtn._merchWired = true;
+        viewCartBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          location.href = pageUrl('cart');
+        });
+      }
+
+      let checkoutBtn = pick('a[href*="checkout"], .animate-btn', viewCheckout);
+      if (!checkoutBtn) {
+        checkoutBtn = document.createElement('a');
+        checkoutBtn.className = 'tf-btn animate-btn';
+        checkoutBtn.textContent = 'Check Out';
+        viewCheckout.appendChild(checkoutBtn);
+      }
+      setAttr(checkoutBtn, 'href', pageUrl('checkout'));
+      if (!checkoutBtn._merchWired) {
+        checkoutBtn._merchWired = true;
+        checkoutBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        });
+      }
+    }
+  });
+}
+
+function paintFashionCartTotals(subtotal, discount, shipping, total) {
+  const box = pick('.box-order-summary');
+  if (!box) return;
+
+  const subtotalEl = pick('.subtotal .total', box);
+  if (subtotalEl) setText(subtotalEl, money(subtotal));
+
+  const discountEl = pick('.discount .total', box);
+  if (discountEl) setText(discountEl, discount > 0 ? '-' + money(discount) : money(0));
+
+  const freeLabelPrice = pick('label[for="free"] .price', box);
+  if (freeLabelPrice) setText(freeLabelPrice, money(0));
+  const localLabelPrice = pick('label[for="local"] .price', box);
+  if (localLabelPrice) setText(localLabelPrice, money(35));
+  const rateLabelPrice = pick('label[for="rate"] .price', box);
+  if (rateLabelPrice) setText(rateLabelPrice, money(35));
+
+  const p = pending.get();
+  let shipAmount = p.shipping;
+  const localRadio = pick('#local', box);
+  const rateRadio = pick('#rate', box);
+  const freeRadio = pick('#free', box);
+
+  if (shipAmount === undefined || shipAmount === null) {
+    if (localRadio?.checked) shipAmount = 35;
+    else if (rateRadio?.checked) shipAmount = 35;
+    else shipAmount = 0;
+    pending.set({ shipping: shipAmount });
+  }
+
+  if (shipAmount === 0 && freeRadio) freeRadio.checked = true;
+  else if (shipAmount === 35) {
+    if (!localRadio?.checked && !rateRadio?.checked) {
+      if (localRadio) localRadio.checked = true;
+      else if (rateRadio) rateRadio.checked = true;
+    }
+  }
+
+  if (!box._merchShippingWired) {
+    box._merchShippingWired = true;
+    pickAll('input[name="ship-check"]', box).forEach((radio) => {
+      radio.addEventListener('change', () => {
+        let newShip = 0;
+        if (radio.id === 'local' || radio.id === 'rate') newShip = 35;
+        pending.set({ shipping: newShip });
+        const curDisc = pending.get().discount || 0;
+        const curSub = cart.lines().reduce((n, l) => n + l.price * l.qty, 0);
+        const newTotal = Math.max(0, curSub - curDisc + newShip);
+        const totalEl = pick('.total-order .total, .each-total-price', box);
+        if (totalEl) setText(totalEl, money(newTotal));
+      });
+    });
+  }
+
+  const finalTotal = Math.max(0, subtotal - discount + (shipAmount || 0));
+  const totalEl = pick('.total-order .total, .each-total-price', box);
+  if (totalEl) setText(totalEl, money(finalTotal));
+
+  const freeAbove = Number(STORE?.shipping?.freeAbove) || 70;
+  const left = Math.max(0, freeAbove - subtotal);
+  const progressP = pick('.notification-progress p', box);
+  if (progressP) {
+    if (left > 0) {
+      progressP.innerHTML = `Buy <span class="text-primary fw-bold">${money(left)}</span> more to get freeship`;
+    } else {
+      progressP.innerHTML = `Your order qualifies for <span class="text-primary fw-bold">Free Shipping</span>!`;
+    }
+  }
+  const progressBar = pick('.progress-cart .value', box);
+  if (progressBar) {
+    const pct = Math.min(100, Math.round((subtotal / freeAbove) * 100));
+    progressBar.style.width = pct + '%';
+    progressBar.setAttribute('data-progress', pct);
+  }
+}
+
+function paintFashionCheckoutTotals(subtotal, discount, shipping, total) {
+  const box = pick('.box-your-order');
+  if (!box) return;
+
+  const listTotal = pick('.list-total', box);
+  if (listTotal) {
+    let subtotalItem = pick('.total-item-subtotal', listTotal);
+    if (!subtotalItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/subtotal/i.test(pick('span:first-child', li)?.textContent || '')) {
+          subtotalItem = li;
+          subtotalItem.classList.add('total-item-subtotal');
+          break;
+        }
+      }
+    }
+    if (!subtotalItem) {
+      subtotalItem = document.createElement('li');
+      subtotalItem.className = 'total-item lh-24 fw-medium total-item-subtotal';
+      subtotalItem.innerHTML = `<span>Subtotal</span><span>${money(subtotal)}</span>`;
+      listTotal.insertBefore(subtotalItem, listTotal.firstChild);
+    } else {
+      const valSpan = pick('span:last-child', subtotalItem);
+      if (valSpan) setText(valSpan, money(subtotal));
+    }
+
+    let shippingItem = pick('.total-item-shipping', listTotal);
+    if (!shippingItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/shipping/i.test(pick('span:first-child', li)?.textContent || '')) {
+          shippingItem = li;
+          shippingItem.classList.add('total-item-shipping');
+          break;
+        }
+      }
+    }
+    if (shippingItem) {
+      const valSpan = pick('span:last-child', shippingItem);
+      if (valSpan) setText(valSpan, shipping == null ? 'Free' : (shipping > 0 ? money(shipping) : 'Free'));
+    }
+
+    let discountItem = pick('.total-item-discount', listTotal);
+    if (!discountItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/discount/i.test(pick('span:first-child', li)?.textContent || '')) {
+          discountItem = li;
+          discountItem.classList.add('total-item-discount');
+          break;
+        }
+      }
+    }
+    if (discountItem) {
+      const valSpan = pick('span:last-child', discountItem);
+      if (valSpan) setText(valSpan, discount > 0 ? '-' + money(discount) : money(0));
+    }
+  }
+
+  const lastTotal = pick('.last-total', box);
+  if (lastTotal) {
+    const valSpan = pick('span:last-child', lastTotal);
+    if (valSpan) setText(valSpan, money(total));
+  }
+}
+
+async function paintVariantsFashion(spec, p) {
+  if (!spec.variants) return;
+  PDP_VARIANT_REQUIRED = false;
+  PDP_SELECTED_VARIANT = null;
+  remove(pick('.tf-sticky-atc-variant-price'));
+
+  let group = null;
+  try { group = await api.variants(p.id); } catch { group = null; }
+  const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
+  const container = pick(spec.variants.container);
+  if (!container) return;
+
+  pickAll(spec.variants.group, container).forEach(remove);
+  if (!options.length) { remove(container); return; }
+
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const hasSizes = parsedList.some((x) => x.size);
+  PDP_VARIANT_REQUIRED = hasSizes;
+
+  renderVariantPickers({
+    host: container,
+    p,
+    options,
+    isQuick: false,
+    onSelect: (variant, label) => {
+      PDP_SELECTED_VARIANT = { product: variant, label };
+      $$('.btn-action-price, .btn-add-to-cart').forEach((btn) => setText(btn, 'Add to cart'));
+      const detailPrice = pick('.product-infor-price .price-on-sale');
+      if (detailPrice) setText(detailPrice, money(variant.price));
+      const stickyVariant = pick('.tf-sticky-atc-product .distribute__prd');
+      if (stickyVariant) setText(stickyVariant, label);
+      const stickyPrice = pick('.tf-sticky-atc-product .price__prd');
+      if (stickyPrice) setText(stickyPrice, money(variant.price));
+    },
+    onClear: () => {
+      PDP_SELECTED_VARIANT = null;
+    },
+  });
+}
+
+function wireQuickViewFashion() {
+  /* A theme can ship more than one of these — fashion has a Quick View
+     offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
+     the shopper opens has to be the product they clicked. */
+  const panels = [];
+  for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper', '.modal-quick-view']) {
+    $$(sel).forEach((el) => { if (!panels.includes(el)) panels.push(el); });
+  }
+  if (!panels.length || panels[0].dataset.merchQuickView) return;
+  panels.forEach((el) => { el.dataset.merchQuickView = '1'; });
+
+  /* The text fields only. Anything carrying an `action` is wired once, below,
+     against whichever product is currently showing — re-running wireAction per
+     open would either be ignored (it guards against double-wiring) or stack a
+     handler per open. */
+  const fields = Object.fromEntries(
+    Object.entries(THEME.product?.fields || {}).filter(([, f]) => f && !f.action),
+  );
+
+  document.addEventListener('click', async (e) => {
+    const trigger = e.target.closest(
+      '.quickview, .cta-quickview, .product-details-popup-btn, [data-quickview], ' +
+      'a[href="#quickView"], a[href="#quick_view"], a[href="#quickAdd"], ' +
+      '[data-bs-target="#quick_view"], [data-bs-target="#quickAdd"]',
+    );
+    if (!trigger) return;
+    const id = trigger.closest('[data-merch-id]')?.dataset.merchId;
+    if (!id) return;                       // a trigger on markup we never filled
+
+    try {
+      const p = await api.product(id);
+      quickViewProduct = p;
+      for (const panel of panels) {
+        fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
+        paintGalleryIn(panel, THEME.product?.gallery, p);
+        paintQuickViewExtras(panel, p);
+        await paintQuickVariants(panel, p);
+      }
+    } catch (err) { showError(err); }
+  }, true);                                 // capture, so we fill BEFORE the theme opens it
+
+  /* One handler for the panels' own buttons, reading whatever is showing. */
+  for (const modal of panels) modal.addEventListener('click', (e) => {
+    const add = e.target.closest(THEME?.name === 'fashion'
+      ? '.btn-add-to-cart, .btn-action-price'
+      : '.btn-add-to-cart, .btn-action-price, .btn-cart2, .btn-cart, .rts-btn.btn-primary, .tf-btn');
+    if (!add || !quickViewProduct) return;
+    if (/wish/i.test(add.className)) return;
+    e.preventDefault();
+    const selected = modal._merchSelectedVariant;
+    if (modal.dataset.merchSizeRequired === 'true' && !selected) return notify('Please select a size first.', 'error');
+    const item = selected?.product || quickViewProduct;
+    if (item.availability === 'out') return notify('That option is sold out.', 'error');
+    const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
+    cart.add(item, qty, selected?.label || '');
+    notify(item.name + ' added to your cart.', 'success');
+    track('add_to_cart', { itemId: item.id, qty, via: 'quickview' });
+    if (THEME?.name === 'fashion') {
+      try {
+        if (window.bootstrap?.Modal) {
+          window.bootstrap.Modal.getInstance(modal)?.hide();
+        }
+        if (window.bootstrap?.Offcanvas) {
+          window.bootstrap.Offcanvas.getInstance(modal)?.hide();
+        }
+        const cartEl = document.getElementById('shoppingCart');
+        if (cartEl && window.bootstrap?.Offcanvas) {
+          const bsOffcanvas = window.bootstrap.Offcanvas.getInstance(cartEl) || new window.bootstrap.Offcanvas(cartEl);
+          bsOffcanvas.show();
+        }
+      } catch { /* ignore */ }
+    }
+  });
+}
+
 /* --- THE FILTER SIDEBAR ---------------------------------------------------
    Every template ships one, listing brands and categories its designer made
    up — "Bags (112)", "Clothing (42)" — and clicking them did nothing at all.
@@ -4765,7 +5659,13 @@ async function paintCartTotals(spec, lines) {
 
   pickAll(t.discount).forEach((el) => setText(el, discount ? '-' + money(discount) : money(0)));
   pickAll(t.shipping).forEach((el) => setText(el, p.shipping == null ? 'Calculated at checkout' : (p.shipping ? money(p.shipping) : 'Free')));
-  pickAll(t.total).forEach((el) => setText(el, money(Math.max(0, subtotal - discount + (p.shipping || 0)))));
+  const finalTotal = Math.max(0, subtotal - discount + (p.shipping || 0));
+
+  if (THEME?.name === 'fashion') {
+    paintFashionCartTotals(subtotal, discount, p.shipping, finalTotal);
+  }
+
+  pickAll(t.total).forEach((el) => setText(el, money(finalTotal)));
 }
 
 function wireCoupon(spec, rerender) {
@@ -4878,7 +5778,15 @@ pages.checkout = async () => {
 function paintCheckoutSummary(spec, lines) {
   const s = spec.summary;
   const t = takeTemplate(s);
-  if (t) repeat(t, lines, (node, l) => fillFields(node, s.fields, l, { node }));
+  if (t) repeat(t, lines, (node, l) => {
+    fillFields(node, s.fields, l, { node });
+    if (THEME?.name === 'fashion') {
+      const metaRows = pickAll('.infor-prd .text-caption-01', node);
+      const label = l.variantLabel || (l.qty > 1 ? 'Qty ' + l.qty : '');
+      if (label && metaRows[0]) setText(metaRows[0], label);
+      metaRows.slice(label ? 1 : 0).forEach(remove);
+    }
+  });
 
   const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
   const p = pending.get();
@@ -6762,8 +7670,12 @@ async function boot() {
   }
 
   paintHeader();
-  cart.onChange(paintHeader);
+  /* paintFashionMiniCart self-gates on THEME.name, so this is a no-op on the other
+     three themes — it is wired here, unconditionally, because that is where the
+     fashion copy wired it and the guard already lives inside the function. */
+  cart.onChange(() => { paintHeader(); paintFashionMiniCart(); });
   wishlist.onChange(paintHeader);
+  paintFashionMiniCart();
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
   try { paintUsps(STORE); } catch (e) { warn('usps', e); }
