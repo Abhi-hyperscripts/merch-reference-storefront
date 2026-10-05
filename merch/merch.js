@@ -372,6 +372,11 @@ function qs(obj) {
   return s ? '?' + s : '';
 }
 
+/* Long enough for a cold backend to wake up, short enough that a shopper is
+   not left looking at a demo catalogue while we wait on a socket that will
+   never answer. */
+const REQUEST_TIMEOUT_MS = 12000;
+
 async function request(path, { method = 'GET', body, auth = false, raw = false } = {}) {
   const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -388,18 +393,34 @@ async function request(path, { method = 'GET', body, auth = false, raw = false }
     if (t) { headers['Authorization'] = 'Bearer ' + t; sentToken = true; }
   }
 
+  /* ⭐ A REQUEST THAT NEVER ANSWERS IS WORSE THAN ONE THAT FAILS. `fetch` has
+     no timeout of its own: it waits as long as the socket stays open. Measured
+     on the fashion store, `/api/categories` intermittently answered nothing at
+     all — 45 s with no status — and because boot() awaits that call before it
+     paints, the ENTIRE page sat at the theme's demo content with a clean
+     console. Which is exactly what "it was dynamic yesterday and static today"
+     looks like from outside. A rejection is recoverable; a hang is not. */
+  const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS) : null;
   let res;
   try {
     res = await fetch(API_BASE + path, {
       method,
       headers,
+      signal: ctl ? ctl.signal : undefined,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (networkError) {
-    /* fetch only rejects when the request never completed — DNS, offline, TLS
-       or a CORS block. An HTTP 500 is a RESOLVED promise and is handled below. */
-    throw new ApiError('Could not reach the store. Check your connection and try again.', 0,
-      { networkError: String(networkError) });
+    /* fetch only rejects when the request never completed — DNS, offline, TLS,
+       a CORS block, or our own abort. An HTTP 500 is a RESOLVED promise and is
+       handled below. */
+    const aborted = ctl && ctl.signal.aborted;
+    throw new ApiError(
+      aborted ? 'The store took too long to answer.' : 'Could not reach the store. Check your connection and try again.',
+      0, { networkError: String(networkError), timedOut: !!aborted },
+    );
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 
   if (res.status === 204) return null;
@@ -1392,6 +1413,73 @@ const THEMES = {
     },
     resultCount: '.toolbar-amount|.product-showing',
 
+    /* ⭐ BRAND LOGOS THIS SHOP DOES NOT HAVE. The strip ships 17 of the
+       theme's own logo files and the catalogue carries 12 REAL brands with an
+       empty `logoUrl` on every one. A logo cannot be invented, so the tile
+       shows the brand's NAME and links to its listing. The card is the DIV,
+       not the anchor — `a.brand-item` (what the sibling theme uses) matches
+       nothing here, which is why all 17 template marks survived. */
+    brandTiles: {
+      card: '.brand-item',
+      fields: {
+        link: { sel: 'a', attr: 'href', value: (b) => pageUrl('listing', { brand: b.slug || b.name }) },
+        art:  { sel: 'img', each: (img, b) => {
+          const logo = b.logoUrl || b.imageUrl || '';
+          if (logo) { setAttr(img, 'src', mediaUrl(logo)); return; }
+          const label = document.createElement('span');
+          label.className = 'merch-brand-name';
+          label.textContent = b.name || '';
+          label.style.cssText = 'display:block;text-align:center;font-weight:600;font-size:14px;line-height:1.3;padding:8px 4px;';
+          img.replaceWith(label);
+        } },
+      },
+    },
+
+    /* The promo tiles — "BEAUTIFUL / Wedding Rings / Shop Now". Seventeen of
+       them on the front page, every one a photograph from the template under a
+       heading no catalogue backs. They ARE category entry points, and this
+       shop has 22 categories, each with a picture. */
+    lookbook: [
+      {
+        card: 'figure.banner-statistics',
+        /* The label sits absolutely over the tile, in #555, with no ground of
+           its own — fine over the theme's pale stock photo, invisible over a
+           catalogue shot on black. */
+        scrim: '.banner-content',
+        fields: {
+          link:  { sel: 'a:first-child', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+          image: { sel: 'a img', each: (img, c) => {
+            const art = c.imageUrl || '';
+            /* No picture for this category means the tile cannot be made true
+               in pictures — the heading still can, so drop the image and keep
+               the tile rather than showing someone else's photograph. */
+            if (art) setAttr(img, 'src', mediaUrl(art)); else img.remove();
+          } },
+          pre:   { sel: '.banner-text1', dropWhen: () => true },
+          name:  { sel: '.banner-text2', text: (c) => c.name },
+          cta:   { sel: 'a.btn-text', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+          /* ⭐ FOURTEEN of the seventeen tiles are the `style2` variant, which
+             carries its label in `h5.banner-text3 > a` instead. Filling only
+             `.banner-text2` left a Choker photograph under the word EARRINGS
+             on a dead `href="#"` — worse than the template, because the two
+             halves now disagreed. */
+          altName: { sel: '.banner-text3 a|.banner-text3', text: (c) => c.name },
+          altLink: { sel: '.banner-text3 a', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        },
+      },
+    ],
+
+    /* Blocks that ASSERT something the catalogue cannot back: invented
+       customer quotes under invented names and portraits, plus two promo
+       banners parked inside the NAVIGATION and one in the listing sidebar
+       whose entire content is a template photograph. The last two are chrome,
+       so they are swept on every page, not only the home page. */
+    unbacked: [
+      '.testimonial-bg',
+      'li.megamenu-banners',
+      '.sidebar-banner',
+    ],
+
     banners: {
       container: '.hero-slider-active|.slider-area',
       card: '.hero-single-slide',
@@ -1585,6 +1673,38 @@ THEMES.electronic = {
     blog: 'blog-grid.html', post: 'blog-detail.html',
     returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
+
+  /* ⭐ BRAND LOGOS THIS SHOP DOES NOT HAVE. The strip ships 27 of the theme's
+     own logo files, and the catalogue carries 43 REAL brands with an empty
+     `logoUrl` on every one. A logo cannot be invented, so the tile shows the
+     brand's NAME and links to its listing — real, navigable, and true —
+     rather than keeping someone else's marks on a connected shop. */
+  brandTiles: {
+    card: 'a.brand-item',
+    fields: {
+      link: { sel: ':scope', attr: 'href', value: (b) => pageUrl('listing', { brand: b.slug || b.name }) },
+      art:  { sel: 'img', each: (img, b) => {
+        const logo = b.logoUrl || b.imageUrl || '';
+        if (logo) { setAttr(img, 'src', mediaUrl(logo)); return; }
+        const label = document.createElement('span');
+        label.className = 'merch-brand-name';
+        label.textContent = b.name || '';
+        label.style.cssText = 'display:block;text-align:center;font-weight:600;font-size:14px;line-height:1.3;padding:8px 4px;';
+        img.replaceWith(label);
+      } },
+    },
+  },
+
+  lookbook: [
+    {
+      card: '.collection-position-2',
+      fields: {
+        link:  { sel: 'a.img-style', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        image: { sel: 'a.img-style img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
+        name:  { sel: '.collection-content .title|.title|h5|h6', text: (c) => c.name },
+      },
+    },
+  ],
   footerContact: { phone: 'li:has(i.icon-phone) p|a[href^="tel:"]', email: 'li:has(i.icon-mail) p|a[href^="mailto:"]', address: '.footer-address p, .mb-contact p|address' },
   /* No `announcement` here on purpose: this theme ships NO promo bar. The only
      thing in its topbar is the shop's own phone and email, and pointing the
@@ -3513,7 +3633,17 @@ pages.home = async () => {
       const items = (g.products || []).slice(0, size);
       if (!items.length) continue;
       renderProducts(items, THEME.listing, rail);
-      setSectionHeading(rail, g.title || sec.title);
+      /* ⭐ THE GROUP'S NAME IS `name`, NOT `title`. A categoryProducts section
+         sends `{slug, name, products}` per group and carries no title of its
+         own, so `g.title || sec.title` was null for every group on every one
+         of these shops — and a null title makes setSectionHeading return at
+         its first line. Measured: four rails of the merchant's own products
+         under four headings the FURNITURE DEMO shipped. */
+      const railTitle = g.title || g.name || sec.title;
+      /* A rail behind a tab names its TAB, not the section: four panes share
+         one heading, so heading-setting there would have each pane overwrite
+         the last and leave one group's name standing for all four. */
+      if (!setTabLabel(rail, railTitle)) setSectionHeading(rail, railTitle);
       filled.add(rail);
       railIndex++;
     }
@@ -3548,6 +3678,39 @@ pages.home = async () => {
 /* The strip's own heading, which lives OUTSIDE the container. Searching from a
    shared ancestor without that constraint finds a product card's `.title`
    inside the strip and writes the section name into a product. */
+/* ⭐ A RAIL INSIDE A TAB PANE HAS TWO NAMES, and only one of them was ours.
+   The jewellery and electronic themes put four rails behind a tab strip, so
+   every pane filled with the merchant's products while the strip above still
+   read `Entertainment / Storage / Lying / Tables` — this theme family ships a
+   furniture demo. Four panes share one section heading, so setSectionHeading
+   cannot reach them: the label lives in the control that REVEALS the pane,
+   addressed by the pane's id. */
+function setTabLabel(container, title) {
+  const pane = container.closest?.('.tab-pane');
+  if (!pane || !pane.id) return false;
+  const id = pane.id;
+  let link = null;
+  try {
+    link = document.querySelector(
+      'a[href="#' + id + '"], [data-bs-target="#' + id + '"], [data-target="#' + id + '"]',
+    );
+  } catch { return false; }
+  if (!link) return false;
+  /* Found the tab but have nothing to call it: say so, so the caller does not
+     fall back to renaming the heading this pane shares with three others. */
+  if (!title) return true;
+  /* The anchor may wrap an icon or a counter; only the text it owns is the
+     label, so an anchor with element children is left alone rather than
+     flattened to a bare string. */
+  if (link.children.length) {
+    const own = [...link.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+    if (own) own.textContent = title;
+    return true;
+  }
+  setText(link, title);
+  return true;
+}
+
 function setSectionHeading(container, title) {
   if (!title) return;
   let scope = container;
@@ -3745,6 +3908,36 @@ async function paintBanners(data) {
    The ground is chosen from the HEADING's colour, never fixed: grocery writes
    its hero text white and jewellery writes it near-black, so one hard-coded
    ground would fix the first and break the second. */
+/* ⭐ TEXT OVER A PHOTOGRAPH THE MERCHANT CHOSE, NOT ONE THE THEME SHIPPED.
+   Every one of these themes lays its headings straight onto the artwork, with
+   a colour picked to suit the stock photo behind it — a dark grey over a pale
+   studio shot, a white over a dim one. The moment the picture comes from the
+   shop instead, that assumption is gone: measured on the jewellery home page,
+   `Bangles` in #555 sat on a black-background bangle photo and `Choker` sat on
+   a white one, both invisible, and the hero heading vanished into a bright
+   landscape. The fix is a scrim UNDER THE TEXT ONLY, so the product is still
+   the picture, sized to the text rather than the tile. */
+function ensureOverlayLegible(box) {
+  if (!box || box.dataset.merchScrim) return;
+  const cs = getComputedStyle(box);
+  /* A block in normal flow sits on the page's own ground and is already
+     legible; only an overlay is at the mercy of the photograph. */
+  if (cs.position !== 'absolute' && cs.position !== 'fixed') return;
+  const probe = pick('h1,h2,h3,h4,h5,h6,p,span,a', box) || box;
+  const m = /rgba?\(([^)]+)\)/.exec(getComputedStyle(probe).color || '');
+  const rgb = m ? m[1].split(',').map((n) => parseFloat(n)) : null;
+  const lum = rgb ? (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255 : 0;
+  /* Light text needs a dark ground and vice versa. */
+  box.style.background = lum > 0.55
+    ? 'linear-gradient(to bottom, rgba(17,17,17,0.58), rgba(17,17,17,0.38))'
+    : 'linear-gradient(to bottom, rgba(255,255,255,0.86), rgba(255,255,255,0.72))';
+  /* The theme gave the box no padding because it had none to give — the text
+     floated free. A scrim with no padding crops the glyphs. */
+  if (!parseFloat(cs.paddingTop)) box.style.padding = '12px 16px';
+  box.style.borderRadius = '3px';
+  box.dataset.merchScrim = '1';
+}
+
 function ensureBannerLegible(spec, container) {
   const DARK = 'linear-gradient(120deg,#1f2937 0%,#374151 55%,#4b5563 100%)';
   const LIGHT = 'linear-gradient(120deg,#f1efea 0%,#e6e1d8 55%,#dcd6ca 100%)';
@@ -3768,6 +3961,10 @@ function ensureBannerLegible(spec, container) {
     const probe = new Image();
     probe.onerror = () => { el.style.backgroundImage = ground; };
     probe.src = url[1];
+    /* The image LOADS and the heading is still unreadable when the merchant's
+       photograph is busy where the theme's was empty — the branch above only
+       ever covered a broken one. */
+    if (title) ensureOverlayLegible(title.closest('[class*="content"], [class*="caption"], [class*="text"]') || title);
   });
 }
 
@@ -3809,10 +4006,34 @@ async function paintEditorialBlocks(data) {
            the theme's own photograph is not an acceptable stand-in. */
         if (!c) { show(card, false); return; }
         fillFields(card, spec.fields, c, { node: card });
+        if (spec.scrim) pickAll(spec.scrim, card).forEach(ensureOverlayLegible);
       });
     }
   }
 
+  /* Brand tiles, where the theme ships a logo strip. */
+  const bspec = THEME?.brandTiles;
+  if (bspec) {
+    const brands = (data?.sections || []).filter((x) => x.type === 'brandsCarousel').flatMap((x) => x.brands || []);
+    if (brands.length) {
+      pickAll(bspec.card).forEach((card, i) => {
+        const b = brands[i % brands.length];
+        if (!b) { show(card, false); return; }
+        fillFields(card, bspec.fields, b, { node: card });
+      });
+    }
+  }
+
+  sweepUnbacked();
+}
+
+/* ⭐ THE UNBACKED SWEEP RUNS ON EVERY PAGE, not just the home page. Two of
+   these blocks are CHROME: this theme family parks promo banners inside the
+   navigation mega-menu and in the listing sidebar, so they sit on all 40-odd
+   pages. Measured on a connected shop: the home page came back clean while
+   `shop.html` still showed three of the template's own photographs, because
+   the sweep lived inside the home painter. */
+function sweepUnbacked() {
   for (const sel of [].concat(UNBACKED_EVERYWHERE, THEME?.unbacked || [])) {
     let nodes = [];
     try { nodes = $$(sel); } catch { continue; }   // :has() is unsupported on older engines
@@ -9779,8 +10000,13 @@ async function boot() {
      on claiming USD over rupee prices. Run it again once they have. */
   onThemeReady(() => { paintCurrencySwitcher().catch((e) => warn('currency switcher', e)); });
   if (PAGE !== 'listing') { wireSearchInputs(null); }
-  try { await wireCategoryLinks(); } catch (e) { warn('category links', e); }
+  /* ⭐ NOT AWAITED. This rewrites the theme's hard-coded category hrefs, which
+     is a nicety; painting the page is the point. Awaiting it put a catalogue
+     call on the critical path, so one slow answer held back every product,
+     price and picture on the page. It finishes when it finishes. */
+  wireCategoryLinks().catch((e) => warn('category links', e));
   try { remapDeadLinks(); } catch (e) { warn('remap dead links', e); }
+  try { sweepUnbacked(); } catch (e) { warn('unbacked sweep', e); }
 
   const run = PAGE.startsWith('policy:') ? () => pages.policy(PAGE.slice(7)) : (pages[PAGE] || pages.unknown);
   try { await run(); }
