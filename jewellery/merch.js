@@ -255,6 +255,28 @@ function readDisplayCurrency() {
   try { return JSON.parse(localStorage.getItem(DISPLAY_KEY) || 'null'); } catch { return null; }
 }
 
+/* "Label:" lives in a child <span> and the VALUE is a bare text node beside
+   it, so writing textContent would delete the label. Set the value on one text
+   node and remove any other — a second stray text node is how the template's
+   own value survived next to ours. */
+function setValueBesideLabel(el, text) {
+  if (!el) return;
+  const texts = [...el.childNodes].filter((n) => n.nodeType === 3);
+  let target = texts.find((n) => n.nodeValue.trim()) || texts[0];
+  if (!target) { target = document.createTextNode(''); el.appendChild(target); }
+  texts.forEach((n) => { if (n !== target) n.remove(); });
+  target.nodeValue = ' ' + text;
+}
+
+/* Cut on a word boundary so a clamped line never ends mid-word. */
+function clamp(text, max) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).replace(/[,;:.\s]+$/, '') + '…';
+}
+
 /* 2.5 not 2.50, 6 not 6.0 — one decimal only where it carries information. */
 function trimZero(n) {
   const r = Math.round(n * 10) / 10;
@@ -1097,6 +1119,27 @@ const THEMES = {
        to fill, so even a merchant who DID set their USPs kept the theme's — five
        cards that all read "Orders $50 or more", in dollars, one of them printed
        twice. */
+    /* The compare table. Rows are keyed by their own label, not their order. */
+    compare: {
+      container: '#exampleModal .modal-body',
+      row: '.compare-main-wrapper-body',
+      label: '.single-compare-elements.name',
+      cell: '.single-compare-elements:not(.name)',
+      fields: {
+        preview:     { sel: 'img', attr: 'src', value: (p) => mediaUrl((p.imageUrls || [])[0] || '') },
+        name:        { sel: 'p', text: (p) => p.name },
+        price:       { sel: 'p', text: priceText },
+        /* A full catalogue description is several hundred words and the row has
+           a fixed height, so it overflowed UP into the price row and printed
+           the two on top of each other. A comparison wants a comparable
+           snippet, not the whole copy. */
+        description: { sel: 'p', text: (p) => clamp(p.description || '', 180) },
+        /* `rating` is deliberately absent: the catalogue payload carries no
+           star rating, and leaving the row would show the template's five
+           stars and "(25)" against a real product. */
+      },
+    },
+
     usps: {
       /* The container is the ROW that holds the cards, never the card itself —
          `takeTemplate` looks for `card` INSIDE `container`, so naming the same
@@ -1199,11 +1242,37 @@ const THEMES = {
               show(tax, false);
             }
           }
+          /* ⭐ THE TEMPLATE'S PRICE IS A SECOND TEXT NODE, AFTER `.old-price`.
+             We only ever wrote the FIRST one, so the quick view read
+             "₹468  $7.25" — our price and the theme's demo price, side by
+             side, in two currencies. Anything after the first bare text node
+             is the template's, and goes. */
+          let seen = false;
+          [...el.childNodes].forEach((n) => {
+            if (n.nodeType !== 3) return;
+            if (!seen) { seen = true; return; }
+            n.remove();
+          });
         } },
+        /* The theme prints "Categories:" and "Tags:" as a child <span> with the
+           VALUE as a bare text node beside it, and nothing filled either — so a
+           bottle of sunflower oil was filed under "T-Shirts, Tops, Mens" and
+           tagged "fashion, t-shirts, Men". Categories we have; tags we do not,
+           so that line comes off rather than carry someone else's. */
+        categories: { sel: '.catagorys', each: (el, p) => {
+          const names = (p.categoryPath || []).map((c) => c.name).filter(Boolean);
+          const text = names.length ? names.join(', ') : (p.category || '');
+          setValueBesideLabel(el, text);
+          show(el, !!text);
+        } },
+        tags:     { sel: '.tags', dropWhen: () => true },
         mrp:      { sel: '.product-price .old-price', text: mrpText, hideWhen: hasNoMrp },
         add:      { sel: '.product-bottom-action .rts-btn:not(.ml--20)', action: 'add' },
         wish:     { sel: '.product-bottom-action .ml--20, .single-share-option:first-child', action: 'wishlist' },
-        reviews:  { sel: '.rating-stars-group span', each: (el) => el.classList.add('review-count') },
+        /* The star row is the theme's own: two-and-a-half stars and "10
+           Reviews" printed against every real product. The catalogue payload
+           carries no rating, so the whole group goes rather than assert one. */
+        reviews:  { sel: '.rating-stars-group', dropWhen: () => true },
       },
       gallery: { images: '.product-thumb-area .thumb-wrapper .product-thumb', thumbs: '.product-thumb-filter-group .thumb-filter' },
       variants: { container: '.product-variants-container' },
@@ -2680,6 +2749,24 @@ function paintSocialLinks(theme) {
     }
   }
   if (matched && !wanted.size) log('no social links set, so the theme\u2019s own icons were hidden');
+
+  /* ⭐ A LABEL WHOSE CONTENT WENT MUST GO TOO. Hiding every icon left the row's
+     own caption behind, so the quick view ended on a bare "Share:" followed by
+     nothing — which reads as a broken page rather than a shop that has no
+     social accounts. Any row we emptied is hidden whole; a row with even one
+     surviving link is left exactly as the designer built it. */
+  const rows = new Set();
+  for (const a of anchors) {
+    const row = a.closest('.share-social, [class*="social"], .tf-social-icon, .social-link');
+    if (row) rows.add(row);
+  }
+  for (const row of rows) {
+    const alive = [...row.querySelectorAll('a')].some((a) => {
+      const host = a.closest('li') || a;
+      return host.style.display !== 'none' && getComputedStyle(host).display !== 'none';
+    });
+    if (!alive) show(row, false);
+  }
 }
 
 function paintAnnouncement(theme) {
@@ -2958,6 +3045,53 @@ function paintQuickViewExtras(panel, p) {
 
 let quickViewProduct = null;
 
+/* ⭐ A CONTROL PLACED OUTSIDE ITS PANEL MUST STILL BE ON SCREEN. These themes
+   park the quick view's close button at `right:-50px; top:-50px`, which works
+   for a dialog narrower than the window — and these panels open full-bleed, so
+   the button landed 50px past the right edge and 50px above the top. Off
+   screen, with the Escape key the only way left to shut the quick view, and
+   the panel appearing to overflow the viewport. Anything that still fits is
+   left exactly where the designer put it. */
+function keepPanelControlsOnScreen(panel) {
+  if (!panel) return;
+  const vw = document.documentElement.clientWidth;
+  pickAll('[class*="close"], .btn-close', panel).forEach((btn) => {
+    const cs = getComputedStyle(btn);
+    if (cs.position !== 'absolute' && cs.position !== 'fixed') return;
+    const r = btn.getBoundingClientRect();
+    if (r.width === 0) return;
+    if (r.right > vw - 2) { btn.style.right = '12px'; btn.style.left = 'auto'; }
+    if (r.top < 2) btn.style.top = '12px';
+  });
+
+  /* ⭐⭐ AND THE PANEL ITSELF MUST HOLD ITS OWN CONTENT. The quick view is sized
+     by the theme for its demo product — a short name, two lines of copy. A real
+     catalogue description, a category path and a SKU run longer, and the panel
+     has `max-height:none; overflow:visible`, so the extra simply spilled out of
+     the bottom of the box: the last rows rendered BELOW the modal, over the
+     page behind it, with "Share:" sliced in half by the panel's edge.
+
+     Measured on grocery at 1440×900: panel 520px tall, content 818px.
+
+     Height is released to auto first — a panel with a computed height cannot
+     grow — and only then capped and allowed to scroll, so a long product reads
+     inside the modal instead of outside it. Untouched when it already fits. */
+  /* ⚠ The INNER box, not the wrapper. `panel.matches('[class*="popup"]')` is
+     true for `.product-details-popup-WRAPPER`, which is the fixed, full-height
+     backdrop — nothing ever overflows that, so the check passed and the real
+     panel went on spilling its last rows onto the page behind it. */
+  const box = pick('.product-details-popup, .modal-content, .modal-dialog', panel) || panel;
+  const deepest = [...box.querySelectorAll('*')]
+    .reduce((m, e) => { const r = e.getBoundingClientRect(); return r.height && r.bottom > m ? r.bottom : m; }, 0);
+  const rect = box.getBoundingClientRect();
+  if (deepest > rect.bottom + 1) {
+    box.style.height = 'auto';
+    box.style.maxHeight = 'calc(100vh - 80px)';
+    box.style.overflowY = 'auto';
+    box.style.overflowX = 'hidden';
+  }
+}
+
 function wireQuickView() {
   if (THEME?.name === 'fashion') return wireQuickViewFashion();
   /* A theme can ship more than one of these — fashion has a Quick View
@@ -2995,6 +3129,9 @@ function wireQuickView() {
         fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
         paintGalleryIn(panel, THEME.product?.gallery, p);
         paintQuickViewExtras(panel, p);
+        /* After the theme has opened and laid the panel out, not before. */
+        setTimeout(() => keepPanelControlsOnScreen(panel), 0);
+        setTimeout(() => keepPanelControlsOnScreen(panel), 350);
       }
     } catch (err) { showError(err); }
   }, true);                                 // capture, so we fill BEFORE the theme opens it
@@ -3011,6 +3148,99 @@ function wireQuickView() {
     notify(quickViewProduct.name + ' added to your cart.', 'success');
     track('add_to_cart', { itemId: quickViewProduct.id, qty, via: 'quickview' });
   });
+}
+
+/* ───────── COMPARE ─────────────────────────────────────────────────────────
+   Every theme ships a compare table, and nothing ever filled one. The action
+   toggles a local list and says "Added to compare", so the shopper is told it
+   worked — and then the table shows three women's tops at $25.00, $39.25 and
+   $12.00 on a grocery shop, the same three for every basket, forever.
+
+   The table is TRANSPOSED: one row per field, one COLUMN per product. So this
+   fills by column, and keys each row off its own label ("Preview", "Name",
+   "Price") rather than its position, because the themes order their rows
+   differently and a positional map silently writes the price into the name.
+
+   A row we cannot feed is removed rather than left showing the template's
+   value — the same rule as the countdown and the invented tax lines. */
+async function paintCompare() {
+  const spec = THEME?.compare;
+  if (!spec) return;
+  const host = pick(spec.container);
+  if (!host) return;
+
+  const rows = pickAll(spec.row, host);
+  if (!rows.length) return;
+
+  /* Capture the authored row markup ONCE. After the first paint the cells have
+     been rewritten or removed, so a later read would clone our own output. */
+  if (!COMPARE_TEMPLATE.has(host)) {
+    COMPARE_TEMPLATE.set(host, rows.map((r) => ({ row: r, cells: pickAll(spec.cell, r).map((c) => c.cloneNode(true)) })));
+  }
+  const tpl = COMPARE_TEMPLATE.get(host);
+
+  const ids = compare.ids();
+  let items = [];
+  if (ids.length) {
+    try { items = await api.products(ids); } catch (e) { warn('compare', e); return; }
+  }
+  /* Keep the shopper's own order, and drop anything the merchant has withdrawn. */
+  const byId = new Map((items || []).map((x) => [x.id, x]));
+  const picks = ids.map((id) => byId.get(id)).filter(Boolean);
+
+  host.dataset.merchCompare = String(picks.length);
+  const empty = spec.empty ? pick(spec.empty, host) : null;
+  if (empty) show(empty, picks.length === 0);
+  show(host, true);
+
+  for (const { row, cells } of tpl) {
+    const label = (pick(spec.label, row)?.textContent || '').trim().toLowerCase();
+    const field = spec.fields[label];
+    /* A row the catalogue cannot answer (a star rating, say) is taken out, not
+       left advertising the template's five stars against a real product. */
+    if (!field) { show(row, false); continue; }
+    show(row, picks.length > 0);
+    /* ⭐ KEEP THE TEMPLATE'S COLUMN COUNT. Appending one cell per product left
+       the designer's 4-column grid holding 2 children, so a single comparison
+       rendered hard against the right-hand edge with two empty columns beside
+       it. The slots the shopper has not filled are emptied, not removed. */
+    pickAll(spec.cell, row).forEach((c) => c.remove());
+    cells.forEach((tplCell, i) => {
+      const cell = tplCell.cloneNode(true);
+      const prod = picks[i];
+      const target = field.sel ? (pick(field.sel, cell) || cell) : cell;
+      if (!prod) {
+        /* An unused column keeps its box and loses its content — never the
+           template's picture or price. */
+        /* An <img> with no src still renders the browser's broken-image icon
+           and its alt text, so the unused column showed a torn page labelled
+           "grocery". Take the element out; keep the cell that holds the grid. */
+        if (target.tagName === 'IMG') target.remove();
+        else if (field.attr) setAttr(target, field.attr, '');
+        else setText(target, '');
+        cell.classList.add('merch-compare-empty');
+      } else {
+        if (field.attr) setAttr(target, field.attr, value(field.value, prod, { node: cell }));
+        else setText(target, value(field.text, prod, { node: cell }));
+        if (field.each) field.each(cell, prod);
+      }
+      row.appendChild(cell);
+    });
+  }
+}
+const COMPARE_TEMPLATE = new WeakMap();
+
+/* Repaint whenever a compare table could come into view: on the page that owns
+   one, and on the capture phase of any compare trigger — BEFORE the theme's own
+   handler opens the modal, so it is never seen holding the previous contents. */
+function wireCompare() {
+  if (!THEME?.compare) return;
+  paintCompare().catch((e) => warn('compare', e));
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-merch-action="compare"], .compare, [data-bs-target="#exampleModal"], a[href*="compare"]')) return;
+    /* After the toggle handler has run, so the list already includes this item. */
+    setTimeout(() => paintCompare().catch((err) => warn('compare', err)), 0);
+  }, true);
 }
 
 const pages = {};
@@ -9354,6 +9584,9 @@ async function boot() {
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
   try { paintUsps(STORE); } catch (e) { warn('usps', e); }
+  /* Compare is reachable from EVERY page — its trigger sits on the product
+     card — so this belongs with the chrome, not on the home page alone. */
+  try { wireCompare(); } catch (e) { warn('compare', e); }
   try { paintSocialLinks(STORE); } catch (e) { warn('social links', e); }
   paintCurrencySwitcher().catch((e) => warn('currency switcher', e));
   /* Two of these themes BUILD their currency control from their own script,
