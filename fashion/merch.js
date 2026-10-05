@@ -1930,6 +1930,14 @@ THEMES.fashion = {
        presenting themselves as this shop's social feed. */
     '.flat-spacing:has(img[src*="/gallery/"])',
     'section:has(> .container img[src*="/gallery/"])',
+    /* "Shop the look": a styled lifestyle photograph with hotspots pinned to
+       it, each opening a product card. BOTH halves are the template's — the
+       photograph and the products pinned to it — and neither can be replaced,
+       because a hotspot's position only means anything on the picture it was
+       placed on. The wrapper goes, not the two tiles, so the grid they sat in
+       does not stay behind as an empty row. */
+    '.themesFlat:has(.banner-lookbook)',
+    '.banner-lookbook',
   ],
 
   categories: {
@@ -2821,7 +2829,8 @@ function paintStoreChrome(theme) {
   }
 
   if (theme.brandName && useStore('brandName')) {
-    document.title = document.title.replace(/^[^|\u2013-]+/, theme.brandName + ' ');
+    BRAND_NAME = theme.brandName;
+    setDocumentTitle();
     pickAll('.site-title|.brand-name|[data-brand-name]').forEach((el) => setText(el, theme.brandName));
   }
   if (theme.tagline && useStore('tagline')) pickAll('.site-tagline|[data-tagline]').forEach((el) => setText(el, theme.tagline));
@@ -2969,6 +2978,30 @@ function socialPlatformOf(a) {
     if (new RegExp('(^|[^a-z])' + key + '([^a-z]|$)').test(words)) return SOCIAL_ALIASES[key];
   }
   return null;
+}
+
+/* ⭐ THE BROWSER TAB SAID "HTML TEMPLATE". The old title rewrite replaced
+   only up to the first dash, which on these four themes left the vendor's own
+   marketing standing behind the shop's name:
+
+     Ekomart-Grocery-Store(e-Commerce) HTML Template
+       → FreshKart -Grocery-Store(e-Commerce) HTML Template
+     Corano - Jewelry Shop eCommerce Bootstrap 5 Template
+       → Zariya Jewels - Jewelry Shop eCommerce Bootstrap 5 Template
+
+   That string is the tab, the bookmark, the share card and the search result
+   — the first thing a client is shown. Nothing after the shop's name belongs
+   to the shop, so none of it is kept. */
+let BRAND_NAME = '';
+
+function setDocumentTitle(subject) {
+  if (!BRAND_NAME) {
+    /* No brand configured: leave the theme's title rather than blanking the
+       tab — an empty title is worse than a wrong one. */
+    if (subject) document.title = subject;
+    return;
+  }
+  document.title = subject ? subject + ' | ' + BRAND_NAME : BRAND_NAME;
 }
 
 function paintSocialLinks(theme) {
@@ -5103,7 +5136,7 @@ pages.product = async () => {
 
   const spec = THEME.product;
   fillFields(document, spec.fields, p, { node: document, qtyEl: pick(THEME.qtyInput) });
-  document.title = p.name + document.title.replace(/^[^|–-]*/, '');
+  setDocumentTitle(p.name);
 
   paintBreadcrumbs(p);
   paintGallery(spec.gallery, p);
@@ -9544,7 +9577,7 @@ pages.post = async () => {
   const spec = THEME.post || {};
   setText(pick(spec.title || '.blog-title|.entry-title|.post-title|article h1|h1.title'), post.title);
   setText(pick(spec.date || '.blog-date|.date|.entry-date'), postDate(post));
-  document.title = post.title + document.title.replace(/^[^|\u2013-]*/, '');
+  setDocumentTitle(post.title);
 
   const cover = pick(spec.cover || 'article img|.blog-details img');
   if (cover && post.coverUrl) {
