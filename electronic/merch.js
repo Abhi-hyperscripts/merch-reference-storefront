@@ -1085,6 +1085,38 @@ const THEMES = {
     },
     resultCount: '.top-filter span',
 
+    /* ⭐ THE TWO DISCOUNT PANELS BESIDE THE "Products With Discounts" RAIL.
+       They are not `.product-item`, so nothing painted them: both advertised
+       "Alpro Organic Flavored Fresh Juice — Only $15.00" in dollars, a product
+       this shop does not sell, beside a rail of its real stock in rupees. Their
+       artwork is one of the images this theme's download never fetched, so the
+       panel also rendered with no background at all and its white heading was
+       invisible. `.title` is used twice inside the card — the name AND the
+       price — so both selectors are scoped or the name overwrites the price. */
+    /* The five-up feature strip. Without a selector here `paintUsps` had nothing
+       to fill, so even a merchant who DID set their USPs kept the theme's — five
+       cards that all read "Orders $50 or more", in dollars, one of them printed
+       twice. */
+    usps: {
+      /* The container is the ROW that holds the cards, never the card itself —
+         `takeTemplate` looks for `card` INSIDE `container`, so naming the same
+         element for both finds nothing and the strip silently keeps the
+         theme's copy. */
+      container: '.rts-feature-area .row',
+      card: '.single-feature-area',
+      title: '.content .title',
+      text: '.content span',
+    },
+
+    promoPanels: {
+      card: '.single-discount-with-bg',
+      fields: {
+        link:  { sel: ':scope', attr: 'href', value: (p) => productHref(p) },
+        title: { sel: '.inner-content > .title', text: (p) => p.name },
+        price: { sel: '.price-area .title', text: (p) => money(p.price) },
+      },
+    },
+
     banners: {
       container: '.rts-banner-area-one .swiper-wrapper|.banner-area .swiper-wrapper',
       card: '.banner-bg-image',
@@ -3035,6 +3067,45 @@ async function paintJewelleryGroupRails(data) {
   });
 }
 
+/* Standalone promo cards that sit beside a rail and name ONE product. A theme
+   that declares `promoPanels` gets them filled from its own catalogue; one that
+   does not is untouched.
+
+   Preference is a genuinely discounted line, because the panel says so — a
+   card headed "Products With Discounts" naming a full-price item is a smaller
+   lie than the template's, not a different kind. */
+async function paintPromoPanels(data) {
+  const spec = THEME?.promoPanels;
+  if (!spec) return;
+  const cards = $$(spec.card);
+  if (!cards.length) return;
+
+  let pool = (data?.sections || []).filter((s) => (s.products?.length || 0) > 0).flatMap((s) => s.products);
+  if (!pool.length) {
+    try {
+      const res = await api.catalog({ pageSize: 40 });
+      pool = Array.isArray(res) ? res : res?.products || [];
+    } catch (e) { warn('promo panels', e); return; }
+  }
+  const discounted = pool.filter((p) => Number(p.mrp) > Number(p.price));
+  const picks = (discounted.length >= cards.length ? discounted : pool);
+  if (!picks.length) return;
+
+  cards.forEach((card, i) => {
+    const p = picks[i % picks.length];
+    fillFields(card, spec.fields, p, { node: card });
+    /* The panel's own artwork is a theme file that may not exist, and its text
+       is written white. Put the PRODUCT behind it under a dark wash so the
+       heading reads whatever the picture turns out to be. */
+    const img = mediaUrl((p.imageUrls || [])[0] || '');
+    card.style.backgroundImage = img
+      ? `linear-gradient(90deg, rgba(17,24,39,.72) 0%, rgba(17,24,39,.35) 60%, rgba(17,24,39,.15) 100%), url(${img})`
+      : 'linear-gradient(120deg,#1f2937 0%,#374151 60%,#4b5563 100%)';
+    card.style.backgroundSize = 'cover';
+    card.style.backgroundPosition = 'center';
+  });
+}
+
 pages.home = async () => {
   let data = null;
   try { data = await api.homepage(); } catch (e) { warn('homepage', e); }
@@ -3102,6 +3173,7 @@ pages.home = async () => {
   if (THEME?.name === 'jewellery') {
     await paintJewelleryGroupRails(data).catch((e) => warn('jewellery group rails', e));
   }
+  await paintPromoPanels(data).catch((e) => warn('promo panels', e));
   await renderRecentlyViewed(rails[rails.length - 1]);
   await paintBlogStrip(4);
   wireQuickView();
@@ -3290,7 +3362,47 @@ async function paintBanners(data) {
     return;
   }
   repeat(t, banners, (node, b) => fillFields(node, spec.fields, b, { node }));
+  ensureBannerLegible(spec, t.container);
   refreshSwipers();
+}
+
+/* ⭐ A HERO THAT CANNOT SHOW ITS ARTWORK MUST STILL BE READABLE.
+   `bg` only writes when the merchant supplied an image, so a store with hero
+   COPY but no PICTURE keeps the template's artwork — and on a theme whose
+   download is incomplete that file does not exist. The slide then renders
+   transparent and grocery's white headline sat on a white page: the shop's own
+   strapline, invisible, on the first screen anyone sees.
+
+   Two cases, one answer: no background at all, and a background whose file
+   404s. The second can only be known by asking for it, so we probe.
+
+   The ground is chosen from the HEADING's colour, never fixed: grocery writes
+   its hero text white and jewellery writes it near-black, so one hard-coded
+   ground would fix the first and break the second. */
+function ensureBannerLegible(spec, container) {
+  const DARK = 'linear-gradient(120deg,#1f2937 0%,#374151 55%,#4b5563 100%)';
+  const LIGHT = 'linear-gradient(120deg,#f1efea 0%,#e6e1d8 55%,#dcd6ca 100%)';
+  const luminance = (c) => {
+    const m = /rgba?\(([^)]+)\)/.exec(c || '');
+    if (!m) return null;
+    const [r, g, b] = m[1].split(',').map((n) => parseFloat(n));
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  };
+  pickAll(spec.card, container).forEach((card) => {
+    const el = (spec.fields && spec.fields.bg && spec.fields.bg.sel)
+      ? (pick(spec.fields.bg.sel, card) || card) : card;
+    const title = pick((spec.fields && spec.fields.title && spec.fields.title.sel) || 'h1,h2,h3', card);
+    const lum = title ? luminance(getComputedStyle(title).color) : null;
+    /* Light text needs a dark ground and vice versa; unknown falls to dark,
+       which is what every one of these themes writes its hero text against. */
+    const ground = (lum !== null && lum > 0.6) ? DARK : (lum !== null ? LIGHT : DARK);
+    const current = getComputedStyle(el).backgroundImage;
+    const url = /url\(["']?([^"')]+)/.exec(current || '');
+    if (!url) { el.style.backgroundImage = ground; return; }
+    const probe = new Image();
+    probe.onerror = () => { el.style.backgroundImage = ground; };
+    probe.src = url[1];
+  });
 }
 
 /* "Browse categories" — { slug, name, count, imageUrl }. Every theme ships a
