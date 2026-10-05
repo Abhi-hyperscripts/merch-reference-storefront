@@ -1172,6 +1172,47 @@ const THEMES = {
       text: '.content span',
     },
 
+    /* ⭐ FOUR PROMO CARDS WITH NOTHING BEHIND THEM. "Weekend Discount /
+       Drink Fresh Corn Juice / Good Taste", four times, every link going to
+       the bare listing page. Worse, their background images are part of the
+       theme download that saved them with an `.html` extension, so all four
+       404 — the cards were text on a blank panel. They are category entry
+       points, and this shop has categories with pictures. */
+    lookbook: [
+      {
+        card: '.single-feature-card',
+        scrim: '.content-area',
+        fields: {
+          art:   { sel: ':scope', each: (el, c) => {
+            const art = c.imageUrl || '';
+            /* The theme sets this through a CSS class, so the override has to
+               be inline to win; with no picture, clear it rather than leave a
+               404 showing through. */
+            el.style.backgroundImage = art ? 'url("' + mediaUrl(art) + '")' : 'none';
+            el.style.backgroundSize = 'cover';
+            el.style.backgroundPosition = 'center';
+          } },
+          /* "Weekend Discount" is a claim about a sale nobody configured. */
+          badge: { sel: '.rts-btn', dropWhen: () => true },
+          title: { sel: 'h3.title', text: (c) => c.name },
+          link:  { sel: 'a.shop-now-goshop-btn', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        },
+      },
+    ],
+
+    /* The theme ships a countdown to a sale date that has long since passed,
+       so its own plugin prints "Sorry, your session has expired." onto the
+       home page — twice. There is no deal end date in the catalogue, so there
+       is no countdown to show. */
+    unbacked: [
+      '.countdown',
+      /* "Get 30% Discount Now" in the navigation bar: a sale nobody set. */
+      '.right-btn-area',
+      /* "Download App" with App Store and Google Play badges, both href="#".
+         There is no app. */
+      '.playstore-app-area',
+    ],
+
     promoPanels: {
       card: '.single-discount-with-bg',
       fields: {
@@ -1905,7 +1946,15 @@ THEMES.fashion = {
       fields: {
         link:  { sel: 'a.box-image_img', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
         image: { sel: 'a.box-image_img img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
-        name:  { sel: '.box-image_text .title|.box-image_text|h5|h6', text: (c) => c.name },
+        /* ⭐ `.box-image_text` IS NOT A CLASS IN THIS THEME — it is
+           `.box-image_content`. One letter-group wrong and the selector list
+           fell through to `h5|h6`, which this block does not use either, so
+           the tiles took the shop's photographs and the shop's links while
+           still captioned "Shop Women / Shop Men / Shop Essentials". Half a
+           painted block reads worse than none: the picture and the caption
+           disagree. */
+        name:  { sel: '.box-image_content .title|.box-image_content a|h5|h6', text: (c) => c.name },
+        nameLink: { sel: '.box-image_content a', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
       },
     },
     {
@@ -2089,6 +2138,62 @@ async function fillStrayStrips() {
    the theme's, not before it. */
 const afterTheme = [];
 function onThemeReady(fn) { afterTheme.push(fn); }
+/* ⭐ REMOVING A BLOCK LEAVES ITS BAND BEHIND — but "looks empty" is NOT a
+   safe test for it. The first version of this scanned every section for one
+   with no visible text, image or control, and that is exactly what a WOW.js
+   section looks like before you scroll to it: these themes ship
+   `visibility: hidden` on `.wow` headings and reveal them on scroll, so two
+   real product sections below the fold measured as empty bands and one was
+   hidden outright. Measuring at the top of the page cannot tell "empty" from
+   "not revealed yet".
+
+   So this never searches. It is handed the node the sweep just hid and asks
+   one question about THAT node's own band: is every element child of it now
+   hidden? Nothing we did not hide can be caught by it. */
+function collapseEmptiedBand(node) {
+  const vis = (el) => {
+    if (!el || !el.getBoundingClientRect) return false;
+    const b = el.getBoundingClientRect();
+    if (b.width < 2 || b.height < 2) return false;
+    const c = getComputedStyle(el);
+    return c.visibility !== 'hidden' && c.display !== 'none';
+  };
+  let band = null;
+  try { band = node.closest('section, .flat-spacing, .themesFlat, .rts-section-gap, .section-padding'); }
+  catch { return; }
+  if (!band || band === node || band.dataset.merchEmptied) return;
+  /* `visibility: hidden` on a not-yet-revealed child would read as "gone", so
+     a band is only empty when every child is hidden by DISPLAY — which is how
+     the sweep hides, and is not what WOW does. */
+  const live = [...band.children].filter((c) => getComputedStyle(c).display !== 'none');
+  if (live.some((c) => (c.innerText || '').trim() || [...c.querySelectorAll('img, svg, video, iframe')].some(vis))) return;
+  if (band.querySelector('[data-merch-id]')) return;
+  band.dataset.merchEmptied = '1';
+  show(band, false);
+}
+
+/* ⭐⭐ A REVEAL-ON-SCROLL LIBRARY THAT NEVER RUNS HIDES THE PAGE. These themes
+   mark their sections `.wow` and let WOW.js flip them from
+   `visibility: hidden` to visible as you scroll. WOW initialises on `load` —
+   and we DEFER the theme's scripts, so on fashion it never armed: two whole
+   product sections, four painted cards each, sat at
+   `visibility: hidden; animation-name: none` forever. Scrolling the page did
+   not bring them back, which is how it is told apart from "not reached yet".
+
+   Nothing here starts an animation. It only takes OFF the inline hiding that
+   a library promised to remove and did not, so the content is simply there. */
+function revealStalledAnimations() {
+  let nodes = [];
+  try { nodes = $$('.wow, [data-wow-delay], [data-aos], .animate__animated'); } catch { return; }
+  nodes.forEach((el) => {
+    if (el.style.visibility !== 'hidden') return;
+    el.style.visibility = 'visible';
+    /* WOW parks the element with `animation-name: none`; clearing it lets the
+       theme's own keyframes play if WOW does come alive later. */
+    if (el.style.animationName === 'none') el.style.animationName = '';
+  });
+}
+
 function runAfterTheme() {
   for (const fn of afterTheme.splice(0)) {
     try { fn(); } catch (e) { warn('after-theme step failed', e); }
@@ -2108,10 +2213,14 @@ function runAfterTheme() {
     try { paintFreeShippingNote(); } catch (e) { warn('free shipping note', e); }
   };
   reapplyChrome();
+  /* The theme's reveal-on-scroll library may never have armed; give it a
+     moment to prove it has, then un-hide whatever it left behind. */
+  [600, 1500, 2600].forEach((ms) => setTimeout(revealStalledAnimations, ms));
   /* Some of these scripts write their totals from their OWN ready/load handler,
      which fires after this one returns — so running once here still loses the
      race. Re-applying on a short schedule costs nothing and is idempotent. */
   [250, 800, 1800].forEach((ms) => setTimeout(reapplyChrome, ms));
+
 
   /* ⭐⭐ AND SOME OF IT IS NOT IN THE DOM YET AT ANY FIXED DELAY. Fashion's
      basket drawer builds its free-shipping line ("Buy $70.00 more to get
@@ -2811,16 +2920,49 @@ function wireAccountBtnClick() {
 function paintStoreChrome(theme) {
   if (!theme) return;
 
+  /* ⭐ THE THEME VENDOR'S BRAND IS IN THE COPY, not just in the artwork. Every
+     one of these four ships its own name in visible text, and no selector list
+     was ever going to find them all — they are in a copyright line, a welcome
+     message, a recommendation heading:
+
+       ©Ekomart
+       ©2026 Amerce. All Rights Reserved.
+       ©2024 Modave. All Rights Reserved.      <- and the wrong YEAR
+       Welcome to Corano Jewelry online store
+       Modave suggests for you:
+
+     The template's own name is the first word of the title it shipped with,
+     which is still in the tab at this point. It is a made-up word, so a
+     whole-word swap for the shop's name is safe where a selector is not. */
+  replaceTemplateBrand(theme.brandName);
+
   /* The logo. Themes ship several — header, sticky header, mobile drawer,
      footer — and they are the clearest sign of whose shop this is. */
-  if (theme.logoUrl && useStore('logo')) {
-    const url = mediaUrl(theme.logoUrl);
+  /* ⭐ NO LOGO SET IS NOT "LEAVE THE TEMPLATE'S". This was gated on
+     `theme.logoUrl`, so a merchant who had not uploaded one kept the THEME
+     VENDOR'S logo in the header — measured on the grocery store, which showed
+     Ekomart's own mark on every page of a connected shop. That is the single
+     most visible thing on the page and the one that says whose shop it is.
+     With no artwork to use, the shop's NAME is the honest wordmark. */
+  if (useStore('logo')) {
+    const url = theme.logoUrl ? mediaUrl(theme.logoUrl) : '';
     for (const img of $$('img')) {
       const src = (img.getAttribute('src') || img.getAttribute('data-src') || '').toLowerCase();
       const alt = (img.getAttribute('alt') || '').toLowerCase();
       const cls = ((img.className || '') + ' ' + (img.parentElement?.className || '')).toLowerCase();
       if (!/logo/.test(src + ' ' + alt + ' ' + cls)) continue;
       if (/payment|card|visa|master|paypal|app-store|google-play/.test(src + cls)) continue;   // footer payment marks are not logos
+      if (!url) {
+        if (!theme.brandName) continue;   // nothing to say — leave it rather than blank the header
+        const word = document.createElement('span');
+        word.className = 'merch-wordmark';
+        word.textContent = theme.brandName;
+        /* Inherit the header's own type, just heavier: the themes style their
+           logo slot by size, so a wordmark that sizes itself fits all four. */
+        word.style.cssText = 'display:inline-block;font-weight:700;font-size:22px;line-height:1.1;letter-spacing:.02em;white-space:nowrap;color:inherit;';
+        img.replaceWith(word);
+        continue;
+      }
       setAttr(img, 'src', url);
       if (img.hasAttribute('data-src')) setAttr(img, 'data-src', url);
       img.removeAttribute('srcset');
@@ -2994,6 +3136,48 @@ function socialPlatformOf(a) {
    to the shop, so none of it is kept. */
 let BRAND_NAME = '';
 
+/* The theme's own name, taken from the title it shipped with — read before
+   anything rewrites it. */
+const TEMPLATE_BRAND = (() => {
+  /* Letters and digits only: `-` and `.` in the class made the token
+     "Ekomart-Grocery-Store" out of `Ekomart-Grocery-Store(e-Commerce) HTML
+     Template`, which matches nothing, so the copyright kept the vendor's
+     name. The four themes all name themselves in one word. */
+  const m = /^[A-Za-z][A-Za-z0-9&'’]*/.exec((document.title || '').trim());
+  const w = m ? m[0] : '';
+  /* A short token is a word, not a brand, and would match real copy. */
+  return w.length >= 4 ? w : '';
+})();
+
+function replaceTemplateBrand(brandName) {
+  const year = String(new Date().getFullYear());
+  const brand = (brandName || '').trim();
+  const swap = brand && TEMPLATE_BRAND && brand.toLowerCase() !== TEMPLATE_BRAND.toLowerCase();
+  if (!swap) return;
+  const re = new RegExp('\\b' + TEMPLATE_BRAND.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g');
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    acceptNode(n) {
+      const t = n.parentElement && n.parentElement.tagName;
+      if (t === 'SCRIPT' || t === 'STYLE' || t === 'TEXTAREA') return NodeFilter.FILTER_REJECT;
+      return re.test(n.nodeValue || '') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const hits = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) hits.push(n);
+  hits.forEach((n) => { n.nodeValue = n.nodeValue.replace(re, brand); });
+
+  /* A copyright year is a claim about the shop, and two of these themes ship
+     one that is already years stale. Only inside a line that is actually a
+     copyright notice — a bare year elsewhere may be a real date. */
+  $$('*').forEach((el) => {
+    if (el.children.length) return;
+    const txt = el.textContent || '';
+    if (!/©|copyright/i.test(txt)) return;
+    const fixed = txt.replace(/(?:19|20)\d{2}/g, year);
+    if (fixed !== txt) el.textContent = fixed;
+  });
+}
+
 function setDocumentTitle(subject) {
   if (!BRAND_NAME) {
     /* No brand configured: leave the theme's title rather than blanking the
@@ -3126,6 +3310,39 @@ async function paintCurrencySwitcher() {
     const t = ownText(el);
     return t && t.length <= 34 && isLabel(t);
   });
+  const COUNTRY_RE = /united states|united kingdom|india|emirates|singapore|japan|canada|australia/i;
+  /* ⭐ A CONTROL THAT CANNOT BE MADE TRUE COMES OFF. These themes ship a
+     country-and-currency picker — "United States (USD $)" — and rewriting only
+     the currency half would read "United States (INR ₹)", which is worse. So
+     the old code left it alone, and a shop pricing in rupees and shipping from
+     Noida carried USD in its header against ₹ on every product below it.
+     Leaving it alone was never the third option: the control is the template's
+     and it does nothing, so it goes. */
+  const dropCountryPicker = (el) => {
+    /* The named wrapper FIRST. `closest` returns the nearest match in one
+       list, and on this theme the nearest was bootstrap-select's own
+       `.dropdown` — hiding that left `.tf-currencies` standing with a hole in
+       it. Ask for the real control, then fall back. */
+    const ctl = el.closest('.tf-currencies, .tf-languages, .header-currency, .currency-switcher')
+      || el.closest('li, .dropdown');
+    if (ctl) show(ctl, false);
+  };
+
+  /* ⭐ AND THE CONTROL IS A <select> UNTIL A PLUGIN REWRITES IT. This theme
+     ships `<select><option>United States (USD $)</option></select>` and
+     bootstrap-select replaces it with divs LATER, so a scan of a/span/div/li
+     finds nothing on our pass and the shop keeps USD in its header against ₹
+     on every product. Read the options too — they are there from parse time. */
+  $$('select').forEach((sel) => {
+    const txt = [...(sel.options || [])].map((o) => o.textContent || '').join(' ');
+    if (!CODE_RE.test(txt) || !COUNTRY_RE.test(txt)) return;
+    dropCountryPicker(sel);
+    /* bootstrap-select may already have built its replacement next to the
+       select; it is not a descendant, so it needs hiding on its own. */
+    const sib = sel.parentElement && sel.parentElement.querySelector('.bootstrap-select, .dropdown');
+    if (sib) show(sib, false);
+  });
+
   if (!labels.length) return;
 
   let list = null;
@@ -3140,7 +3357,7 @@ async function paintCurrencySwitcher() {
      worse lie than the one we are fixing. */
   const retitle = (el, cur) => {
     const t = ownText(el);
-    if (/united states|united kingdom|india|emirates|singapore|japan|canada|australia/i.test(t)) return;
+    if (COUNTRY_RE.test(t)) { dropCountryPicker(el); return; }
     let next = t.replace(CODE_RE, cur.code).replace(/[$£€₹]|د\.إ/g, cur.symbol || '');
     /* A label reading "$ Currency" carries no code, but its SYMBOL is still
        the template's dollar over a rupee shop. Swap the symbol, keep the word. */
@@ -3976,7 +4193,10 @@ function ensureOverlayLegible(box, overImage) {
      a pale band running the width of the photograph. Sized to the text it
      reads as a deliberate panel. Only on this path: the tile overlays are
      positioned boxes whose width the theme already chose. */
-  if (overImage) { box.style.width = 'fit-content'; box.style.maxWidth = '100%'; }
+  if (cs.position !== 'absolute' && cs.position !== 'fixed') {
+    box.style.width = 'fit-content';
+    box.style.maxWidth = '100%';
+  }
   box.dataset.merchScrim = '1';
 }
 
@@ -4048,7 +4268,7 @@ async function paintEditorialBlocks(data) {
            the theme's own photograph is not an acceptable stand-in. */
         if (!c) { show(card, false); return; }
         fillFields(card, spec.fields, c, { node: card });
-        if (spec.scrim) pickAll(spec.scrim, card).forEach(ensureOverlayLegible);
+        if (spec.scrim) pickAll(spec.scrim, card).forEach((b) => ensureOverlayLegible(b, true));
       });
     }
   }
@@ -4079,7 +4299,7 @@ function sweepUnbacked() {
   for (const sel of [].concat(UNBACKED_EVERYWHERE, THEME?.unbacked || [])) {
     let nodes = [];
     try { nodes = $$(sel); } catch { continue; }   // :has() is unsupported on older engines
-    nodes.forEach((n) => show(n, false));
+    nodes.forEach((n) => { show(n, false); collapseEmptiedBand(n); });
   }
 
   /* ⭐ FABRICATED SOCIAL PROOF, wherever it is phrased. These themes ship a
