@@ -18123,7 +18123,7 @@ li.with-megamenu:hover .rts-megamenu {
 }
 
 .single-feature-card {
-  background-image: url(../images/category/01.html);
+  background-image: url(../images/category/01.png);
   height: 400px;
   border-radius: 6px;
   background-repeat: no-repeat;
@@ -18158,15 +18158,15 @@ li.with-megamenu:hover .rts-megamenu {
 }
 
 .single-feature-card.two {
-  background-image: url(../images/category/02.html);
+  background-image: url(../images/category/02.png);
 }
 
 .single-feature-card.three {
-  background-image: url(../images/category/03.html);
+  background-image: url(../images/category/03.png);
 }
 
 .single-feature-card.four {
-  background-image: url(../images/category/04.html);
+  background-image: url(../images/category/04.png);
 }
 
 .single-feature-card .rts-btn {

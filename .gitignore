@@ -1,3 +1,6 @@
 .DS_Store
 node_modules/
 *.log
+
+# Storefront API keys — plaintext is returned once and is never recoverable.
+.storefront-keys.json
