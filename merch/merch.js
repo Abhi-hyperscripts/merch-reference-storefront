@@ -1911,6 +1911,50 @@ function runAfterTheme() {
     try { fn(); } catch (e) { warn('after-theme step failed', e); }
   }
   rewireClones();
+
+  /* ⭐ RE-APPLY WHAT THE THEME'S OWN SCRIPTS CAN OVERWRITE. We paint, and THEN
+     the deferred theme scripts run — and several of them rewrite the chrome we
+     just set. On fashion the theme's cart script reset the mini-cart total, so
+     every page showed "$0.00" in the basket drop-down: our currency, our
+     figure, replaced by the template's after we had finished. Painting earlier
+     cannot win this race; re-applying after it can. */
+  const reapplyChrome = () => {
+    try { paintHeader(); } catch (e) { warn('header after theme', e); }
+    try { paintFashionMiniCart(); } catch (e) { warn('fashion mini cart after theme', e); }
+    try { paintMiniCart(); } catch (e) { warn('mini cart after theme', e); }
+    try { paintFreeShippingNote(); } catch (e) { warn('free shipping note', e); }
+  };
+  reapplyChrome();
+  /* Some of these scripts write their totals from their OWN ready/load handler,
+     which fires after this one returns — so running once here still loses the
+     race. Re-applying on a short schedule costs nothing and is idempotent. */
+  [250, 800, 1800].forEach((ms) => setTimeout(reapplyChrome, ms));
+}
+
+/* "Buy $70.00 more to get freeship" is the THEME's number, in the theme's
+   currency, and it is a promise the shop has not made: these stores ship with
+   `freeAbove: 0`, meaning no free-shipping threshold at all. A figure we
+   cannot stand behind comes off; one the merchant HAS set is restated in their
+   own currency against the real basket. */
+function paintFreeShippingNote() {
+  const threshold = Number(STORE?.shipping?.freeAbove) || 0;
+  /* ⚠ The amount sits in its OWN child span ("Buy <span>$70.00</span> more to
+     get freeship"), so the element carrying the sentence is NOT a leaf and a
+     leaf-only filter found nothing. Match the smallest element that holds the
+     whole phrase instead. */
+  const lines = $$('*').filter((el) => {
+    if (el.children.length > 3) return false;
+    const t = el.textContent || '';
+    return /free\s*ship/i.test(t) && t.length < 120 && el.getBoundingClientRect().width > 0;
+  });
+  for (const el of lines) {
+    if (!threshold) { show(el, false); continue; }
+    const remaining = Math.max(0, threshold - cart.localSubtotal());
+    el.textContent = remaining > 0
+      ? 'Buy ' + money(remaining) + ' more to get free shipping'
+      : 'You have free shipping';
+    show(el, true);
+  }
 }
 
 /* What each wired control was wired FOR, kept by product id so a clone the
