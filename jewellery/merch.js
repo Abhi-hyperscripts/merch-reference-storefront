@@ -1775,6 +1775,43 @@ THEMES.fashion = {
       cta:   { sel: '.sld_content a', attr: 'href', value: bannerLink },
     },
   },
+  /* Editorial collection blocks ("Shop Women", "Shop Men", "Shop Essentials").
+     They are not product cards, so nothing filled them and a connected store
+     still showed 27 of the theme's own fashion photographs. They ARE category
+     entry points, and the shop has 21 categories with pictures. */
+  lookbook: [
+    {
+      card: '.box-image_v01',
+      fields: {
+        link:  { sel: 'a.box-image_img', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        image: { sel: 'a.box-image_img img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
+        name:  { sel: '.box-image_text .title|.box-image_text|h5|h6', text: (c) => c.name },
+      },
+    },
+    {
+      /* The marquee variant — same idea, different markup, 24 more of the
+         theme's photographs. One `card` selector covered only the first. */
+      card: '.infiniteSlide-item',
+      fields: {
+        link:  { sel: 'a.cls-wrap', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        image: { sel: '.img-cls img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
+        name:  { sel: 'a.cls-wrap h4|h4', text: (c) => c.name },
+      },
+    },
+  ],
+
+  /* Blocks that ASSERT something the catalogue cannot back: invented customer
+     quotes with a price attached, and an Instagram feed this shop does not
+     have. On a connected store these are the template talking, so they go. */
+  unbacked: [
+    '.flat-spacing:has(.tes-content)',
+    '.flat-spacing:has(.prd_price)',
+    /* The Instagram strip: five of the theme's own lifestyle photographs
+       presenting themselves as this shop's social feed. */
+    '.flat-spacing:has(img[src*="/gallery/"])',
+    'section:has(> .container img[src*="/gallery/"])',
+  ],
+
   categories: {
     container: null,
     card: 'a.category-v01',
@@ -1811,11 +1848,29 @@ THEMES.fashion = {
 
   product: {
     fields: {
-      title:    { sel: '.product-infor-name', text: (p) => p.name },
+      /* `.prd-name` is the quick-add modal's own heading — without it the panel
+         showed a real product's picture and price under the template's
+         "linen slim-fit shirt". */
+      title:    { sel: '.product-infor-name|.prd-name', text: (p) => p.name },
       category: { sel: '.product-infor-cate', text: (p) => p.category || '' },
       desc:     { sel: '.product-infor-desc', text: (p) => p.description || '' },
-      price:    { sel: '.product-infor-price .price-on-sale', text: priceText },
-      mrp:      { sel: '.product-infor-price .text-decoration-line-through', text: mrpText, hideWhen: hasNoMrp },
+      /* ⭐ THE QUICK ADD MODAL USES ITS OWN CLASS NAMES. These selectors are
+         scoped to `.product-infor-price`, which exists on the PDP and NOT in
+         the modal — so opening Quick Add on a real product showed its name and
+         ₹2,300 beside the template's "$99,99", and the panel's picture stayed
+         the theme's model shot instead of the jacket. */
+      price:    { sel: '.product-infor-price .price-on-sale|.price-new', text: priceText },
+      mrp:      { sel: '.product-infor-price .text-decoration-line-through|.price-old', text: mrpText, hideWhen: hasNoMrp },
+      quickImage: { sel: '.quickadd-content .img-product|.modal-quickadd img.img-product|img.img-product',
+                    attr: 'src', value: (p) => mediaUrl((p.imageUrls || [])[0] || '') },
+      /* The buy button PRINTS the price in its own label ("Add to Cart -
+         $79.99"), so wiring the click left the template's figure on the one
+         control the shopper reads before paying. */
+      addLabel: { sel: '.btn-action-price', each: (el, p) => {
+        const label = (el.textContent || '').split(/\s[-–]\s/)[0].trim() || 'Add to Cart';
+        el.textContent = label + ' - ' + money(p.price);
+      } },
+      priceAdd: { sel: '.price-add', text: priceText },
       badge:    { sel: '.product-infor-price .badge-sale', text: discountText, hideWhen: hasNoMrp },
       code:     { sel: '.meta_prd_code', text: (p) => p.unit ? 'Unit: ' + p.unit : '' },
       sold:     { sel: '.meta_sold', dropWhen: () => true },
@@ -1929,6 +1984,30 @@ function runAfterTheme() {
      which fires after this one returns — so running once here still loses the
      race. Re-applying on a short schedule costs nothing and is idempotent. */
   [250, 800, 1800].forEach((ms) => setTimeout(reapplyChrome, ms));
+
+  /* ⭐⭐ AND SOME OF IT IS NOT IN THE DOM YET AT ANY FIXED DELAY. Fashion's
+     basket drawer builds its free-shipping line ("Buy $70.00 more to get
+     freeship") from its own script, and measured here it was still absent
+     after every scheduled pass — scopes found, zero matches — so the drawer
+     opened later still carrying the template's promise in dollars.
+     A schedule cannot catch what has no arrival time; watch for it instead.
+     Bounded: the observer stops at the first successful pass, or after 15s,
+     so this never becomes a permanent cost on the page. */
+  const watchFor = ['.cart-threshold', '.tf-mini-cart-threshold'];
+  if (watchFor.some((sel) => !document.querySelector(sel))) {
+    let settled = false;
+    const obs = new MutationObserver(() => {
+      if (settled) return;
+      if (!watchFor.some((sel) => document.querySelector(sel))) return;
+      settled = true;
+      obs.disconnect();
+      reapplyChrome();
+    });
+    try {
+      obs.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => { if (!settled) { settled = true; obs.disconnect(); } }, 15000);
+    } catch (e) { warn('threshold observer', e); }
+  }
 }
 
 /* "Buy $70.00 more to get freeship" is the THEME's number, in the theme's
@@ -1942,11 +2021,23 @@ function paintFreeShippingNote() {
      get freeship"), so the element carrying the sentence is NOT a leaf and a
      leaf-only filter found nothing. Match the smallest element that holds the
      whole phrase instead. */
-  const lines = $$('*').filter((el) => {
-    if (el.children.length > 3) return false;
-    const t = el.textContent || '';
-    return /free\s*ship/i.test(t) && t.length < 120 && el.getBoundingClientRect().width > 0;
-  });
+  /* ⚠ NOT gated on visibility. This line lives inside the basket's OFF-CANVAS
+     panel, which is closed on load and therefore measures zero width — so a
+     visibility guard skipped the one element it exists to fix, and the panel
+     opened later still carrying the template's promise. Scope by CONTAINER
+     instead, which is what makes the match safe without measuring layout. */
+  const scopes = $$('.cart-threshold, .tf-mini-cart-threshold, .popup-shopping-cart, .tf-mini-cart-wrap, .popup-header');
+  const lines = [];
+  for (const scope of scopes) {
+    for (const el of [scope, ...scope.querySelectorAll('*')]) {
+      if (el.children.length > 2) continue;
+      const t = el.textContent || '';
+      if (!/free\s*ship/i.test(t) || t.length > 120) continue;
+      /* The innermost element that still holds the whole sentence. */
+      if (lines.some((prev) => prev.contains(el))) continue;
+      lines.push(el);
+    }
+  }
   for (const el of lines) {
     if (!threshold) { show(el, false); continue; }
     const remaining = Math.max(0, threshold - cart.localSubtotal());
@@ -3448,6 +3539,7 @@ pages.home = async () => {
     await paintJewelleryGroupRails(data).catch((e) => warn('jewellery group rails', e));
   }
   await paintPromoPanels(data).catch((e) => warn('promo panels', e));
+  await paintEditorialBlocks(data).catch((e) => warn('editorial blocks', e));
   await renderRecentlyViewed(rails[rails.length - 1]);
   await paintBlogStrip(4);
   wireQuickView();
@@ -3690,6 +3782,55 @@ function categoryTileFallback(i) {
   return THEME?.name === 'electronic'
     ? `images/collections/collection-circle/cls-electronic${(i % 11) + 1}.jpg`
     : '';
+}
+
+/* The theme's editorial collection blocks, filled from the merchant's own
+   categories — and any block that asserts data the catalogue cannot back,
+   removed. A connected store should show the SHOP, not the template: a
+   photograph of someone else's model over a price in someone else's currency
+   is the template talking, whatever section it sits in. */
+/* Blocks every one of these themes ships that assert something no catalogue
+   can back. Kept beside the per-theme list so a new theme inherits them. */
+const UNBACKED_EVERYWHERE = ['.pop-notice-sale'];
+
+async function paintEditorialBlocks(data) {
+  const specs = [].concat(THEME?.lookbook || []);
+  if (specs.length) {
+    let cats = (data?.sections || []).filter((x) => x.type === 'browseCategories').flatMap((x) => x.categories || []);
+    if (!cats.length) {
+      const raw = await getCategories();
+      cats = (raw || []).map((c) => (typeof c === 'string' ? { name: c } : c));
+    }
+    const withArt = cats.filter((c) => c && c.name);
+    for (const spec of specs) {
+      pickAll(spec.card).forEach((card, i) => {
+        const c = withArt[i % (withArt.length || 1)];
+        /* No category to show here means the block cannot be made true — and
+           the theme's own photograph is not an acceptable stand-in. */
+        if (!c) { show(card, false); return; }
+        fillFields(card, spec.fields, c, { node: card });
+      });
+    }
+  }
+
+  for (const sel of [].concat(UNBACKED_EVERYWHERE, THEME?.unbacked || [])) {
+    let nodes = [];
+    try { nodes = $$(sel); } catch { continue; }   // :has() is unsupported on older engines
+    nodes.forEach((n) => show(n, false));
+  }
+
+  /* ⭐ FABRICATED SOCIAL PROOF, wherever it is phrased. These themes ship a
+     "someone just bought this" toast — a named person, a product and a time,
+     all invented, over a picture from the template. It is the one piece of
+     template content that states a FACT about the shop: that a sale happened.
+     Matched by its sentence as well as its class, because each theme names the
+     widget differently and only the wording is reliably the same. */
+  const claimRe = /\b(has|just)\s+(purchas|bought|order)/i;
+  $$('[class*="notice"], [class*="notif"], [class*="popup"], [class*="toast"], [class*="sale"]').forEach((el) => {
+    if (!claimRe.test(el.textContent || '')) return;
+    if (el.querySelector('[data-merch-id]')) return;   // a real order we painted
+    show(el, false);
+  });
 }
 
 async function paintCategoryTiles(data) {
