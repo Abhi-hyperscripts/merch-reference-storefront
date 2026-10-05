@@ -2254,6 +2254,56 @@ function runAfterTheme() {
   /* The theme's reveal-on-scroll library may never have armed; give it a
      moment to prove it has, then un-hide whatever it left behind. */
   [600, 1500, 2600].forEach((ms) => setTimeout(revealStalledAnimations, ms));
+  /* A carousel rebuilt by the theme can bring cloned slides back with it. */
+  [900, 2000].forEach((ms) => setTimeout(() => {
+    try { sweepUnbackedUnlessPainted(); } catch (e) { warn('unbacked-unless-painted', e); }
+    try { replaceTemplateArt(); } catch (e) { warn('template art', e); }
+  }, ms));
+
+  /* ⭐ AND A SCHEDULE CANNOT CATCH WHAT HAS NO ARRIVAL TIME. Fashion's product
+     gallery is built by the theme's own plugin, which on a slow load inserted
+     its slides AFTER the last pass above — measured at 7s the page still
+     carried three of the template's photographs, and at 8s it did not. That is
+     a race, and a race loses eventually. Watch instead, briefly and bounded. */
+  if (typeof MutationObserver === 'function') {
+    /* ⭐ BOUND IT BY TIME, NOT BY A COUNT OF CALLBACKS. A pass limit sounds
+       equivalent and is not: a busy page fires dozens of mutations in its
+       first second, so the budget was spent before the things that arrive
+       LATE — fashion's sticky add-to-cart bar, which the theme builds on
+       scroll, and the related-products carousel, which lazy-loads — ever
+       existed. Measured: a scroll at 7s brought three template photographs
+       back onto a page that had been clean.
+
+       Debounced, so a burst of mutations costs one pass, and stopped by the
+       clock so it can never be a running cost. */
+    let timer = null;
+    const sweep = () => {
+      try { replaceTemplateArt(); } catch (e) { warn('template art', e); }
+      try { sweepUnbackedUnlessPainted(); } catch (e) { warn('unbacked-unless-painted', e); }
+    };
+    const obs = new MutationObserver(() => {
+      if (timer) return;
+      timer = setTimeout(() => { timer = null; sweep(); }, 120);
+    });
+    try {
+      obs.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => { obs.disconnect(); if (timer) clearTimeout(timer); sweep(); }, 20000);
+    } catch (e) { warn('template art observer', e); }
+    /* The sticky bar and the lazy carousel both arrive on SCROLL, which may
+       never happen inside the observer's window on a short visit — but when it
+       does happen it is the one moment the shopper is looking. */
+    let scrolled = false;
+    addEventListener('scroll', () => {
+      if (scrolled) return;
+      scrolled = true;
+      /* Immediately, because the sticky bar is built DURING the scroll and the
+         shopper is looking at it now; then again once the lazy carousel it
+         triggers has had time to arrive. */
+      sweep();
+      setTimeout(sweep, 400);
+      setTimeout(sweep, 1200);
+    }, { passive: true, once: true });
+  }
   /* Some of these scripts write their totals from their OWN ready/load handler,
      which fires after this one returns — so running once here still loses the
      race. Re-applying on a short schedule costs nothing and is idempotent. */
@@ -2376,12 +2426,27 @@ function detectTheme() {
   if (CONFIG.theme && THEMES[CONFIG.theme]) return THEMES[CONFIG.theme];
   const segs = location.pathname.split('/').filter(Boolean);
   for (let i = segs.length - 1; i >= 0; i--) if (THEMES[segs[i]]) return THEMES[segs[i]];
-  /* Fall back to what the markup says about itself — a folder rename should
-     not silently disable the shop. */
+  /* ⭐ THESE SIGNATURES ONLY EXIST ON THE HOME AND CART PAGES. Every one of
+     them names a PRODUCT or CART element, so on checkout, sign-in, about and
+     contact this returned null, boot() gave up before its first line of work,
+     and those pages ran no merch at all — the theme vendor's logo, the
+     vendor's page title, the vendor's everything, with a clean console because
+     the only complaint is debug-gated. Measured on all four stores.
+
+     The script tag now carries `data-theme`, so this is a fallback. Kept, and
+     widened to things every page of each theme has: the asset folder each one
+     uses and its own class prefix. */
   if ($('.single-shopping-card-one, .rts-cart-list-area')) return THEMES.grocery;
   if ($('.product-item .product-thumb, .cart-calculator-wrapper')) return THEMES.jewellery;
   if ($('.card-product_wrapper, tr.tf-cart_item')) return THEMES.fashion;
   if ($('.slider-electronic, .card-product-wrapper, tr.tf-cart-item')) return THEMES.electronic;
+
+  /* Chrome, not content: a header, a footer and a stylesheet are on every
+     page these themes ship. */
+  if ($('[class^="rts-"], [class*=" rts-"]')) return THEMES.grocery;
+  if ($('link[href*="assets/css/"][href*="style"]') && $('img[src^="assets/img/"]')) return THEMES.jewellery;
+  if ($('img[src^="assets/images/"], link[href^="assets/css/"]')) return THEMES.fashion;
+  if ($('img[src^="images/"], link[href^="css/"]')) return THEMES.electronic;
   return null;
 }
 
@@ -4290,6 +4355,106 @@ function categoryTileFallback(i) {
    can back. Kept beside the per-theme list so a new theme inherits them. */
 const UNBACKED_EVERYWHERE = ['.pop-notice-sale'];
 
+/* ⭐ BLOCKS THAT ASSERT PEOPLE OR BRANDS, ON ANY PAGE OF ANY THEME. The home
+   page was swept per-theme and the ABOUT page was never looked at: jewellery's
+   carried twelve invented customer testimonials and four staff portraits,
+   electronic's four portraits and eighteen logos belonging to six companies
+   this shop has never heard of. A catalogue cannot back a face or a mark.
+
+   Each selector is paired with the test that saves it: a block we PAINTED
+   stays. That is what keeps the home page's brand strip — where the real
+   brand names were rendered — while removing the identical strip on About,
+   which merch never reached. */
+const UNBACKED_UNLESS_PAINTED = [
+  '[class*="testimonial"]',
+  '[class*="team-member"]', '[class*="single-team"]', '.team-area', '.our-team', '[class*="team-wrapper"]',
+  /* Electronic calls a staff portrait `.team-item` and its logo wall
+     `.tf-sw-partner`; neither matched the names the other themes use, so its
+     About page kept four portraits and eighteen companies' marks. */
+  '.team-item', '.tf-sw-partner', '[class*="partner"]',
+  '.brand-logo', '.brand-area', '[class*="brand-logo-carousel"]',
+];
+
+/* ⭐ PHOTOGRAPHY THE SHOP DID NOT TAKE, carried in CSS rather than in a tag.
+   A page-title strip, an About hero, a Contact banner, a product gallery thumb
+   — all set through `background-image`, so every <img> sweep walked straight
+   past them. Only folders that hold PHOTOGRAPHS are touched: icons, patterns
+   and textures are part of the theme's design and stay. */
+const ART_FOLDERS = /\/(banner|banners|section|about|contact|shop|team|grocery|slider|hero|product|products)\//i;
+
+function replaceTemplateArt() {
+  const banner = (STORE?.banners || []).find((b) => b && b.imageUrl);
+  const replacement = banner ? mediaUrl(banner.imageUrl) : '';
+  let nodes = [];
+  try { nodes = $$('*'); } catch { return; }
+  nodes.forEach((el) => {
+    if (el.dataset.merchArt) return;
+    const m = /url\(["']?([^"')]+)/.exec(getComputedStyle(el).backgroundImage || '');
+    if (!m) return;
+    const url = m[1];
+    if (/^(data:|blob:)/.test(url)) return;
+    if (/^https?:/.test(url) && !url.includes(location.host)) return;   // already the shop's own media
+    if (!ART_FOLDERS.test(url)) return;
+    /* Only "we filled THIS" protects it. Asking whether an ANCESTOR was
+       painted protected grocery's gallery thumbs — which sit inside a card we
+       did paint, and which merch never reached, so three broken template
+       backgrounds survived on every product page. */
+    if (el.querySelector('[data-merch-id]')) return;
+    el.dataset.merchArt = '1';
+    /* A page header is a frame for a title and reads badly empty, so it takes
+       the merchant's own banner where there is one. A gallery thumb makes a
+       claim about a PRODUCT, so it is cleared rather than filled with a
+       picture of something else. */
+    const header = /page-title|breadcrumb|page-header|banner/i.test(String(el.className || ''));
+    el.style.backgroundImage = (header && replacement) ? 'url("' + replacement + '")' : 'none';
+  });
+
+  /* ⭐ AND THE SAME PHOTOGRAPHS IN <img> TAGS. The sweep above reads
+     `background-image`, so an About hero, a staff portrait and the gallery
+     slides a product did not fill went untouched — they are plain tags. */
+  let imgs = [];
+  try { imgs = $$('img'); } catch { return; }
+  imgs.forEach((img) => {
+    if (img.dataset.merchArt || img.hasAttribute('data-merch-id')) return;
+    const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
+    if (!src || /^(data:|blob:)/.test(src)) return;
+    if (/^https?:/.test(src) && !src.includes(location.host)) return;
+    if (!ART_FOLDERS.test(src)) return;
+    img.dataset.merchArt = '1';
+    /* A face is a person this shop does not employ — there is no honest
+       substitute, so it goes. A hero frames a page and is better carrying the
+       merchant's own banner than nothing. Everything else (gallery slides a
+       product did not fill) is a claim about a product, so it goes too. */
+    const hero = /banner|hero|about/i.test(src) && !/\/team\//i.test(src);
+    if (hero && replacement) {
+      setAttr(img, 'src', replacement);
+      if (img.hasAttribute('data-src')) setAttr(img, 'data-src', replacement);
+      img.removeAttribute('srcset');
+      return;
+    }
+    remove(img);
+  });
+}
+
+/* ⭐ THIS CANNOT RUN WITH THE EARLY SWEEP. `sweepUnbacked` fires before the
+   page painter, so at that moment NOTHING is painted — including the home
+   page's brand strip, which `brandTiles` fills a moment later. Running it
+   there hid the strip and then painted the real brand names into a hidden
+   element. "Unless painted" is only a true test AFTER painting. */
+function sweepUnbackedUnlessPainted() {
+  for (const sel of UNBACKED_UNLESS_PAINTED) {
+    let nodes = [];
+    try { nodes = $$(sel); } catch { continue; }
+    nodes.forEach((n) => {
+      /* Painted by us, or carrying a name we rendered in place of a logo. */
+      if (n.querySelector('[data-merch-id], .merch-brand-name')) return;
+      if (n.closest('[data-merch-id]')) return;
+      show(n, false);
+      collapseEmptiedBand(n);
+    });
+  }
+}
+
 async function paintEditorialBlocks(data) {
   const specs = [].concat(THEME?.lookbook || []);
   if (specs.length) {
@@ -5439,7 +5604,18 @@ function paintBreadcrumbs(p) {
       setText(catLink, p.category);
       catLink.setAttribute('href', pageUrl('listing', { category: p.category }));
     }
-    const prodLink = pick('.breadcrumb-prod, .current, span:last-child', wrapper);
+    /* ⭐ THE LAST CRUMB IS NOT ALWAYS A <span>. Fashion closes its trail with
+       `<p class="text-caption-01">`, which none of these matched, so the
+       breadcrumb read "Home > Varsity > Lyocell Wrap Top" over a page showing
+       the JUXAR varsity jacket — the category was this shop's and the product
+       was the template's. Fall back to the last element that carries text and
+       is not a link or a separator icon. */
+    let prodLink = pick('.breadcrumb-prod, .current, span:last-child, p:last-of-type', wrapper);
+    if (!prodLink) {
+      prodLink = [...wrapper.children].reverse().find(
+        (el) => el.tagName !== 'A' && el.tagName !== 'I' && (el.textContent || '').trim(),
+      ) || null;
+    }
     if (prodLink) {
       setText(prodLink, p.name);
       if (prodLink.tagName === 'A') prodLink.setAttribute('href', 'javascript:void(0);');
@@ -5556,6 +5732,19 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
         setAttr(img, 'src', urls[i]);
         if (img.hasAttribute('data-src')) setAttr(img, 'data-src', urls[i]);
         img.removeAttribute('srcset');
+        /* ⭐ THE PICTURE A SHOPPER SEES ON HOVER IS A DIFFERENT ATTRIBUTE. The
+           magnifier reads `data-zoom`, not `src`, so the main image showed the
+           shop's jacket and hovering it showed the template's olive wrap top —
+           a different garment, in a different colour, over the real one. */
+        ['data-zoom', 'data-zoom-image', 'data-large', 'data-large-image', 'data-image', 'data-pswp-src']
+          .forEach((a) => { if (img.hasAttribute(a)) setAttr(img, a, urls[i]); });
+      }
+      /* The lightbox opens the wrapping link's href, which points at the
+         full-size file. Only swapped when it IS an image file — a gallery
+         item can be wrapped in a link to the product page. */
+      const link = node.closest('a[href]') || (node.tagName !== 'IMG' ? node.querySelector('a[href]') : null);
+      if (link && /\.(jpe?g|png|webp|gif|avif)(\?|#|$)/i.test(link.getAttribute('href') || '')) {
+        setAttr(link, 'href', urls[i]);
       }
     });
   }
@@ -10256,7 +10445,13 @@ async function boot() {
 
   THEME = detectTheme();
   if (!THEME) {
-    warn('no theme recognised for ' + location.pathname + ' — set data-theme on the script tag');
+    /* Not `warn`: that is debug-gated, so four stores served pages with no
+       hydration at all and a completely clean console. A page that cannot
+       identify its theme shows the TEMPLATE to a customer — say so out loud. */
+    console.error(
+      '[merch] No theme recognised for ' + location.pathname +
+      ' — this page is showing the template, not the shop. Add data-theme to its merch.js script tag.',
+    );
     await runDeferredThemeScripts();
     return;
   }
@@ -10324,6 +10519,10 @@ async function boot() {
 
   /* Whatever the role did not reach. */
   try { await fillStrayStrips(); } catch (e) { warn('stray strips', e); }
+  /* Now that the page has painted, remove the blocks that assert people or
+     brands and that nothing reached. */
+  try { sweepUnbackedUnlessPainted(); } catch (e) { warn('unbacked-unless-painted', e); }
+  try { replaceTemplateArt(); } catch (e) { warn('template art', e); }
   if (PAGE !== 'blog') { try { await paintBlogStrip(4); } catch (e) { warn('blog strip', e); } }
   try { wireQuickView(); } catch (e) { warn('quick view', e); }
 
