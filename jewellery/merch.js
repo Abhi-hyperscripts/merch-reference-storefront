@@ -468,6 +468,8 @@ export const api = {
   /* --- store settings --- */
   theme: () => (themeOnce ??= request('/api/theme').catch((e) => { themeOnce = null; throw e; })),
   currencies: () => request('/api/currencies'),
+  /* Named media the merchant set in the admin: { items: [...], map: { name: url } }. */
+  media: () => request('/api/media'),
   authConfig: () => request('/api/auth/config'),
   paymentConfig: () => request('/api/payment/config'),
 
@@ -3289,6 +3291,59 @@ function setDocumentTitle(subject) {
     return;
   }
   document.title = subject ? subject + ' | ' + BRAND_NAME : BRAND_NAME;
+}
+
+/* ⭐ NAMED MEDIA: THE SLOT FOR EVERYTHING THE SCHEMA DOES NOT MODEL. Banners,
+   category art and product photos each mean something to the shop and are
+   painted by the specs above. This is the rest — a video on an About page, a
+   size chart, a seasonal badge — which a front-end marks with
+   `data-merch-media="name"` on ANY element and the merchant fills in by name.
+
+   The element decides what to do with the URL, because a name is not a
+   paint instruction: an <img> takes a src, a <video> takes a source, a <div>
+   takes a background. A name with no row is left exactly as the page shipped
+   it rather than blanked — a front-end may ship a placeholder on purpose, and
+   a missing row is usually a merchant who has not got to it yet. */
+async function paintNamedMedia() {
+  let slots = [];
+  try { slots = $$('[data-merch-media]'); } catch { return; }
+  if (!slots.length) return;   // nothing on this page asks, so nothing is fetched
+  let map = null;
+  try { map = (await api.media())?.map || null; } catch (e) { warn('named media', e); return; }
+  if (!map) return;
+  /* Case-insensitive, because the admin stores the name folded and a front-end
+     may well have written it in camelCase. */
+  const lookup = {};
+  Object.keys(map).forEach((k) => { lookup[String(k).toLowerCase()] = map[k]; });
+
+  slots.forEach((el) => {
+    const name = (el.getAttribute('data-merch-media') || '').trim().toLowerCase();
+    if (!name) return;
+    const url = lookup[name];
+    if (!url) return;
+    const tag = el.tagName;
+    if (tag === 'IMG' || tag === 'SOURCE' || tag === 'IFRAME' || tag === 'EMBED') {
+      setAttr(el, 'src', url);
+      if (el.hasAttribute('data-src')) setAttr(el, 'data-src', url);
+      el.removeAttribute('srcset');
+    } else if (tag === 'VIDEO' || tag === 'AUDIO') {
+      /* A <video> with its own <source> children ignores a src attribute, so
+         point the sources instead and reload — setting src alone did nothing. */
+      const sources = pickAll('source', el);
+      if (sources.length) sources.forEach((sNode) => setAttr(sNode, 'src', url));
+      else setAttr(el, 'src', url);
+      try { el.load(); } catch { /* not every engine exposes it */ }
+    } else if (tag === 'A') {
+      setAttr(el, 'href', url);
+    } else if (tag === 'OBJECT') {
+      setAttr(el, 'data', url);
+    } else {
+      el.style.backgroundImage = 'url("' + url + '")';
+      if (!el.style.backgroundSize) el.style.backgroundSize = 'cover';
+      if (!el.style.backgroundPosition) el.style.backgroundPosition = 'center';
+    }
+    el.dataset.merchMediaSet = '1';
+  });
 }
 
 function paintSocialLinks(theme) {
@@ -10507,6 +10562,8 @@ async function boot() {
      price and picture on the page. It finishes when it finishes. */
   wireCategoryLinks().catch((e) => warn('category links', e));
   try { remapDeadLinks(); } catch (e) { warn('remap dead links', e); }
+  /* Not awaited: a named picture is never worth holding the page for. */
+  paintNamedMedia().catch((e) => warn('named media', e));
   try { sweepUnbacked(); } catch (e) { warn('unbacked sweep', e); }
 
   const run = PAGE.startsWith('policy:') ? () => pages.policy(PAGE.slice(7)) : (pages[PAGE] || pages.unknown);
