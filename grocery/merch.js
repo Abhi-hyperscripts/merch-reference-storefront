@@ -1743,8 +1743,46 @@ THEMES.electronic = {
         link:  { sel: 'a.img-style', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
         image: { sel: 'a.img-style img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
         name:  { sel: '.collection-content .title|.title|h5|h6', text: (c) => c.name },
+        /* The blurb under the heading names SOMEONE ELSE'S PRODUCTS — "the
+           latest Apple Watch", "the cutting-edge Samsung S24", "Google home
+           smart speaker". The heading became this shop's category and the
+           sentence under it still sold Apple's watch. There is no description
+           on a category, so it goes rather than being invented. */
+        blurb: { sel: '.content p|p.mb_16', dropWhen: () => true },
       },
     },
+    {
+      /* "Our Featured Offers": the same circle card in its `style-1` dress,
+         which keeps its caption in `.collection-content .heading` instead of
+         `.cls-title`. The category spec reached the PICTURE and not the words,
+         so four tiles showed this shop's products over "Shop top deals on
+         Samsung Fold and more." four times. */
+      card: '.collection-circle.style-1',
+      fields: {
+        link:  { sel: 'a.img-style|a', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        image: { sel: 'a img|img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
+        name:  { sel: '.collection-content .heading|.heading|h5|h6', text: (c) => c.name },
+        cta:   { sel: '.collection-content a|a.tf-btn', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+      },
+    },
+  ],
+
+  /* Claims this catalogue cannot back. */
+  unbacked: [
+    /* "Supper Sale: K82FS8 — 20% Discount for first purchse" (the typos are
+       the theme's). An invented promotion with an invented coupon code: a
+       shopper who types it in gets told it is invalid. */
+    '.banner-supper-sale',
+    /* The same sale again, as an item in the header's dropdown. */
+    '.wrapper-header .tf-dropdown-sort',
+    /* The newsletter widget ships its success AND its failure panel both
+       visible, so the footer said "Your subscription could not be saved" and
+       "Your subscription has been successful" at the same time. */
+    '.sib-form-message-panel',
+    /* "Available: 50 / Sold: 50" on every card, with a progress bar. The
+       catalogue carries stock; it does not carry units sold, and the number
+       shown is the theme's for every product alike. */
+    '.box-progress-stock',
   ],
   footerContact: { phone: 'li:has(i.icon-phone) p|a[href^="tel:"]', email: 'li:has(i.icon-mail) p|a[href^="mailto:"]', address: '.footer-address p, .mb-contact p|address' },
   /* No `announcement` here on purpose: this theme ships NO promo bar. The only
@@ -4266,7 +4304,7 @@ async function paintEditorialBlocks(data) {
         const c = withArt[i % (withArt.length || 1)];
         /* No category to show here means the block cannot be made true — and
            the theme's own photograph is not an acceptable stand-in. */
-        if (!c) { show(card, false); return; }
+        if (!c) { show(card, false); collapseEmptiedBand(card); return; }
         fillFields(card, spec.fields, c, { node: card });
         if (spec.scrim) pickAll(spec.scrim, card).forEach((b) => ensureOverlayLegible(b, true));
       });
@@ -4277,13 +4315,19 @@ async function paintEditorialBlocks(data) {
   const bspec = THEME?.brandTiles;
   if (bspec) {
     const brands = (data?.sections || []).filter((x) => x.type === 'brandsCarousel').flatMap((x) => x.brands || []);
-    if (brands.length) {
-      pickAll(bspec.card).forEach((card, i) => {
-        const b = brands[i % brands.length];
-        if (!b) { show(card, false); return; }
-        fillFields(card, bspec.fields, b, { node: card });
-      });
-    }
+    /* ⭐ THE TWO BLOCKS HAVE TO FAIL THE SAME WAY. When the homepage call came
+       back without its sections — the upstream catalogue 500s now and then —
+       the tiles above hid themselves and this strip did nothing, so the page
+       showed an empty band AND seventeen of the theme vendor's logos. Seen
+       once on jewellery and correct on the next load, which is exactly how a
+       store comes to look fixed one day and not the next.
+
+       No brands is not "leave the template's brands". */
+    pickAll(bspec.card).forEach((card, i) => {
+      const b = brands.length ? brands[i % brands.length] : null;
+      if (!b) { show(card, false); collapseEmptiedBand(card); return; }
+      fillFields(card, bspec.fields, b, { node: card });
+    });
   }
 
   sweepUnbacked();
