@@ -3950,12 +3950,16 @@ async function paintBanners(data) {
    a white one, both invisible, and the hero heading vanished into a bright
    landscape. The fix is a scrim UNDER THE TEXT ONLY, so the product is still
    the picture, sized to the text rather than the tile. */
-function ensureOverlayLegible(box) {
+function ensureOverlayLegible(box, overImage) {
   if (!box || box.dataset.merchScrim) return;
   const cs = getComputedStyle(box);
   /* A block in normal flow sits on the page's own ground and is already
-     legible; only an overlay is at the mercy of the photograph. */
-  if (cs.position !== 'absolute' && cs.position !== 'fixed') return;
+     legible; only an overlay is at the mercy of the photograph. `overImage`
+     is for the case the position test cannot see: the jewellery hero lays its
+     heading out in NORMAL FLOW inside a slide whose BACKGROUND is the picture,
+     so the text is over the photograph at `position: relative` and the guard
+     waved it through — the heading stayed invisible on a bright banner. */
+  if (!overImage && cs.position !== 'absolute' && cs.position !== 'fixed') return;
   const probe = pick('h1,h2,h3,h4,h5,h6,p,span,a', box) || box;
   const m = /rgba?\(([^)]+)\)/.exec(getComputedStyle(probe).color || '');
   const rgb = m ? m[1].split(',').map((n) => parseFloat(n)) : null;
@@ -3968,6 +3972,11 @@ function ensureOverlayLegible(box) {
      floated free. A scrim with no padding crops the glyphs. */
   if (!parseFloat(cs.paddingTop)) box.style.padding = '12px 16px';
   box.style.borderRadius = '3px';
+  /* A hero text block is a full-width column, so a scrim sized to the BLOCK is
+     a pale band running the width of the photograph. Sized to the text it
+     reads as a deliberate panel. Only on this path: the tile overlays are
+     positioned boxes whose width the theme already chose. */
+  if (overImage) { box.style.width = 'fit-content'; box.style.maxWidth = '100%'; }
   box.dataset.merchScrim = '1';
 }
 
@@ -3997,7 +4006,7 @@ function ensureBannerLegible(spec, container) {
     /* The image LOADS and the heading is still unreadable when the merchant's
        photograph is busy where the theme's was empty — the branch above only
        ever covered a broken one. */
-    if (title) ensureOverlayLegible(title.closest('[class*="content"], [class*="caption"], [class*="text"]') || title);
+    if (title) ensureOverlayLegible(title.closest('[class*="content"], [class*="caption"], [class*="text"]') || title, true);
   });
 }
 
