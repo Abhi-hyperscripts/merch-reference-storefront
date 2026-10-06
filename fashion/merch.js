@@ -48,9 +48,7 @@
    Fill it in and the same pages show your real catalogue instead.
    =========================================================================== */
 
-// export const STOREFRONT_URL = '';
 export const STOREFRONT_URL = 'https://demo.wisetracktechnologies.com/admin';
-
 
 /* ---------------------------------------------------------------------------
    WHO OWNS THE LOOK — the admin panel, or this template?
@@ -84,7 +82,7 @@ export const USE_STORE_APPEARANCE = {
   usps: true,           // the "free delivery / 24-7 support" strip
   social: true,         // the social icons, and hiding the ones you do not use
   banners: true,        // the hero — the merchant's artwork, headline and button
-  writtenPages: true,   // Privacy, Terms, Refunds and Shipping
+  writtenPages: false,  // Privacy, Terms, Refunds and Shipping (keep designed HTML pages intact)
   aboutPage: false,     // About — OFF by default, see below
 };
 
@@ -155,7 +153,17 @@ function storeOrigin(value) {
   }
 }
 
-const API_BASE = storeOrigin(STOREFRONT_URL || CONFIG.api);
+/* ⭐ AN EXPLICIT OVERRIDE WINS OVER THE FILE'S DEFAULT. This read
+   `STOREFRONT_URL || CONFIG.api`, and STOREFRONT_URL ships non-empty — so
+   `data-api` on the script tag and `window.MERCH_CONFIG.api` were accepted,
+   documented, and then silently ignored. That only shows up when one master
+   merch.js is served to SEVERAL shops: every theme pointed at whichever store
+   the constant happened to name, so a fashion page quietly served a jewellery
+   catalogue and looked completely normal doing it.
+   Order is now: per-page override, else the constant. A folder a merchant
+   uploads on its own carries no override, so editing the one line at the top
+   still works exactly as the comment there promises. */
+const API_BASE = storeOrigin(CONFIG.api || STOREFRONT_URL);
 
 /* No store address: the shop is not live yet. Nothing is fetched and nothing
    is rewritten — see boot(). */
@@ -247,6 +255,34 @@ function readDisplayCurrency() {
   try { return JSON.parse(localStorage.getItem(DISPLAY_KEY) || 'null'); } catch { return null; }
 }
 
+/* "Label:" lives in a child <span> and the VALUE is a bare text node beside
+   it, so writing textContent would delete the label. Set the value on one text
+   node and remove any other — a second stray text node is how the template's
+   own value survived next to ours. */
+function setValueBesideLabel(el, text) {
+  if (!el) return;
+  const texts = [...el.childNodes].filter((n) => n.nodeType === 3);
+  let target = texts.find((n) => n.nodeValue.trim()) || texts[0];
+  if (!target) { target = document.createTextNode(''); el.appendChild(target); }
+  texts.forEach((n) => { if (n !== target) n.remove(); });
+  target.nodeValue = ' ' + text;
+}
+
+/* Cut on a word boundary so a clamped line never ends mid-word. */
+function clamp(text, max) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).replace(/[,;:.\s]+$/, '') + '…';
+}
+
+/* 2.5 not 2.50, 6 not 6.0 — one decimal only where it carries information. */
+function trimZero(n) {
+  const r = Math.round(n * 10) / 10;
+  return String(Number.isInteger(r) ? r : r.toFixed(1));
+}
+
 function money(amount) {
   /* A missing figure is NOT zero. `mrp` is null on most products, and
      Number(null) is 0 — so the obvious guard prints a struck-through
@@ -335,6 +371,8 @@ export const user = {
   set: (u) => writeJson(USER_KEY, u),
   clear: () => { try { localStorage.removeItem(USER_KEY); } catch {} },
 };
+let STORE_ME = null;
+let STORE_ADDRESS = null;
 
 function qs(obj) {
   if (!obj) return '';
@@ -346,6 +384,11 @@ function qs(obj) {
   const s = p.toString();
   return s ? '?' + s : '';
 }
+
+/* Long enough for a cold backend to wake up, short enough that a shopper is
+   not left looking at a demo catalogue while we wait on a socket that will
+   never answer. */
+const REQUEST_TIMEOUT_MS = 12000;
 
 async function request(path, { method = 'GET', body, auth = false, raw = false } = {}) {
   const headers = {};
@@ -363,18 +406,34 @@ async function request(path, { method = 'GET', body, auth = false, raw = false }
     if (t) { headers['Authorization'] = 'Bearer ' + t; sentToken = true; }
   }
 
+  /* ⭐ A REQUEST THAT NEVER ANSWERS IS WORSE THAN ONE THAT FAILS. `fetch` has
+     no timeout of its own: it waits as long as the socket stays open. Measured
+     on the fashion store, `/api/categories` intermittently answered nothing at
+     all — 45 s with no status — and because boot() awaits that call before it
+     paints, the ENTIRE page sat at the theme's demo content with a clean
+     console. Which is exactly what "it was dynamic yesterday and static today"
+     looks like from outside. A rejection is recoverable; a hang is not. */
+  const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS) : null;
   let res;
   try {
     res = await fetch(API_BASE + path, {
       method,
       headers,
+      signal: ctl ? ctl.signal : undefined,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (networkError) {
-    /* fetch only rejects when the request never completed — DNS, offline, TLS
-       or a CORS block. An HTTP 500 is a RESOLVED promise and is handled below. */
-    throw new ApiError('Could not reach the store. Check your connection and try again.', 0,
-      { networkError: String(networkError) });
+    /* fetch only rejects when the request never completed — DNS, offline, TLS,
+       a CORS block, or our own abort. An HTTP 500 is a RESOLVED promise and is
+       handled below. */
+    const aborted = ctl && ctl.signal.aborted;
+    throw new ApiError(
+      aborted ? 'The store took too long to answer.' : 'Could not reach the store. Check your connection and try again.',
+      0, { networkError: String(networkError), timedOut: !!aborted },
+    );
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 
   if (res.status === 204) return null;
@@ -422,6 +481,8 @@ export const api = {
   /* --- store settings --- */
   theme: () => (themeOnce ??= request('/api/theme').catch((e) => { themeOnce = null; throw e; })),
   currencies: () => request('/api/currencies'),
+  /* Named media the merchant set in the admin: { items: [...], map: { name: url } }. */
+  media: () => request('/api/media'),
   authConfig: () => request('/api/auth/config'),
   paymentConfig: () => request('/api/payment/config'),
 
@@ -522,8 +583,8 @@ function readCart() {
   const raw = readJson(CART_KEY, []);
   if (!Array.isArray(raw)) return [];
   return raw
-    .filter((l) => l && typeof l.itemId === 'string' && Number.isFinite(Number(l.qty)))
-    .map((l) => ({ ...l, qty: Math.max(1, Math.min(99, Math.floor(Number(l.qty)))) }));
+    .filter((l) => l && (typeof l.itemId === 'string' || typeof l.itemId === 'number') && Number.isFinite(Number(l.qty)))
+    .map((l) => ({ ...l, itemId: String(l.itemId), qty: Math.max(1, Math.min(99, Math.floor(Number(l.qty)))) }));
 }
 function writeCart(lines) {
   writeJson(CART_KEY, lines);
@@ -537,9 +598,9 @@ export const cart = {
   localSubtotal: () => readCart().reduce((n, l) => n + (Number(l.price) || 0) * l.qty, 0),
   onChange: (fn) => { cartListeners.add(fn); return () => cartListeners.delete(fn); },
 
-  add(product, qty = 1, variantLabel = '') {
+  add(product, qty = 1) {
     const lines = readCart();
-    const found = lines.find((l) => l.itemId === product.id && (l.variantLabel || '') === variantLabel);
+    const found = lines.find((l) => l.itemId === product.id);
     if (found) found.qty = Math.min(99, found.qty + qty);
     else lines.push({
       itemId: product.id,
@@ -547,7 +608,6 @@ export const cart = {
       name: product.name,
       price: product.price,
       image: (product.imageUrls && product.imageUrls[0]) || '',
-      ...(variantLabel ? { variantLabel } : {}),
     });
     writeCart(lines);
   },
@@ -586,14 +646,21 @@ export const cart = {
 /* A local wishlist for guests, merged into the account's on sign-in. The store
    owns the real one; this is what makes the heart icon work signed out. */
 const WISH_KEY = 'merch.wishlist';
+const wishListeners = new Set();
+function writeWish(ids) {
+  writeJson(WISH_KEY, ids);
+  wishListeners.forEach((fn) => { try { fn(ids); } catch (e) { warn(e); } });
+}
+
 export const wishlist = {
   ids: () => readJson(WISH_KEY, []),
   has: (id) => wishlist.ids().includes(id),
+  onChange: (fn) => { wishListeners.add(fn); return () => wishListeners.delete(fn); },
   async toggle(itemId) {
     const on = !wishlist.has(itemId);
     const ids = wishlist.ids().filter((x) => x !== itemId);
     if (on) ids.push(itemId);
-    writeJson(WISH_KEY, ids);
+    writeWish(ids);
     if (token.get()) {
       try { on ? await api.addToWishlist(itemId) : await api.removeFromWishlist(itemId); }
       catch (e) { if (!(e instanceof ApiError && e.isUnauthenticated)) warn(e); }
@@ -606,7 +673,7 @@ export const wishlist = {
     const local = wishlist.ids();
     try {
       for (const id of local) await api.addToWishlist(id).catch(() => {});
-      writeJson(WISH_KEY, (await api.wishlist()) || []);
+      writeWish((await api.wishlist()) || []);
     } catch (e) { warn(e); }
   },
 };
@@ -931,37 +998,18 @@ function wireAction(el, action, data, ctx) {
     case 'add':
       el.addEventListener('click', async (e) => {
         stop(e);
-        let item = data;
-        let variantLabel = '';
-        if (THEME?.name === 'fashion' && ctx.node === document && PDP_VARIANT_REQUIRED) {
-          if (!PDP_SELECTED_VARIANT) return notify('Please select a size first.', 'error');
-          item = PDP_SELECTED_VARIANT.product;
-          variantLabel = PDP_SELECTED_VARIANT.label;
-        }
-        if (item.availability === 'out') return notify('That one is sold out.', 'error');
         const qtyEl = ctx.qtyEl || (ctx.node && pick(THEME.qtyInput, ctx.node));
         const qty = Math.max(1, Math.floor(Number(qtyEl?.value) || 1));
-        cart.add(item, qty, variantLabel);
-        notify(item.name + ' added to your cart.', 'success');
-        track('add_to_cart', { itemId: item.id, qty });
-        if (THEME?.name === 'fashion') {
-          try {
-            const cartEl = document.getElementById('shoppingCart');
-            if (cartEl && window.bootstrap?.Offcanvas) {
-              const bsOffcanvas = window.bootstrap.Offcanvas.getInstance(cartEl) || new window.bootstrap.Offcanvas(cartEl);
-              bsOffcanvas.show();
-            }
-          } catch { /* ignore */ }
-        }
+        cart.add(data, qty);
+        openCartSidebar();
+        notify((data.name || 'Item') + ' added to your cart.', 'success');
+        track('add_to_cart', { itemId: data.id, qty });
       });
       break;
     case 'buy':
       el.addEventListener('click', (e) => {
         stop(e);
-        if (THEME?.name === 'fashion' && ctx.node === document && PDP_VARIANT_REQUIRED) {
-          if (!PDP_SELECTED_VARIANT) return notify('Please select a size first.', 'error');
-          cart.add(PDP_SELECTED_VARIANT.product, 1, PDP_SELECTED_VARIANT.label);
-        } else cart.add(data, 1);
+        cart.add(data, 1);
         location.href = pageUrl('checkout');
       });
       break;
@@ -1095,6 +1143,100 @@ const THEMES = {
     },
     resultCount: '.top-filter span',
 
+    /* ⭐ THE TWO DISCOUNT PANELS BESIDE THE "Products With Discounts" RAIL.
+       They are not `.product-item`, so nothing painted them: both advertised
+       "Alpro Organic Flavored Fresh Juice — Only $15.00" in dollars, a product
+       this shop does not sell, beside a rail of its real stock in rupees. Their
+       artwork is one of the images this theme's download never fetched, so the
+       panel also rendered with no background at all and its white heading was
+       invisible. `.title` is used twice inside the card — the name AND the
+       price — so both selectors are scoped or the name overwrites the price. */
+    /* The five-up feature strip. Without a selector here `paintUsps` had nothing
+       to fill, so even a merchant who DID set their USPs kept the theme's — five
+       cards that all read "Orders $50 or more", in dollars, one of them printed
+       twice. */
+    /* The compare table. Rows are keyed by their own label, not their order. */
+    compare: {
+      container: '#exampleModal .modal-body',
+      row: '.compare-main-wrapper-body',
+      label: '.single-compare-elements.name',
+      cell: '.single-compare-elements:not(.name)',
+      fields: {
+        preview:     { sel: 'img', attr: 'src', value: (p) => mediaUrl((p.imageUrls || [])[0] || '') },
+        name:        { sel: 'p', text: (p) => p.name },
+        price:       { sel: 'p', text: priceText },
+        /* A full catalogue description is several hundred words and the row has
+           a fixed height, so it overflowed UP into the price row and printed
+           the two on top of each other. A comparison wants a comparable
+           snippet, not the whole copy. */
+        description: { sel: 'p', text: (p) => clamp(p.description || '', 180) },
+        /* `rating` is deliberately absent: the catalogue payload carries no
+           star rating, and leaving the row would show the template's five
+           stars and "(25)" against a real product. */
+      },
+    },
+
+    usps: {
+      /* The container is the ROW that holds the cards, never the card itself —
+         `takeTemplate` looks for `card` INSIDE `container`, so naming the same
+         element for both finds nothing and the strip silently keeps the
+         theme's copy. */
+      container: '.rts-feature-area .row',
+      card: '.single-feature-area',
+      title: '.content .title',
+      text: '.content span',
+    },
+
+    /* ⭐ FOUR PROMO CARDS WITH NOTHING BEHIND THEM. "Weekend Discount /
+       Drink Fresh Corn Juice / Good Taste", four times, every link going to
+       the bare listing page. Worse, their background images are part of the
+       theme download that saved them with an `.html` extension, so all four
+       404 — the cards were text on a blank panel. They are category entry
+       points, and this shop has categories with pictures. */
+    lookbook: [
+      {
+        card: '.single-feature-card',
+        scrim: '.content-area',
+        fields: {
+          art:   { sel: ':scope', each: (el, c) => {
+            const art = c.imageUrl || '';
+            /* The theme sets this through a CSS class, so the override has to
+               be inline to win; with no picture, clear it rather than leave a
+               404 showing through. */
+            el.style.backgroundImage = art ? 'url("' + mediaUrl(art) + '")' : 'none';
+            el.style.backgroundSize = 'cover';
+            el.style.backgroundPosition = 'center';
+          } },
+          /* "Weekend Discount" is a claim about a sale nobody configured. */
+          badge: { sel: '.rts-btn', dropWhen: () => true },
+          title: { sel: 'h3.title', text: (c) => c.name },
+          link:  { sel: 'a.shop-now-goshop-btn', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        },
+      },
+    ],
+
+    /* The theme ships a countdown to a sale date that has long since passed,
+       so its own plugin prints "Sorry, your session has expired." onto the
+       home page — twice. There is no deal end date in the catalogue, so there
+       is no countdown to show. */
+    unbacked: [
+      '.countdown',
+      /* "Get 30% Discount Now" in the navigation bar: a sale nobody set. */
+      '.right-btn-area',
+      /* "Download App" with App Store and Google Play badges, both href="#".
+         There is no app. */
+      '.playstore-app-area',
+    ],
+
+    promoPanels: {
+      card: '.single-discount-with-bg',
+      fields: {
+        link:  { sel: ':scope', attr: 'href', value: (p) => productHref(p) },
+        title: { sel: '.inner-content > .title', text: (p) => p.name },
+        price: { sel: '.price-area .title', text: (p) => money(p.price) },
+      },
+    },
+
     banners: {
       container: '.rts-banner-area-one .swiper-wrapper|.banner-area .swiper-wrapper',
       card: '.banner-bg-image',
@@ -1149,25 +1291,69 @@ const THEMES = {
     product: {
       fields: {
         title:    { sel: '.contents .product-title', text: (p) => p.name },
-        category: { sel: '.product-catagory', text: (p) => p.category || '' },
+        category: { sel: '.product-catagory', text: (p) => p.category || '', hideWhen: (p) => !p.category },
         desc:     { sel: '.contents > p', text: (p) => p.description || '' },
-        /* The price sits as a bare text node next to the struck-through one,
-           so we rewrite that node rather than the element — but only when it
-           really is text, because the quick-view modal shapes it differently
-           and `childNodes[0].nodeValue` throws there. */
         price:    { sel: '.product-price', each: (el, p) => {
-          const first = el.firstChild;
-          if (first && first.nodeType === 3) first.nodeValue = money(p.price) + ' ';
-          else el.insertBefore(document.createTextNode(money(p.price) + ' '), el.firstChild);
+          const cur = el.querySelector('.current-price');
+          if (cur) cur.textContent = money(p.price) + ' ';
+          else {
+            const first = el.firstChild;
+            if (first && first.nodeType === 3) first.nodeValue = money(p.price) + ' ';
+            else el.insertBefore(document.createTextNode(money(p.price) + ' '), el.firstChild);
+          }
+          const old = el.querySelector('.old-price');
+          if (old) {
+            if (p.mrp && p.mrp > p.price) {
+              old.textContent = money(p.mrp);
+              show(old, true);
+            } else {
+              show(old, false);
+            }
+          }
+          const tax = el.querySelector('.tax-note');
+          if (tax) {
+            if (p.taxNote) {
+              tax.textContent = '(' + p.taxNote + ')';
+              show(tax, true);
+            } else {
+              show(tax, false);
+            }
+          }
+          /* ⭐ THE TEMPLATE'S PRICE IS A SECOND TEXT NODE, AFTER `.old-price`.
+             We only ever wrote the FIRST one, so the quick view read
+             "₹468  $7.25" — our price and the theme's demo price, side by
+             side, in two currencies. Anything after the first bare text node
+             is the template's, and goes. */
+          let seen = false;
+          [...el.childNodes].forEach((n) => {
+            if (n.nodeType !== 3) return;
+            if (!seen) { seen = true; return; }
+            n.remove();
+          });
         } },
+        /* The theme prints "Categories:" and "Tags:" as a child <span> with the
+           VALUE as a bare text node beside it, and nothing filled either — so a
+           bottle of sunflower oil was filed under "T-Shirts, Tops, Mens" and
+           tagged "fashion, t-shirts, Men". Categories we have; tags we do not,
+           so that line comes off rather than carry someone else's. */
+        categories: { sel: '.catagorys', each: (el, p) => {
+          const names = (p.categoryPath || []).map((c) => c.name).filter(Boolean);
+          const text = names.length ? names.join(', ') : (p.category || '');
+          setValueBesideLabel(el, text);
+          show(el, !!text);
+        } },
+        tags:     { sel: '.tags', dropWhen: () => true },
         mrp:      { sel: '.product-price .old-price', text: mrpText, hideWhen: hasNoMrp },
-        sku:      { sel: '.product-uniques .sku', text: (p) => p.unit ? 'Unit: ' + p.unit : '' },
         add:      { sel: '.product-bottom-action .rts-btn:not(.ml--20)', action: 'add' },
-        wish:     { sel: '.product-bottom-action .ml--20', action: 'wishlist' },
-        reviews:  { sel: '.rating-stars-group span', each: (el) => el.classList.add('review-count') },
+        wish:     { sel: '.product-bottom-action .ml--20, .single-share-option:first-child', action: 'wishlist' },
+        /* The star row is the theme's own: two-and-a-half stars and "10
+           Reviews" printed against every real product. The catalogue payload
+           carries no rating, so the whole group goes rather than assert one. */
+        reviews:  { sel: '.rating-stars-group', dropWhen: () => true },
       },
       gallery: { images: '.product-thumb-area .thumb-wrapper .product-thumb', thumbs: '.product-thumb-filter-group .thumb-filter' },
-      taxNote: '.product-price + .tax-note',
+      variants: { container: '.product-variants-container' },
+      taxNote: '.product-price .tax-note',
     },
 
     cart: {
@@ -1195,7 +1381,8 @@ const THEMES = {
         link:  { sel: 'a', attr: 'href', all: true, value: postHref },
         image: { sel: 'img', attr: 'src', value: postImage },
         title: { sel: '.title|h4|h5', text: (b) => b.title },
-        date:  { sel: '.date|.blog-date', text: postDate },
+        date:  { sel: '.date|.blog-date|.single-meta:first-child span', text: postDate },
+        category: { sel: '.single-meta:has(.fa-folder)', dropWhen: (b) => !b.category, text: (b) => b.category },
         excerpt: { sel: '.disc|p', text: (b) => b.excerpt || '' },
       },
     },
@@ -1240,8 +1427,114 @@ const THEMES = {
     announcement: '.header-top-area .welcome-msg|.header-top-area p|.header-top p',
     usps: { container: '.policy-area .row|.policy-area', card: '.policy-item|.single-policy', title: 'h6|.policy-content h6', text: 'p|.policy-content p' },
     qtyInput: '.pro-qty input|.quantity input',
-    header: { cartCount: '.cart-item-count|.item-count|.cart-item_count', cartTotal: '.cart-total-price' },
+    /* ⭐ NONE of `.cart-item-count|.item-count|.cart-item_count` exists in this
+       theme — its badge is `.notification` inside `a.minicart-btn` — so the
+       count was never painted and the header sat at the template's hardcoded
+       2 on every page, next to a basket that was empty. A selector list that
+       matches nothing fails exactly like a theme that has no badge, which is
+       why it read as "nothing to do" rather than as a miss. */
+    header: {
+      cartCount: '.minicart-btn .notification|.cart-item-count|.item-count|.cart-item_count',
+      wishCount: '.header-tools .nav > li > a:not(.minicart-btn) .notification',
+      cartTotal: '.minicart-pricing-box li:last-child span:last-child|.cart-total-price',
+    },
+    /* ⭐ The header basket drops down a LIST, not just a count. Left alone it
+       sat on every page of a jewellery shop offering "Dozen White Botanical
+       Linen Dinner Napkins — $100.00", in dollars, while the badge beside it
+       said 2 and the real basket was empty. The count was already painted,
+       which is exactly why nobody looked at the list under it. */
+    miniCart: {
+      list: '.minicart-item-wrapper ul',
+      item: '.minicart-item',
+      image: '.minicart-thumb img',
+      /* COMMA, not '|': pickAll returns the first selector that matches ANY
+         element, so a '|' list stopped at the thumb and left the title link
+         pointing at the template's bare product-details.html. Both anchors
+         name the same product and both must carry its id. */
+      link: '.minicart-thumb a, .product-name a',
+      title: '.product-name a',
+      qty: '.cart-quantity',
+      price: '.cart-price',
+      remove: '.minicart-remove',
+      /* The drop-down also prints its own totals, and those are NOT the header
+         badge: emptying the item list while "sub-total $300.00" stayed below it
+         would be a worse lie than the list was, because it reads as a real
+         basket whose contents failed to load. */
+      /* `li:last-child` was the TOTAL row, so the sub-total above it kept the
+         template's $300.00. The box is: sub-total, then rows we cannot feed,
+         then .total. */
+      pricingBox: '.minicart-pricing-box',
+      subtotal: '.minicart-pricing-box li:first-child span:last-child',
+      total: '.minicart-pricing-box .total span:last-child',
+    },
     resultCount: '.toolbar-amount|.product-showing',
+
+    /* ⭐ BRAND LOGOS THIS SHOP DOES NOT HAVE. The strip ships 17 of the
+       theme's own logo files and the catalogue carries 12 REAL brands with an
+       empty `logoUrl` on every one. A logo cannot be invented, so the tile
+       shows the brand's NAME and links to its listing. The card is the DIV,
+       not the anchor — `a.brand-item` (what the sibling theme uses) matches
+       nothing here, which is why all 17 template marks survived. */
+    brandTiles: {
+      card: '.brand-item',
+      fields: {
+        link: { sel: 'a', attr: 'href', value: (b) => pageUrl('listing', { brand: b.slug || b.name }) },
+        art:  { sel: 'img', each: (img, b) => {
+          const logo = b.logoUrl || b.imageUrl || '';
+          if (logo) { setAttr(img, 'src', mediaUrl(logo)); return; }
+          const label = document.createElement('span');
+          label.className = 'merch-brand-name';
+          label.textContent = b.name || '';
+          label.style.cssText = 'display:block;text-align:center;font-weight:600;font-size:14px;line-height:1.3;padding:8px 4px;';
+          img.replaceWith(label);
+        } },
+      },
+    },
+
+    /* The promo tiles — "BEAUTIFUL / Wedding Rings / Shop Now". Seventeen of
+       them on the front page, every one a photograph from the template under a
+       heading no catalogue backs. They ARE category entry points, and this
+       shop has 22 categories, each with a picture. */
+    lookbook: [
+      {
+        card: 'figure.banner-statistics',
+        /* The label sits absolutely over the tile, in #555, with no ground of
+           its own — fine over the theme's pale stock photo, invisible over a
+           catalogue shot on black. */
+        scrim: '.banner-content',
+        fields: {
+          link:  { sel: 'a:first-child', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+          image: { sel: 'a img', each: (img, c) => {
+            const art = c.imageUrl || '';
+            /* No picture for this category means the tile cannot be made true
+               in pictures — the heading still can, so drop the image and keep
+               the tile rather than showing someone else's photograph. */
+            if (art) setAttr(img, 'src', mediaUrl(art)); else img.remove();
+          } },
+          pre:   { sel: '.banner-text1', dropWhen: () => true },
+          name:  { sel: '.banner-text2', text: (c) => c.name },
+          cta:   { sel: 'a.btn-text', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+          /* ⭐ FOURTEEN of the seventeen tiles are the `style2` variant, which
+             carries its label in `h5.banner-text3 > a` instead. Filling only
+             `.banner-text2` left a Choker photograph under the word EARRINGS
+             on a dead `href="#"` — worse than the template, because the two
+             halves now disagreed. */
+          altName: { sel: '.banner-text3 a|.banner-text3', text: (c) => c.name },
+          altLink: { sel: '.banner-text3 a', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        },
+      },
+    ],
+
+    /* Blocks that ASSERT something the catalogue cannot back: invented
+       customer quotes under invented names and portraits, plus two promo
+       banners parked inside the NAVIGATION and one in the listing sidebar
+       whose entire content is a template photograph. The last two are chrome,
+       so they are swept on every page, not only the home page. */
+    unbacked: [
+      '.testimonial-bg',
+      'li.megamenu-banners',
+      '.sidebar-banner',
+    ],
 
     banners: {
       container: '.hero-slider-active|.slider-area',
@@ -1269,7 +1562,16 @@ const THEMES = {
            template's necklace. */
         link:   { sel: 'figure.product-thumb > a', attr: 'href', value: (p) => productHref(p) },
         nameLink: { sel: '.product-name a', attr: 'href', all: true, value: (p) => productHref(p) },
-        image:  { sel: 'img.pri-img', attr: 'src', all: true, value: (p) => mediaUrl((p.imageUrls || [])[0] || '') },
+        /* ⭐ The Hot Deals rail reuses `.product-item` but its thumb carries ONE
+           BARE <img> with no class, so `img.pri-img` matched nothing there and
+           every deal card kept the template's own topaz ring — while the name,
+           brand and price beside it painted correctly, which is what made it
+           read as a working rail. The fallback only runs where pri-img is
+           absent (`pick` takes the first selector that matches), so the main
+           grid/list is untouched. `hover` deliberately gets NO fallback: with
+           one <img> in the thumb it would paint the second image OVER the
+           first. */
+        image:  { sel: 'img.pri-img|figure.product-thumb > a img', attr: 'src', all: true, value: (p) => mediaUrl((p.imageUrls || [])[0] || '') },
         hover:  { sel: 'img.sec-img', attr: 'src', all: true, value: (p) => mediaUrl((p.imageUrls || [])[1] || (p.imageUrls || [])[0] || '') },
         title:  { sel: '.product-name a', text: (p) => p.name, all: true },
         brand:  { sel: '.manufacturer-name a', text: (p) => p.brandName || '', all: true },
@@ -1281,9 +1583,38 @@ const THEMES = {
         newBadge: { sel: '.product-label.new', hideWhen: (p) => !p.featured, all: true },
         desc:   { sel: '.product-content-list p', text: (p) => p.description || '' },
         colors: { sel: '.color-categories', dropWhen: () => true, all: true },
+        /* ⭐ The Hot Deals card ships a countdown, and the store has no deal END
+           TIME to feed it — so every deal rendered 00 DAYS 00 HOURS 00 MINS 00
+           SECS, which to a shopper reads as an EXPIRED offer sitting on a live
+           product. The product page already drops it for this reason; the rail
+           that actually shows deals did not. A timer we cannot feed is worse
+           than no timer. */
+        countdown: { sel: '.product-countdown', dropWhen: () => true, all: true },
         add:    { sel: '.btn-cart', action: 'add', all: true },
         wish:   { sel: '.button-group a:nth-child(1)', action: 'wishlist', all: true },
         compare:{ sel: '.button-group a:nth-child(2)', action: 'compare', all: true },
+      },
+    },
+
+    /* ⭐ THE HOME PAGE'S OTHER PRODUCT MARKUP. "Best Seller Product" and
+       "On-Sale Product" are NOT `.product-item` — they are `.group-item`, a
+       thumb-and-two-lines row in a Slick carousel — so nothing in `listing`
+       matched them and both rails sat there showing the template's own
+       jewellery at $50.00 and $55.00 on an INR shop, directly under rails that
+       had painted correctly. A theme can carry more than one card design; a
+       map that knows only the main grid leaves the rest looking like a real
+       shop that sells something else. */
+    groupRails: {
+      container: '.group-list-carousel',
+      card: '.group-item',
+      fields: {
+        link:     { sel: '.group-item-thumb a', attr: 'href', value: (p) => productHref(p) },
+        image:    { sel: '.group-item-thumb img', attr: 'src', value: (p) => mediaUrl((p.imageUrls || [])[0] || '') },
+        nameLink: { sel: '.group-product-name a', attr: 'href', value: (p) => productHref(p) },
+        title:    { sel: '.group-product-name a', text: (p) => p.name },
+        price:    { sel: '.price-regular', text: priceText },
+        mrp:      { sel: '.price-old del', text: mrpText },
+        mrpBox:   { sel: '.price-old', hideWhen: hasNoMrp },
       },
     },
 
@@ -1381,7 +1712,12 @@ const THEMES = {
 THEMES.electronic = {
   name: 'electronic',
   pages: {
-    home: 'index.html', listing: 'shop-default-grid.html', product: 'product-detail.html',
+    /* ⭐ `shop-default-grid.html` IS NOT IN THIS THEME. The folder ships
+       `shop-left-sidebar.html` as its only listing page, so every link this
+       table generated for the listing role — the Shop nav, category links,
+       pagination, "continue shopping" — pointed at a 404, on 147 references
+       across the theme. A page table is only as good as the files beside it. */
+    home: 'index.html', listing: 'shop-left-sidebar.html', product: 'product-detail.html',
     cart: 'shopping-cart.html', checkout: 'checkout.html', order: 'order-received.html',
     /* `payment-confirmation.html` is this theme's PRE-payment screen — demo
        card digits and a "Confirm Payment" button. Landing a paid shopper on
@@ -1393,6 +1729,76 @@ THEMES.electronic = {
     blog: 'blog-grid.html', post: 'blog-detail.html',
     returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
   },
+
+  /* ⭐ BRAND LOGOS THIS SHOP DOES NOT HAVE. The strip ships 27 of the theme's
+     own logo files, and the catalogue carries 43 REAL brands with an empty
+     `logoUrl` on every one. A logo cannot be invented, so the tile shows the
+     brand's NAME and links to its listing — real, navigable, and true —
+     rather than keeping someone else's marks on a connected shop. */
+  brandTiles: {
+    card: 'a.brand-item',
+    fields: {
+      link: { sel: ':scope', attr: 'href', value: (b) => pageUrl('listing', { brand: b.slug || b.name }) },
+      art:  { sel: 'img', each: (img, b) => {
+        const logo = b.logoUrl || b.imageUrl || '';
+        if (logo) { setAttr(img, 'src', mediaUrl(logo)); return; }
+        const label = document.createElement('span');
+        label.className = 'merch-brand-name';
+        label.textContent = b.name || '';
+        label.style.cssText = 'display:block;text-align:center;font-weight:600;font-size:14px;line-height:1.3;padding:8px 4px;';
+        img.replaceWith(label);
+      } },
+    },
+  },
+
+  lookbook: [
+    {
+      card: '.collection-position-2',
+      fields: {
+        link:  { sel: 'a.img-style', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        image: { sel: 'a.img-style img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
+        name:  { sel: '.collection-content .title|.title|h5|h6', text: (c) => c.name },
+        /* The blurb under the heading names SOMEONE ELSE'S PRODUCTS — "the
+           latest Apple Watch", "the cutting-edge Samsung S24", "Google home
+           smart speaker". The heading became this shop's category and the
+           sentence under it still sold Apple's watch. There is no description
+           on a category, so it goes rather than being invented. */
+        blurb: { sel: '.content p|p.mb_16', dropWhen: () => true },
+      },
+    },
+    {
+      /* "Our Featured Offers": the same circle card in its `style-1` dress,
+         which keeps its caption in `.collection-content .heading` instead of
+         `.cls-title`. The category spec reached the PICTURE and not the words,
+         so four tiles showed this shop's products over "Shop top deals on
+         Samsung Fold and more." four times. */
+      card: '.collection-circle.style-1',
+      fields: {
+        link:  { sel: 'a.img-style|a', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        image: { sel: 'a img|img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
+        name:  { sel: '.collection-content .heading|.heading|h5|h6', text: (c) => c.name },
+        cta:   { sel: '.collection-content a|a.tf-btn', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+      },
+    },
+  ],
+
+  /* Claims this catalogue cannot back. */
+  unbacked: [
+    /* "Supper Sale: K82FS8 — 20% Discount for first purchse" (the typos are
+       the theme's). An invented promotion with an invented coupon code: a
+       shopper who types it in gets told it is invalid. */
+    '.banner-supper-sale',
+    /* The same sale again, as an item in the header's dropdown. */
+    '.wrapper-header .tf-dropdown-sort',
+    /* The newsletter widget ships its success AND its failure panel both
+       visible, so the footer said "Your subscription could not be saved" and
+       "Your subscription has been successful" at the same time. */
+    '.sib-form-message-panel',
+    /* "Available: 50 / Sold: 50" on every card, with a progress bar. The
+       catalogue carries stock; it does not carry units sold, and the number
+       shown is the theme's for every product alike. */
+    '.box-progress-stock',
+  ],
   footerContact: { phone: 'li:has(i.icon-phone) p|a[href^="tel:"]', email: 'li:has(i.icon-mail) p|a[href^="mailto:"]', address: '.footer-address p, .mb-contact p|address' },
   /* No `announcement` here on purpose: this theme ships NO promo bar. The only
      thing in its topbar is the shop's own phone and email, and pointing the
@@ -1511,6 +1917,7 @@ THEMES.electronic = {
       email: 'input[placeholder="Email Address*"]',
       phone: 'input[placeholder="Phone Number*"]',
       city: 'input[placeholder="Town/City*"]',
+      state: '#merch-state, select.text-title:not([name*="country"])',
       address1: 'input[placeholder="Street,..."]',
       pincode: 'input[placeholder="Postal Code*"]',
     },
@@ -1582,13 +1989,65 @@ THEMES.fashion = {
       cta:   { sel: '.sld_content a', attr: 'href', value: bannerLink },
     },
   },
+  /* Editorial collection blocks ("Shop Women", "Shop Men", "Shop Essentials").
+     They are not product cards, so nothing filled them and a connected store
+     still showed 27 of the theme's own fashion photographs. They ARE category
+     entry points, and the shop has 21 categories with pictures. */
+  lookbook: [
+    {
+      card: '.box-image_v01',
+      fields: {
+        link:  { sel: 'a.box-image_img', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        image: { sel: 'a.box-image_img img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
+        /* ⭐ `.box-image_text` IS NOT A CLASS IN THIS THEME — it is
+           `.box-image_content`. One letter-group wrong and the selector list
+           fell through to `h5|h6`, which this block does not use either, so
+           the tiles took the shop's photographs and the shop's links while
+           still captioned "Shop Women / Shop Men / Shop Essentials". Half a
+           painted block reads worse than none: the picture and the caption
+           disagree. */
+        name:  { sel: '.box-image_content .title|.box-image_content a|h5|h6', text: (c) => c.name },
+        nameLink: { sel: '.box-image_content a', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+      },
+    },
+    {
+      /* The marquee variant — same idea, different markup, 24 more of the
+         theme's photographs. One `card` selector covered only the first. */
+      card: '.infiniteSlide-item',
+      fields: {
+        link:  { sel: 'a.cls-wrap', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
+        image: { sel: '.img-cls img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
+        name:  { sel: 'a.cls-wrap h4|h4', text: (c) => c.name },
+      },
+    },
+  ],
+
+  /* Blocks that ASSERT something the catalogue cannot back: invented customer
+     quotes with a price attached, and an Instagram feed this shop does not
+     have. On a connected store these are the template talking, so they go. */
+  unbacked: [
+    '.flat-spacing:has(.tes-content)',
+    '.flat-spacing:has(.prd_price)',
+    /* The Instagram strip: five of the theme's own lifestyle photographs
+       presenting themselves as this shop's social feed. */
+    '.flat-spacing:has(img[src*="/gallery/"])',
+    'section:has(> .container img[src*="/gallery/"])',
+    /* "Shop the look": a styled lifestyle photograph with hotspots pinned to
+       it, each opening a product card. BOTH halves are the template's — the
+       photograph and the products pinned to it — and neither can be replaced,
+       because a hotspot's position only means anything on the picture it was
+       placed on. The wrapper goes, not the two tiles, so the grid they sat in
+       does not stay behind as an empty row. */
+    '.themesFlat:has(.banner-lookbook)',
+    '.banner-lookbook',
+  ],
+
   categories: {
-    container: '.swiper-wrapper:has(.category-v01)',
+    container: null,
     card: 'a.category-v01',
     fields: {
       link:  { sel: 'a.category-v01', attr: 'href', value: (c) => pageUrl('listing', { category: c.name }) },
-      image: { sel: '.cate-image img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || ''), hideWhen: (c) => !c.imageUrl },
-      imageShell: { sel: '.cate-image', dropWhen: (c) => !c.imageUrl },
+      image: { sel: '.cate-image img', attr: 'src', value: (c) => mediaUrl(c.imageUrl || '') },
       name:  { sel: '.cate-name', text: (c) => c.name },
     },
   },
@@ -1619,13 +2078,31 @@ THEMES.fashion = {
 
   product: {
     fields: {
-      title:    { sel: '.product-infor-name', text: (p) => p.name },
-      category: { sel: '.product-infor-cate', text: (p) => p.category || '', dropWhen: (p) => !p.category },
-      desc:     { sel: '.product-infor-desc', text: (p) => p.description || '', dropWhen: (p) => !p.description },
-      price:    { sel: '.product-infor-price .price-on-sale', text: priceText },
-      mrp:      { sel: '.product-infor-price .text-decoration-line-through', text: mrpText, hideWhen: hasNoMrp },
+      /* `.prd-name` is the quick-add modal's own heading — without it the panel
+         showed a real product's picture and price under the template's
+         "linen slim-fit shirt". */
+      title:    { sel: '.product-infor-name|.prd-name', text: (p) => p.name },
+      category: { sel: '.product-infor-cate', text: (p) => p.category || '' },
+      desc:     { sel: '.product-infor-desc', text: (p) => p.description || '' },
+      /* ⭐ THE QUICK ADD MODAL USES ITS OWN CLASS NAMES. These selectors are
+         scoped to `.product-infor-price`, which exists on the PDP and NOT in
+         the modal — so opening Quick Add on a real product showed its name and
+         ₹2,300 beside the template's "$99,99", and the panel's picture stayed
+         the theme's model shot instead of the jacket. */
+      price:    { sel: '.product-infor-price .price-on-sale|.price-new', text: priceText },
+      mrp:      { sel: '.product-infor-price .text-decoration-line-through|.price-old', text: mrpText, hideWhen: hasNoMrp },
+      quickImage: { sel: '.quickadd-content .img-product|.modal-quickadd img.img-product|img.img-product',
+                    attr: 'src', value: (p) => mediaUrl((p.imageUrls || [])[0] || '') },
+      /* The buy button PRINTS the price in its own label ("Add to Cart -
+         $79.99"), so wiring the click left the template's figure on the one
+         control the shopper reads before paying. */
+      addLabel: { sel: '.btn-action-price', each: (el, p) => {
+        const label = (el.textContent || '').split(/\s[-–]\s/)[0].trim() || 'Add to Cart';
+        el.textContent = label + ' - ' + money(p.price);
+      } },
+      priceAdd: { sel: '.price-add', text: priceText },
       badge:    { sel: '.product-infor-price .badge-sale', text: discountText, hideWhen: hasNoMrp },
-      code:     { sel: '.meta_prd_code', text: (p) => p.unit ? 'Unit: ' + p.unit : '', dropWhen: (p) => !p.unit },
+      code:     { sel: '.meta_prd_code', text: (p) => p.unit ? 'Unit: ' + p.unit : '' },
       sold:     { sel: '.meta_sold', dropWhen: () => true },
       reality:  { sel: '.product-infor-reality', dropWhen: () => true },
       qty:      { sel: '.quantity-product', value: () => 1 },
@@ -1634,10 +2111,6 @@ THEMES.fashion = {
          shopper presses, and wiring only the second left the main one inert. */
       add:      { sel: '.btn-action-price', action: 'add' },
       addSticky:{ sel: '.btn-add-to-cart', action: 'add' },
-      stickyTitle: { sel: '.tf-sticky-atc-product .name__prd', text: (p) => p.name },
-      stickyPrice: { sel: '.tf-sticky-atc-product .price__prd', text: priceText },
-      stickyImage: { sel: '.tf-sticky-atc-product .prd_img img', attr: 'src', value: (p) => mediaUrl(p.imageUrls?.[0] || '') },
-      stickyVariant: { sel: '.tf-sticky-atc-product .distribute__prd', text: () => '' },
       buy:      { sel: 'a[href*="checkout"].tf-btn', action: 'buy' },
     },
     variants: { container: '.tf-product-variant', group: '.variant-picker-item' },
@@ -1665,52 +2138,15 @@ THEMES.fashion = {
       image:    { sel: '.img-prd img', attr: 'src', value: (l) => mediaUrl(l.image) },
       imageLink:{ sel: 'a.img-prd', attr: 'href', value: (l) => productHref({ id: l.itemId }) },
       title:    { sel: '.prd_name', text: (l) => l.name, attr: 'href', value: (l) => productHref({ id: l.itemId }) },
+      variants: { sel: '.prd_select', dropWhen: () => true, all: true },
       price:    { sel: '.cart_price', text: (l) => money(l.price) },
       qty:      { sel: '.quantity-product', value: (l) => l.qty },
       subtotal: { sel: '.cart_total', text: (l) => money(l.price * l.qty) },
       remove:   { sel: '.cart_remove', action: 'remove' },
     },
-    totals: {
-      subtotal: '.box-order-summary .subtotal .total, .each-subtotal, .tf-totals-total-value',
-      discount: '.box-order-summary .discount .total',
-      shipping: '.box-order-summary .ship .price',
-      total: '.box-order-summary .total-order .total, .each-total-price, .total-price, .tf-totals-total-value',
-    },
-    coupon: { input: '.ip-discount-code input|input[placeholder*="iscount"]', button: '.ip-discount-code button' },
-    checkoutBtn: 'a[href*="checkout"], #checkout-btn, .action-checkout',
-  },
-  checkout: {
-    ...THEMES.electronic.checkout,
-    summary: {
-      container: '.list-order-product',
-      card: '.order-item',
-      fields: {
-        image: { sel: '.img-prd img', attr: 'src', value: (l) => mediaUrl(l.image) },
-        imageLink: { sel: 'a.img-prd', attr: 'href', value: (l) => productHref({ id: l.itemId }) },
-        title: { sel: '.prd_name', text: (l) => l.name, attr: 'href', value: (l) => productHref({ id: l.itemId }) },
-        price: { sel: '.quantity-price', text: (l) => money(l.price * l.qty) },
-      },
-    },
-    totals: {
-      subtotal: '.box-your-order .total-item-subtotal span:last-child',
-      shipping: '.box-your-order .total-item-shipping span:last-child',
-      discount: '.box-your-order .total-item-discount span:last-child',
-      total: '.box-your-order .last-total span:last-child',
-    },
-    coupon: { input: '.ip-discount-code input|input[placeholder*="voucher"]', button: '.ip-discount-code button' },
-    form: {
-      firstName: 'input[placeholder="First Name*"]',
-      lastName: 'input[placeholder="Last Name*"]',
-      email: 'input[placeholder="Email Address*"]',
-      phone: 'input[placeholder="Phone Number*"]',
-      country: '#shipping-country-form',
-      city: 'input[placeholder="Town/City*"]',
-      address1: 'input[placeholder="Street,..."]',
-      state: '#shipping-province-form',
-      pincode: 'input[placeholder="Postal Code*"]',
-    },
-    paymentRadios: 'input[name="payment-method"]',
-    placeBtn: '.tf-page-checkout a.animate-btn|.tf-page-checkout button.animate-btn|a[href*="thank-you"]',
+    totals: { subtotal: '.each-subtotal|.tf-totals-total-value', total: '.total-price|.tf-totals-total-value' },
+    coupon: { input: 'input[placeholder*="iscount"]', button: '.ip-discount-code button' },
+    checkoutBtn: 'a[href*="checkout"]',
   },
 };
 
@@ -1755,11 +2191,201 @@ async function fillStrayStrips() {
    the theme's, not before it. */
 const afterTheme = [];
 function onThemeReady(fn) { afterTheme.push(fn); }
+/* ⭐ REMOVING A BLOCK LEAVES ITS BAND BEHIND — but "looks empty" is NOT a
+   safe test for it. The first version of this scanned every section for one
+   with no visible text, image or control, and that is exactly what a WOW.js
+   section looks like before you scroll to it: these themes ship
+   `visibility: hidden` on `.wow` headings and reveal them on scroll, so two
+   real product sections below the fold measured as empty bands and one was
+   hidden outright. Measuring at the top of the page cannot tell "empty" from
+   "not revealed yet".
+
+   So this never searches. It is handed the node the sweep just hid and asks
+   one question about THAT node's own band: is every element child of it now
+   hidden? Nothing we did not hide can be caught by it. */
+function collapseEmptiedBand(node) {
+  const vis = (el) => {
+    if (!el || !el.getBoundingClientRect) return false;
+    const b = el.getBoundingClientRect();
+    if (b.width < 2 || b.height < 2) return false;
+    const c = getComputedStyle(el);
+    return c.visibility !== 'hidden' && c.display !== 'none';
+  };
+  let band = null;
+  try { band = node.closest('section, .flat-spacing, .themesFlat, .rts-section-gap, .section-padding'); }
+  catch { return; }
+  if (!band || band === node || band.dataset.merchEmptied) return;
+  /* `visibility: hidden` on a not-yet-revealed child would read as "gone", so
+     a band is only empty when every child is hidden by DISPLAY — which is how
+     the sweep hides, and is not what WOW does. */
+  const live = [...band.children].filter((c) => getComputedStyle(c).display !== 'none');
+  if (live.some((c) => (c.innerText || '').trim() || [...c.querySelectorAll('img, svg, video, iframe')].some(vis))) return;
+  if (band.querySelector('[data-merch-id]')) return;
+  band.dataset.merchEmptied = '1';
+  show(band, false);
+}
+
+/* ⭐⭐ A REVEAL-ON-SCROLL LIBRARY THAT NEVER RUNS HIDES THE PAGE. These themes
+   mark their sections `.wow` and let WOW.js flip them from
+   `visibility: hidden` to visible as you scroll. WOW initialises on `load` —
+   and we DEFER the theme's scripts, so on fashion it never armed: two whole
+   product sections, four painted cards each, sat at
+   `visibility: hidden; animation-name: none` forever. Scrolling the page did
+   not bring them back, which is how it is told apart from "not reached yet".
+
+   Nothing here starts an animation. It only takes OFF the inline hiding that
+   a library promised to remove and did not, so the content is simply there. */
+function revealStalledAnimations() {
+  let nodes = [];
+  try { nodes = $$('.wow, [data-wow-delay], [data-aos], .animate__animated'); } catch { return; }
+  nodes.forEach((el) => {
+    if (el.style.visibility !== 'hidden') return;
+    el.style.visibility = 'visible';
+    /* WOW parks the element with `animation-name: none`; clearing it lets the
+       theme's own keyframes play if WOW does come alive later. */
+    if (el.style.animationName === 'none') el.style.animationName = '';
+  });
+}
+
 function runAfterTheme() {
   for (const fn of afterTheme.splice(0)) {
     try { fn(); } catch (e) { warn('after-theme step failed', e); }
   }
   rewireClones();
+
+  /* ⭐ RE-APPLY WHAT THE THEME'S OWN SCRIPTS CAN OVERWRITE. We paint, and THEN
+     the deferred theme scripts run — and several of them rewrite the chrome we
+     just set. On fashion the theme's cart script reset the mini-cart total, so
+     every page showed "$0.00" in the basket drop-down: our currency, our
+     figure, replaced by the template's after we had finished. Painting earlier
+     cannot win this race; re-applying after it can. */
+  const reapplyChrome = () => {
+    try { paintHeader(); } catch (e) { warn('header after theme', e); }
+    try { paintFashionMiniCart(); } catch (e) { warn('fashion mini cart after theme', e); }
+    try { paintMiniCart(); } catch (e) { warn('mini cart after theme', e); }
+    try { paintFreeShippingNote(); } catch (e) { warn('free shipping note', e); }
+  };
+  reapplyChrome();
+  /* The theme's reveal-on-scroll library may never have armed; give it a
+     moment to prove it has, then un-hide whatever it left behind. */
+  [600, 1500, 2600].forEach((ms) => setTimeout(revealStalledAnimations, ms));
+  /* A carousel rebuilt by the theme can bring cloned slides back with it. */
+  [900, 2000].forEach((ms) => setTimeout(() => {
+    try { sweepUnbackedUnlessPainted(); } catch (e) { warn('unbacked-unless-painted', e); }
+    try { replaceTemplateArt(); } catch (e) { warn('template art', e); }
+  }, ms));
+
+  /* ⭐ AND A SCHEDULE CANNOT CATCH WHAT HAS NO ARRIVAL TIME. Fashion's product
+     gallery is built by the theme's own plugin, which on a slow load inserted
+     its slides AFTER the last pass above — measured at 7s the page still
+     carried three of the template's photographs, and at 8s it did not. That is
+     a race, and a race loses eventually. Watch instead, briefly and bounded. */
+  if (typeof MutationObserver === 'function') {
+    /* ⭐ BOUND IT BY TIME, NOT BY A COUNT OF CALLBACKS. A pass limit sounds
+       equivalent and is not: a busy page fires dozens of mutations in its
+       first second, so the budget was spent before the things that arrive
+       LATE — fashion's sticky add-to-cart bar, which the theme builds on
+       scroll, and the related-products carousel, which lazy-loads — ever
+       existed. Measured: a scroll at 7s brought three template photographs
+       back onto a page that had been clean.
+
+       Debounced, so a burst of mutations costs one pass, and stopped by the
+       clock so it can never be a running cost. */
+    let timer = null;
+    const sweep = () => {
+      try { replaceTemplateArt(); } catch (e) { warn('template art', e); }
+      try { sweepUnbackedUnlessPainted(); } catch (e) { warn('unbacked-unless-painted', e); }
+    };
+    const obs = new MutationObserver(() => {
+      if (timer) return;
+      timer = setTimeout(() => { timer = null; sweep(); }, 120);
+    });
+    try {
+      obs.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => { obs.disconnect(); if (timer) clearTimeout(timer); sweep(); }, 20000);
+    } catch (e) { warn('template art observer', e); }
+    /* The sticky bar and the lazy carousel both arrive on SCROLL, which may
+       never happen inside the observer's window on a short visit — but when it
+       does happen it is the one moment the shopper is looking. */
+    let scrolled = false;
+    addEventListener('scroll', () => {
+      if (scrolled) return;
+      scrolled = true;
+      /* Immediately, because the sticky bar is built DURING the scroll and the
+         shopper is looking at it now; then again once the lazy carousel it
+         triggers has had time to arrive. */
+      sweep();
+      setTimeout(sweep, 400);
+      setTimeout(sweep, 1200);
+    }, { passive: true, once: true });
+  }
+  /* Some of these scripts write their totals from their OWN ready/load handler,
+     which fires after this one returns — so running once here still loses the
+     race. Re-applying on a short schedule costs nothing and is idempotent. */
+  [250, 800, 1800].forEach((ms) => setTimeout(reapplyChrome, ms));
+
+
+  /* ⭐⭐ AND SOME OF IT IS NOT IN THE DOM YET AT ANY FIXED DELAY. Fashion's
+     basket drawer builds its free-shipping line ("Buy $70.00 more to get
+     freeship") from its own script, and measured here it was still absent
+     after every scheduled pass — scopes found, zero matches — so the drawer
+     opened later still carrying the template's promise in dollars.
+     A schedule cannot catch what has no arrival time; watch for it instead.
+     Bounded: the observer stops at the first successful pass, or after 15s,
+     so this never becomes a permanent cost on the page. */
+  const watchFor = ['.cart-threshold', '.tf-mini-cart-threshold'];
+  if (watchFor.some((sel) => !document.querySelector(sel))) {
+    let settled = false;
+    const obs = new MutationObserver(() => {
+      if (settled) return;
+      if (!watchFor.some((sel) => document.querySelector(sel))) return;
+      settled = true;
+      obs.disconnect();
+      reapplyChrome();
+    });
+    try {
+      obs.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => { if (!settled) { settled = true; obs.disconnect(); } }, 15000);
+    } catch (e) { warn('threshold observer', e); }
+  }
+}
+
+/* "Buy $70.00 more to get freeship" is the THEME's number, in the theme's
+   currency, and it is a promise the shop has not made: these stores ship with
+   `freeAbove: 0`, meaning no free-shipping threshold at all. A figure we
+   cannot stand behind comes off; one the merchant HAS set is restated in their
+   own currency against the real basket. */
+function paintFreeShippingNote() {
+  const threshold = Number(STORE?.shipping?.freeAbove) || 0;
+  /* ⚠ The amount sits in its OWN child span ("Buy <span>$70.00</span> more to
+     get freeship"), so the element carrying the sentence is NOT a leaf and a
+     leaf-only filter found nothing. Match the smallest element that holds the
+     whole phrase instead. */
+  /* ⚠ NOT gated on visibility. This line lives inside the basket's OFF-CANVAS
+     panel, which is closed on load and therefore measures zero width — so a
+     visibility guard skipped the one element it exists to fix, and the panel
+     opened later still carrying the template's promise. Scope by CONTAINER
+     instead, which is what makes the match safe without measuring layout. */
+  const scopes = $$('.cart-threshold, .tf-mini-cart-threshold, .popup-shopping-cart, .tf-mini-cart-wrap, .popup-header');
+  const lines = [];
+  for (const scope of scopes) {
+    for (const el of [scope, ...scope.querySelectorAll('*')]) {
+      if (el.children.length > 2) continue;
+      const t = el.textContent || '';
+      if (!/free\s*ship/i.test(t) || t.length > 120) continue;
+      /* The innermost element that still holds the whole sentence. */
+      if (lines.some((prev) => prev.contains(el))) continue;
+      lines.push(el);
+    }
+  }
+  for (const el of lines) {
+    if (!threshold) { show(el, false); continue; }
+    const remaining = Math.max(0, threshold - cart.localSubtotal());
+    el.textContent = remaining > 0
+      ? 'Buy ' + money(remaining) + ' more to get free shipping'
+      : 'You have free shipping';
+    show(el, true);
+  }
 }
 
 /* What each wired control was wired FOR, kept by product id so a clone the
@@ -1815,12 +2441,27 @@ function detectTheme() {
   if (CONFIG.theme && THEMES[CONFIG.theme]) return THEMES[CONFIG.theme];
   const segs = location.pathname.split('/').filter(Boolean);
   for (let i = segs.length - 1; i >= 0; i--) if (THEMES[segs[i]]) return THEMES[segs[i]];
-  /* Fall back to what the markup says about itself — a folder rename should
-     not silently disable the shop. */
+  /* ⭐ THESE SIGNATURES ONLY EXIST ON THE HOME AND CART PAGES. Every one of
+     them names a PRODUCT or CART element, so on checkout, sign-in, about and
+     contact this returned null, boot() gave up before its first line of work,
+     and those pages ran no merch at all — the theme vendor's logo, the
+     vendor's page title, the vendor's everything, with a clean console because
+     the only complaint is debug-gated. Measured on all four stores.
+
+     The script tag now carries `data-theme`, so this is a fallback. Kept, and
+     widened to things every page of each theme has: the asset folder each one
+     uses and its own class prefix. */
   if ($('.single-shopping-card-one, .rts-cart-list-area')) return THEMES.grocery;
   if ($('.product-item .product-thumb, .cart-calculator-wrapper')) return THEMES.jewellery;
   if ($('.card-product_wrapper, tr.tf-cart_item')) return THEMES.fashion;
-  if ($('.card-product-wrapper, tr.tf-cart-item')) return THEMES.electronic;
+  if ($('.slider-electronic, .card-product-wrapper, tr.tf-cart-item')) return THEMES.electronic;
+
+  /* Chrome, not content: a header, a footer and a stylesheet are on every
+     page these themes ship. */
+  if ($('[class^="rts-"], [class*=" rts-"]')) return THEMES.grocery;
+  if ($('link[href*="assets/css/"][href*="style"]') && $('img[src^="assets/img/"]')) return THEMES.jewellery;
+  if ($('img[src^="assets/images/"], link[href^="assets/css/"]')) return THEMES.fashion;
+  if ($('img[src^="images/"], link[href^="css/"]')) return THEMES.electronic;
   return null;
 }
 
@@ -1932,13 +2573,174 @@ async function loadStoreSettings() {
   }
 }
 
-function paintHeader() {
-  const h = THEME?.header || {};
+function paintMiniCart() {
+  /* Themes that describe their basket drop-down in the descriptor are painted
+     declaratively; the hand-built markup below is one theme's own shape and
+     returns early everywhere else, which is why the jewellery header kept the
+     template's napkins. Both run: a theme has one or the other, never both. */
+  try { paintDeclaredMiniCart(); } catch (e) { warn('mini cart', e); }
+
+  const popups = pickAll('.category-sub-menu.card-number-show');
+  const modal = pick('#shoppingCart');
+  if (!popups.length && !modal) return;
+
+  const lines = cart.lines();
   const count = cart.count();
-  pickAll(h.cartCount).forEach((el) => setText(el, count));
-  pickAll(h.wishCount).forEach((el) => setText(el, wishlist.ids().length));
-  pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
-  paintUserHeader();
+  const subtotal = cart.localSubtotal();
+  const countPad = String(count).padStart(2, '0');
+
+  const freeShippingLimit = 125;
+  const progressPct = Math.min(100, Math.round((subtotal / freeShippingLimit) * 100));
+  const shippingMsg = subtotal >= freeShippingLimit
+    ? 'You have reached <span>Free Shipping</span>!'
+    : `Spend More <span>${money(Math.max(0, freeShippingLimit - subtotal))}</span> to reach <span>Free Shipping</span>`;
+
+  if (popups.length) {
+    let itemsHtml = '';
+    if (lines.length > 0) {
+      itemsHtml = lines.map((l, i) => `
+        <div class="cart-item-1${i === 0 ? ' border-top' : ''}">
+            <div class="img-name">
+                <div class="thumbanil">
+                    <img src="${escapeHtml(mediaUrl(l.image) || 'assets/images/shop/cart-1.png')}" alt="${escapeHtml(l.name)}" style="width: 70px; height: 70px; object-fit: contain;">
+                </div>
+                <div class="details">
+                    <a href="${escapeHtml(productHref({ id: l.itemId }))}">
+                        <h5 class="title" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${escapeHtml(l.name)}</h5>
+                    </a>
+                    <div class="number">
+                        ${l.qty} <i class="fa-regular fa-x"></i>
+                        <span>${money(l.price)}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="close-c1" data-remove-id="${escapeHtml(l.itemId)}" role="button" title="Remove item" style="cursor: pointer;">
+                <i class="fa-regular fa-x"></i>
+            </div>
+        </div>
+      `).join('');
+    }
+
+    popups.forEach((popup) => {
+      if (lines.length === 0) {
+        popup.innerHTML = `
+          <h5 class="shopping-cart-number">Shopping Cart (00)</h5>
+          <div class="empty-cart-popup" style="padding: 30px 15px; text-align: center;">
+              <i class="fa-sharp fa-regular fa-cart-shopping" style="font-size: 32px; color: #94a3b8; margin-bottom: 12px; display: inline-block;"></i>
+              <p style="color: #64748b; margin-bottom: 15px; font-size: 14px;">Your cart is currently empty.</p>
+              <a href="${pageUrl('listing')}" class="rts-btn btn-primary" style="padding: 8px 18px; font-size: 13px; display: inline-block;">Shop Now</a>
+          </div>
+        `;
+      } else {
+        popup.innerHTML = `
+          <h5 class="shopping-cart-number">Shopping Cart (${countPad})</h5>
+          <div class="cart-items-wrapper">
+              ${itemsHtml}
+          </div>
+          <div class="sub-total-cart-balance">
+              <div class="bottom-content-deals mt--10">
+                  <div class="top">
+                      <span>Sub Total:</span>
+                      <span class="number-c">${money(subtotal)}</span>
+                  </div>
+                  <div class="single-progress-area-incard">
+                      <div class="progress">
+                          <div class="progress-bar wow fadeInLeft" role="progressbar" style="width: ${progressPct}%" aria-valuenow="${progressPct}" aria-valuemin="0" aria-valuemax="100"></div>
+                      </div>
+                  </div>
+                  <p>${shippingMsg}</p>
+              </div>
+              <div class="button-wrapper d-flex align-items-center justify-content-between">
+                  <a href="${pageUrl('cart')}" class="rts-btn btn-primary">View Cart</a>
+                  <a href="${pageUrl('checkout')}" class="rts-btn btn-primary border-only">CheckOut</a>
+              </div>
+          </div>
+        `;
+      }
+
+      popup.querySelectorAll('.close-c1[data-remove-id]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const id = btn.getAttribute('data-remove-id');
+          if (id) cart.remove(id);
+        });
+      });
+
+      popup.onclick = (e) => {
+        e.stopPropagation();
+      };
+    });
+  }
+
+  /* Electronic theme drawer modal #shoppingCart */
+  if (modal) {
+    const recs = modal.querySelector('.tf-minicart-recommendations');
+    if (recs) recs.remove();
+
+    const itemsContainer = modal.querySelector('.tf-mini-cart-items');
+    const totalEl = modal.querySelector('.tf-totals-total-value');
+    const barEl = modal.querySelector('.tf-progress-bar .value');
+    const noteEl = modal.querySelector('.tf-mini-cart-threshold .text-caption-1');
+    const checkoutLink = modal.querySelector('a.btn-fill[href*="shopping-cart"], .tf-mini-cart-view-checkout a:nth-child(2)');
+    if (checkoutLink) checkoutLink.setAttribute('href', pageUrl('checkout'));
+    const cartLink = modal.querySelector('.tf-mini-cart-view-checkout a:first-child');
+    if (cartLink) cartLink.setAttribute('href', pageUrl('cart'));
+    const continueShopping = modal.querySelector('a[href*="shop-default-grid"], a.link.text-btn-uppercase');
+    if (continueShopping) continueShopping.setAttribute('href', pageUrl('listing'));
+
+    if (totalEl) setText(totalEl, money(subtotal));
+    if (barEl) barEl.style.width = `${progressPct}%`;
+    if (noteEl) {
+      if (subtotal >= freeShippingLimit) {
+        noteEl.innerHTML = "Congratulations! You've got <strong>free shipping</strong>!";
+      } else {
+        noteEl.innerHTML = `Spend <strong>${money(freeShippingLimit - subtotal)}</strong> more to get <strong>Free Shipping</strong>!`;
+      }
+    }
+
+    if (itemsContainer) {
+      if (lines.length === 0) {
+        itemsContainer.innerHTML = `
+          <div class="p-4 text-center empty-cart-msg">
+            <p class="text-secondary-2 mb-3">Your cart is currently empty.</p>
+            <a href="${pageUrl('listing')}" class="tf-btn btn-fill radius-4"><span class="text">Shop Now</span></a>
+          </div>
+        `;
+      } else {
+        itemsContainer.innerHTML = lines.map((l) => `
+          <div class="tf-mini-cart-item file-delete" data-line-id="${escapeHtml(l.itemId)}">
+            <div class="tf-mini-cart-image">
+              <a href="${escapeHtml(productHref({ id: l.itemId }))}">
+                <img src="${escapeHtml(mediaUrl(l.image) || 'images/products/electronic/electronic-1.jpg')}" alt="${escapeHtml(l.name)}" style="object-fit: contain; width: 70px; height: 70px;">
+              </a>
+            </div>
+            <div class="tf-mini-cart-info flex-grow-1">
+              <div class="mb_12 d-flex align-items-center justify-content-between flex-wrap gap-12">
+                <div class="text-title">
+                  <a href="${escapeHtml(productHref({ id: l.itemId }))}" class="link text-line-clamp-1">${escapeHtml(l.name)}</a>
+                </div>
+                <div class="text-button tf-btn-remove remove" data-remove-id="${escapeHtml(l.itemId)}" style="cursor: pointer;">Remove</div>
+              </div>
+              <div class="d-flex align-items-center justify-content-between flex-wrap gap-12">
+                <div class="text-secondary-2">${l.unit || (l.qty > 1 ? `Qty: ${l.qty}` : '')}</div>
+                <div class="text-button">${l.qty} × ${money(l.price)}</div>
+              </div>
+            </div>
+          </div>
+        `).join('');
+
+        itemsContainer.querySelectorAll('.remove[data-remove-id]').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const id = btn.getAttribute('data-remove-id');
+            if (id) cart.remove(id);
+          });
+        });
+      }
+    }
+  }
 }
 
 function paintUserHeader() {
@@ -2070,128 +2872,286 @@ if (!window._tfUserDropdownInit) {
   });
 }
 
-/* Keep the fashion offcanvas basket in step with the actual basket. Its HTML
-   ships with demo rows, including demo sizes and prices, so use one row only
-   as a visual template and rebuild the contents from local cart data. */
-function paintFashionMiniCart() {
-  if (THEME?.name !== 'fashion') return;
-  const host = pick('.popup-shopping-cart .tf-mini-cart-items');
-  if (!host) return;
-  const rows = pickAll('.tf-mini-cart-item', host);
-  if (!FASHION_MINI_CART_TEMPLATE && rows[0]) FASHION_MINI_CART_TEMPLATE = rows[0].cloneNode(true);
-  rows.forEach(remove);
-  const lines = cart.lines();
-  const empty = pick('.box-text_empty', host);
-  show(empty, !lines.length);
-  host.classList.toggle('list-empty', !lines.length);
-  if (lines.length && FASHION_MINI_CART_TEMPLATE) {
-    const frag = document.createDocumentFragment();
-    lines.forEach((line) => {
-      const row = FASHION_MINI_CART_TEMPLATE.cloneNode(true);
-      row.dataset.merchId = line.itemId;
-      const img = pick('.tf-mini-cart-image img', row);
-      if (line.image) {
-        setAttr(img, 'src', mediaUrl(line.image));
-        img?.removeAttribute('data-src');
-      } else remove(img);
-      const name = pick('.tf-mini-cart-info .name', row);
-      setText(name, line.name);
-      setAttr(name, 'href', productHref({ id: line.itemId }));
-      pickAll('.tf-prd-select', row).forEach(remove);
-      if (line.variantLabel) {
-        const variant = document.createElement('div');
-        variant.className = 'tf-prd-select text-caption-01';
-        setText(variant, line.variantLabel);
-        pick('.tf-mini-cart-info', row)?.appendChild(variant);
-      }
-      setText(pick('.tf-mini-cart-price .number', row), line.qty);
-      setText(pick('.tf-mini-card-price', row), money(line.price));
-      pick('.tf-mini-cart-price .remove', row)?.addEventListener('click', () => cart.remove(line.itemId));
-      frag.appendChild(row);
-    });
-    host.appendChild(frag);
-  }
-  pickAll('.popup-shopping-cart .tf-mini-cart-total .total-price').forEach((el) =>
-    setText(el, money(cart.localSubtotal())),
-  );
 
-  pickAll('.popup-shopping-cart').forEach((popup) => {
-    let bottom = pick('.tf-mini-cart-bottom', popup);
-    const wrap = pick('.wrap-empty_text', popup) || pick('.wrap', popup) || popup;
-    if (!bottom && wrap) {
-      bottom = document.createElement('div');
-      bottom.className = 'tf-mini-cart-bottom box-empty_clear';
-      bottom.innerHTML = `
-        <div class="tf-mini-cart-bottom-wrap">
-          <div class="tf-mini-cart-total">
-            <h5 class="text-total d-flex align-content-center justify-content-between">
-              <span class="subtotal">Subtotal</span>
-              <span class="total-price tf-totals-total-value">${money(cart.localSubtotal())}</span>
-            </h5>
+/* The header basket's drop-down list. A theme that declares `miniCart` gets
+   its own markup cloned per line; one that does not is untouched.
+
+   An EMPTY basket must empty the list — the template ships rows, so "leave it
+   alone when there is nothing to show" would keep someone else's products in
+   the header of a shop whose cart is empty. That is the case that was wrong,
+   and it is the default state for every first-time visitor. */
+function paintDeclaredMiniCart() {
+  const m = THEME?.miniCart;
+  if (!m) return;
+  const list = pick(m.list);
+  if (!list) return;
+  /* ⭐ Capture the row BEFORE anything empties the list, and read the capture
+     back FIRST on every later call. Asking the live list for a sample each time
+     works exactly once: the first paint of an EMPTY basket clears the rows, so
+     the next call — the one right after the shopper adds something — found no
+     sample and returned, leaving the badge at 1 above an empty drop-down. The
+     stored template is the only copy of the theme's markup once we have
+     painted, so it has to be consulted before the DOM, not after it. */
+  let template = MINICART_TEMPLATE.get(list);
+  if (!template) {
+    const sample = pick(m.item, list) || list.firstElementChild;
+    if (!sample) return;
+    template = sample.cloneNode(true);
+    MINICART_TEMPLATE.set(list, template);
+  }
+
+  const lines = cart.lines();
+  list.replaceChildren();
+  for (const l of lines) {
+    const node = template.cloneNode(true);
+    const href = productHref({ id: l.itemId });
+    pickAll(m.link, node).forEach((a) => setAttr(a, 'href', href));
+    setAttr(pick(m.image, node), 'src', mediaUrl(l.image || ''));
+    setText(pick(m.title, node), l.name || '');
+    /* The template writes "1 ×" with the symbol in its own <strong>; replacing
+       the whole node's text would delete that markup, so only the leading
+       number is rewritten where the symbol is a child element. */
+    const q = pick(m.qty, node);
+    if (q) {
+      const sym = q.querySelector('strong');
+      if (sym && q.firstChild && q.firstChild.nodeType === 3) q.firstChild.nodeValue = String(l.qty) + ' ';
+      else setText(q, String(l.qty) + ' x');
+    }
+    setText(pick(m.price, node), money(Number(l.price) || 0));
+    const rm = pick(m.remove, node);
+    if (rm) rm.addEventListener('click', (e) => { e.preventDefault(); cart.remove(l.itemId); });
+    list.appendChild(node);
+  }
+
+  /* Totals. `localSubtotal` is what the basket itself knows — the authoritative
+     figure comes from the cart page's own quote, and printing a stale one in a
+     drop-down is how a shopper learns two different numbers for one basket. */
+  const sub = money(cart.localSubtotal());
+  /* ⭐ DROP THE ROWS THE STORE CANNOT FEED. This template itemises "Eco Tax
+     (-2.00) $10.00" and "VAT (20%) $60.00" between sub-total and total —
+     invented lines, in dollars, naming taxes an Indian jewellery shop does not
+     charge. There is no figure in the cart to put there, and leaving them is
+     quoting a shopper a tax breakdown nobody computed. Keep only the two rows
+     we can state truthfully: sub-total and total. */
+  if (m.pricingBox) {
+    pickAll(m.pricingBox).forEach((box) => {
+      const rows = [...box.querySelectorAll('li')];
+      rows.forEach((li, i) => {
+        if (i === 0 || li.classList.contains('total')) return;
+        li.remove();
+      });
+    });
+  }
+  [m.subtotal, m.total].forEach((sel) => {
+    if (!sel) return;
+    pickAll(sel).forEach((el) => {
+      /* The template wraps the figure in <strong>; keep its markup. */
+      const inner = el.querySelector('strong') || el;
+      setText(inner, sub);
+    });
+  });
+}
+const MINICART_TEMPLATE = new WeakMap();
+
+function paintHeader() {
+  const h = THEME?.header || {};
+  const cartCount = cart.count();
+  const wishCount = wishlist.ids().length;
+
+  pickAll('.btn-border-only.cart').forEach((btn) => {
+    let num = btn.querySelector('.number');
+    if (!num) {
+      num = document.createElement('span');
+      num.className = 'number';
+      const menu = btn.querySelector('.category-sub-menu');
+      if (menu) btn.insertBefore(num, menu);
+      else btn.appendChild(num);
+    }
+    setText(num, cartCount);
+  });
+  pickAll(h.cartCount).forEach((el) => setText(el, cartCount));
+  if (h.wishCount) pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
+
+  pickAll('.btn-border-only.wishlist').forEach((btn) => {
+    let num = btn.querySelector('.number');
+    if (!num) {
+      num = document.createElement('span');
+      num.className = 'number';
+      btn.appendChild(num);
+    }
+    setText(num, wishCount);
+  });
+
+  pickAll('.nav-wishlist > a').forEach((a) => {
+    let num = a.querySelector('.count-box');
+    if (!num) {
+      num = document.createElement('span');
+      num.className = 'count-box';
+      a.appendChild(num);
+    }
+    setText(num, wishCount);
+  });
+  pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
+
+  pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
+
+  // Dynamic active menu indicator for electronic header
+  try {
+    const curPath = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
+    pickAll('.box-nav-ul li.menu-item').forEach((li) => {
+      const a = li.querySelector('a.item-link');
+      if (!a) return;
+      const href = (a.getAttribute('href') || '').toLowerCase();
+      const isActive = (curPath === '' || curPath === 'index.html')
+        ? (href === 'index.html')
+        : (href && href !== 'index.html' && (curPath === href || curPath.includes(href.replace('.html', ''))));
+      li.classList.toggle('active', !!isActive);
+    });
+  } catch {}
+
+  paintMiniCart();
+  try { paintUserHeader(); } catch {}
+  paintAccountHeader().catch(() => {});
+}
+
+async function paintAccountHeader() {
+  const accountBtns = $$('.btn-border-only.account');
+  const mobileAuthBottom = pick('.button-area-main-wrapper-menuy-sidebar .buton-area-bottom');
+
+  const t = token.get();
+  if (!t) {
+    accountBtns.forEach((btn) => {
+      const textEl = btn.querySelector('.account-btn-text');
+      if (textEl) textEl.textContent = 'Account';
+      const guestMenu = btn.querySelector('.account-guest-menu');
+      const userMenu = btn.querySelector('.account-user-menu');
+      if (guestMenu) guestMenu.style.display = 'block';
+      if (userMenu) userMenu.style.display = 'none';
+    });
+    if (mobileAuthBottom) {
+      mobileAuthBottom.innerHTML = '<a href="login.html" class="rts-btn btn-primary">Sign In</a><a href="register.html" class="rts-btn btn-secondary">Register</a>';
+    }
+    const navAccount = pick('.nav-account');
+    if (navAccount) {
+      const dropdown = navAccount.querySelector('.dropdown-account');
+      if (dropdown) {
+        dropdown.innerHTML = `
+          <div class="sub-top">
+            <a href="login.html" class="tf-btn btn-reset">Login</a>
+            <p class="text-center text-secondary-2">Don’t have an account? <a href="register.html">Register</a></p>
           </div>
-          <div class="tf-mini-cart-view-checkout">
-            <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
-            <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
+          <div class="sub-bot">
+            <a href="FAQs.html" class="body-text-">Support</a>
           </div>
+        `;
+      }
+    }
+    const mbAuthLink = pick('.mb-other-content a[href*="login"], .mb-other-content a[href*="account"]');
+    if (mbAuthLink) {
+      mbAuthLink.setAttribute('href', 'login.html');
+      const textNode = [...mbAuthLink.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+      if (textNode) textNode.textContent = ' Login';
+    }
+    wireAccountBtnClick();
+    return;
+  }
+
+  // Signed in - update immediately from cache
+  let cachedName = null;
+  let cachedEmail = null;
+  try {
+    cachedName = localStorage.getItem('merch.shopper_name');
+    cachedEmail = localStorage.getItem('merch.shopper_email');
+  } catch {}
+
+  if (cachedName || cachedEmail) {
+    applyShopperHeader(cachedName || cachedEmail.split('@')[0], cachedEmail);
+  }
+
+  // Fresh load if not in memory
+  try {
+    const me = STORE_ME || await api.me();
+    STORE_ME = me;
+    const name = me?.name || (me?.email ? me.email.split('@')[0] : 'Account');
+    try {
+      localStorage.setItem('merch.shopper_name', name);
+      if (me?.email) localStorage.setItem('merch.shopper_email', me.email);
+    } catch {}
+    applyShopperHeader(name, me?.email);
+  } catch (e) {
+    if (e instanceof ApiError && e.isUnauthenticated) {
+      token.clear();
+      try {
+        localStorage.removeItem('merch.shopper_name');
+        localStorage.removeItem('merch.shopper_email');
+      } catch {}
+      paintAccountHeader();
+    }
+  }
+}
+
+function applyShopperHeader(name, email) {
+  const accountBtns = $$('.btn-border-only.account');
+  accountBtns.forEach((btn) => {
+    const textEl = btn.querySelector('.account-btn-text');
+    if (textEl) textEl.textContent = name;
+    const guestMenu = btn.querySelector('.account-guest-menu');
+    const userMenu = btn.querySelector('.account-user-menu');
+    if (guestMenu) guestMenu.style.display = 'none';
+    if (userMenu) {
+      userMenu.style.display = 'block';
+      const nameEl = userMenu.querySelector('.account-user-name');
+      if (nameEl) nameEl.textContent = name || email || 'User';
+    }
+  });
+
+  const mobileAuthBottom = pick('.button-area-main-wrapper-menuy-sidebar .buton-area-bottom');
+  if (mobileAuthBottom) {
+    mobileAuthBottom.innerHTML = '<a href="account.html" class="rts-btn btn-primary">My Account</a><a href="#" class="rts-btn btn-secondary account-logout-btn" data-signout>Logout</a>';
+  }
+
+  const navAccount = pick('.nav-account');
+  if (navAccount) {
+    const dropdown = navAccount.querySelector('.dropdown-account');
+    if (dropdown) {
+      dropdown.innerHTML = `
+        <div class="sub-top">
+          <div style="font-weight: 600; margin-bottom: 8px;">Hi, ${escapeHtml(name || 'Account')}</div>
+          <a href="my-account.html" class="tf-btn btn-reset mb-2">My Account</a>
+          <a href="my-account-orders.html" class="tf-btn btn-reset mb-2">My Orders</a>
+          <a href="javascript:void(0);" class="account-logout-btn text-danger text-center d-block mt-2">Log out</a>
         </div>
       `;
-      wrap.appendChild(bottom);
-    }
-
-    if (bottom) {
-      if (lines.length) {
-        bottom.style.display = 'block';
-        bottom.classList.remove('d-none');
-      } else {
-        bottom.style.display = 'none';
-      }
-
-      const bottomWrap = pick('.tf-mini-cart-bottom-wrap', bottom) || bottom;
-      let viewCheckout = pick('.tf-mini-cart-view-checkout', bottomWrap);
-      if (!viewCheckout) {
-        viewCheckout = document.createElement('div');
-        viewCheckout.className = 'tf-mini-cart-view-checkout';
-        viewCheckout.innerHTML = `
-          <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
-          <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
-        `;
-        const continueLink = pick('a[href*="shop"]', bottomWrap);
-        if (continueLink) bottomWrap.insertBefore(viewCheckout, continueLink);
-        else bottomWrap.appendChild(viewCheckout);
-      }
-
-      let viewCartBtn = pick('a[href*="cart"], .btn-stroke', viewCheckout);
-      if (!viewCartBtn) {
-        viewCartBtn = document.createElement('a');
-        viewCartBtn.className = 'tf-btn btn-stroke';
-        viewCartBtn.textContent = 'View cart';
-        viewCheckout.insertBefore(viewCartBtn, viewCheckout.firstChild);
-      }
-      setAttr(viewCartBtn, 'href', pageUrl('cart'));
-      if (!viewCartBtn._merchWired) {
-        viewCartBtn._merchWired = true;
-        viewCartBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          location.href = pageUrl('cart');
-        });
-      }
-
-      let checkoutBtn = pick('a[href*="checkout"], .animate-btn', viewCheckout);
-      if (!checkoutBtn) {
-        checkoutBtn = document.createElement('a');
-        checkoutBtn.className = 'tf-btn animate-btn';
-        checkoutBtn.textContent = 'Check Out';
-        viewCheckout.appendChild(checkoutBtn);
-      }
-      setAttr(checkoutBtn, 'href', pageUrl('checkout'));
-      if (!checkoutBtn._merchWired) {
-        checkoutBtn._merchWired = true;
-        checkoutBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          location.href = pageUrl('checkout');
+      const logoutBtn = dropdown.querySelector('.account-logout-btn');
+      if (logoutBtn) {
+        logoutBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          auth.logout();
+          location.reload();
         });
       }
     }
+  }
+
+  const mbAuthLink = pick('.mb-other-content a[href*="login"], .mb-other-content a[href*="account"]');
+  if (mbAuthLink) {
+    mbAuthLink.setAttribute('href', 'my-account.html');
+    const textNode = [...mbAuthLink.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+    if (textNode) textNode.textContent = ' My Account';
+  }
+
+  wireAccountBtnClick();
+  wireSignOut();
+}
+
+function wireAccountBtnClick() {
+  $$('.btn-border-only.account').forEach((btn) => {
+    if (btn.__wiredClick) return;
+    btn.__wiredClick = true;
+    btn.addEventListener('click', (e) => {
+      if (e.target.closest('.category-sub-menu')) return;
+      location.href = token.get() ? pageUrl('account') : pageUrl('login');
+    });
   });
 }
 
@@ -2209,16 +3169,49 @@ function paintFashionMiniCart() {
 function paintStoreChrome(theme) {
   if (!theme) return;
 
+  /* ⭐ THE THEME VENDOR'S BRAND IS IN THE COPY, not just in the artwork. Every
+     one of these four ships its own name in visible text, and no selector list
+     was ever going to find them all — they are in a copyright line, a welcome
+     message, a recommendation heading:
+
+       ©Ekomart
+       ©2026 Amerce. All Rights Reserved.
+       ©2024 Modave. All Rights Reserved.      <- and the wrong YEAR
+       Welcome to Corano Jewelry online store
+       Modave suggests for you:
+
+     The template's own name is the first word of the title it shipped with,
+     which is still in the tab at this point. It is a made-up word, so a
+     whole-word swap for the shop's name is safe where a selector is not. */
+  replaceTemplateBrand(theme.brandName);
+
   /* The logo. Themes ship several — header, sticky header, mobile drawer,
      footer — and they are the clearest sign of whose shop this is. */
-  if (theme.logoUrl && useStore('logo')) {
-    const url = mediaUrl(theme.logoUrl);
+  /* ⭐ NO LOGO SET IS NOT "LEAVE THE TEMPLATE'S". This was gated on
+     `theme.logoUrl`, so a merchant who had not uploaded one kept the THEME
+     VENDOR'S logo in the header — measured on the grocery store, which showed
+     Ekomart's own mark on every page of a connected shop. That is the single
+     most visible thing on the page and the one that says whose shop it is.
+     With no artwork to use, the shop's NAME is the honest wordmark. */
+  if (useStore('logo')) {
+    const url = theme.logoUrl ? mediaUrl(theme.logoUrl) : '';
     for (const img of $$('img')) {
       const src = (img.getAttribute('src') || img.getAttribute('data-src') || '').toLowerCase();
       const alt = (img.getAttribute('alt') || '').toLowerCase();
       const cls = ((img.className || '') + ' ' + (img.parentElement?.className || '')).toLowerCase();
       if (!/logo/.test(src + ' ' + alt + ' ' + cls)) continue;
       if (/payment|card|visa|master|paypal|app-store|google-play/.test(src + cls)) continue;   // footer payment marks are not logos
+      if (!url) {
+        if (!theme.brandName) continue;   // nothing to say — leave it rather than blank the header
+        const word = document.createElement('span');
+        word.className = 'merch-wordmark';
+        word.textContent = theme.brandName;
+        /* Inherit the header's own type, just heavier: the themes style their
+           logo slot by size, so a wordmark that sizes itself fits all four. */
+        word.style.cssText = 'display:inline-block;font-weight:700;font-size:22px;line-height:1.1;letter-spacing:.02em;white-space:nowrap;color:inherit;';
+        img.replaceWith(word);
+        continue;
+      }
       setAttr(img, 'src', url);
       if (img.hasAttribute('data-src')) setAttr(img, 'data-src', url);
       img.removeAttribute('srcset');
@@ -2227,7 +3220,8 @@ function paintStoreChrome(theme) {
   }
 
   if (theme.brandName && useStore('brandName')) {
-    document.title = document.title.replace(/^[^|\u2013-]+/, theme.brandName + ' ');
+    BRAND_NAME = theme.brandName;
+    setDocumentTitle();
     pickAll('.site-title|.brand-name|[data-brand-name]').forEach((el) => setText(el, theme.brandName));
   }
   if (theme.tagline && useStore('tagline')) pickAll('.site-tagline|[data-tagline]').forEach((el) => setText(el, theme.tagline));
@@ -2377,6 +3371,125 @@ function socialPlatformOf(a) {
   return null;
 }
 
+/* ⭐ THE BROWSER TAB SAID "HTML TEMPLATE". The old title rewrite replaced
+   only up to the first dash, which on these four themes left the vendor's own
+   marketing standing behind the shop's name:
+
+     Ekomart-Grocery-Store(e-Commerce) HTML Template
+       → FreshKart -Grocery-Store(e-Commerce) HTML Template
+     Corano - Jewelry Shop eCommerce Bootstrap 5 Template
+       → Zariya Jewels - Jewelry Shop eCommerce Bootstrap 5 Template
+
+   That string is the tab, the bookmark, the share card and the search result
+   — the first thing a client is shown. Nothing after the shop's name belongs
+   to the shop, so none of it is kept. */
+let BRAND_NAME = '';
+
+/* The theme's own name, taken from the title it shipped with — read before
+   anything rewrites it. */
+const TEMPLATE_BRAND = (() => {
+  /* Letters and digits only: `-` and `.` in the class made the token
+     "Ekomart-Grocery-Store" out of `Ekomart-Grocery-Store(e-Commerce) HTML
+     Template`, which matches nothing, so the copyright kept the vendor's
+     name. The four themes all name themselves in one word. */
+  const m = /^[A-Za-z][A-Za-z0-9&'’]*/.exec((document.title || '').trim());
+  const w = m ? m[0] : '';
+  /* A short token is a word, not a brand, and would match real copy. */
+  return w.length >= 4 ? w : '';
+})();
+
+function replaceTemplateBrand(brandName) {
+  const year = String(new Date().getFullYear());
+  const brand = (brandName || '').trim();
+  const swap = brand && TEMPLATE_BRAND && brand.toLowerCase() !== TEMPLATE_BRAND.toLowerCase();
+  if (!swap) return;
+  const re = new RegExp('\\b' + TEMPLATE_BRAND.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g');
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    acceptNode(n) {
+      const t = n.parentElement && n.parentElement.tagName;
+      if (t === 'SCRIPT' || t === 'STYLE' || t === 'TEXTAREA') return NodeFilter.FILTER_REJECT;
+      return re.test(n.nodeValue || '') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const hits = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) hits.push(n);
+  hits.forEach((n) => { n.nodeValue = n.nodeValue.replace(re, brand); });
+
+  /* A copyright year is a claim about the shop, and two of these themes ship
+     one that is already years stale. Only inside a line that is actually a
+     copyright notice — a bare year elsewhere may be a real date. */
+  $$('*').forEach((el) => {
+    if (el.children.length) return;
+    const txt = el.textContent || '';
+    if (!/©|copyright/i.test(txt)) return;
+    const fixed = txt.replace(/(?:19|20)\d{2}/g, year);
+    if (fixed !== txt) el.textContent = fixed;
+  });
+}
+
+function setDocumentTitle(subject) {
+  if (!BRAND_NAME) {
+    /* No brand configured: leave the theme's title rather than blanking the
+       tab — an empty title is worse than a wrong one. */
+    if (subject) document.title = subject;
+    return;
+  }
+  document.title = subject ? subject + ' | ' + BRAND_NAME : BRAND_NAME;
+}
+
+/* ⭐ NAMED MEDIA: THE SLOT FOR EVERYTHING THE SCHEMA DOES NOT MODEL. Banners,
+   category art and product photos each mean something to the shop and are
+   painted by the specs above. This is the rest — a video on an About page, a
+   size chart, a seasonal badge — which a front-end marks with
+   `data-merch-media="name"` on ANY element and the merchant fills in by name.
+
+   The element decides what to do with the URL, because a name is not a
+   paint instruction: an <img> takes a src, a <video> takes a source, a <div>
+   takes a background. A name with no row is left exactly as the page shipped
+   it rather than blanked — a front-end may ship a placeholder on purpose, and
+   a missing row is usually a merchant who has not got to it yet. */
+async function paintNamedMedia() {
+  let slots = [];
+  try { slots = $$('[data-merch-media]'); } catch { return; }
+  if (!slots.length) return;   // nothing on this page asks, so nothing is fetched
+  let map = null;
+  try { map = (await api.media())?.map || null; } catch (e) { warn('named media', e); return; }
+  if (!map) return;
+  /* Case-insensitive, because the admin stores the name folded and a front-end
+     may well have written it in camelCase. */
+  const lookup = {};
+  Object.keys(map).forEach((k) => { lookup[String(k).toLowerCase()] = map[k]; });
+
+  slots.forEach((el) => {
+    const name = (el.getAttribute('data-merch-media') || '').trim().toLowerCase();
+    if (!name) return;
+    const url = lookup[name];
+    if (!url) return;
+    const tag = el.tagName;
+    if (tag === 'IMG' || tag === 'SOURCE' || tag === 'IFRAME' || tag === 'EMBED') {
+      setAttr(el, 'src', url);
+      if (el.hasAttribute('data-src')) setAttr(el, 'data-src', url);
+      el.removeAttribute('srcset');
+    } else if (tag === 'VIDEO' || tag === 'AUDIO') {
+      /* A <video> with its own <source> children ignores a src attribute, so
+         point the sources instead and reload — setting src alone did nothing. */
+      const sources = pickAll('source', el);
+      if (sources.length) sources.forEach((sNode) => setAttr(sNode, 'src', url));
+      else setAttr(el, 'src', url);
+      try { el.load(); } catch { /* not every engine exposes it */ }
+    } else if (tag === 'A') {
+      setAttr(el, 'href', url);
+    } else if (tag === 'OBJECT') {
+      setAttr(el, 'data', url);
+    } else {
+      el.style.backgroundImage = 'url("' + url + '")';
+      if (!el.style.backgroundSize) el.style.backgroundSize = 'cover';
+      if (!el.style.backgroundPosition) el.style.backgroundPosition = 'center';
+    }
+    el.dataset.merchMediaSet = '1';
+  });
+}
+
 function paintSocialLinks(theme) {
   if (!useStore('social')) return;
   const wanted = new Map();
@@ -2410,6 +3523,24 @@ function paintSocialLinks(theme) {
     }
   }
   if (matched && !wanted.size) log('no social links set, so the theme\u2019s own icons were hidden');
+
+  /* ⭐ A LABEL WHOSE CONTENT WENT MUST GO TOO. Hiding every icon left the row's
+     own caption behind, so the quick view ended on a bare "Share:" followed by
+     nothing — which reads as a broken page rather than a shop that has no
+     social accounts. Any row we emptied is hidden whole; a row with even one
+     surviving link is left exactly as the designer built it. */
+  const rows = new Set();
+  for (const a of anchors) {
+    const row = a.closest('.share-social, [class*="social"], .tf-social-icon, .social-link');
+    if (row) rows.add(row);
+  }
+  for (const row of rows) {
+    const alive = [...row.querySelectorAll('a')].some((a) => {
+      const host = a.closest('li') || a;
+      return host.style.display !== 'none' && getComputedStyle(host).display !== 'none';
+    });
+    if (!alive) show(row, false);
+  }
 }
 
 function paintAnnouncement(theme) {
@@ -2477,9 +3608,43 @@ async function paintCurrencySwitcher() {
      appended to it again — four copies of the currency list in the topbar. */
   const labels = $$('a, span, button, div, li').filter((el) => {
     if (el.dataset.merchCurrency || el.closest('[data-merch-currency]')) return false;
+    if (el.closest('.nav-h_top.language, .language')) return false;
     const t = ownText(el);
     return t && t.length <= 34 && isLabel(t);
   });
+  const COUNTRY_RE = /united states|united kingdom|india|emirates|singapore|japan|canada|australia/i;
+  /* ⭐ A CONTROL THAT CANNOT BE MADE TRUE COMES OFF. These themes ship a
+     country-and-currency picker — "United States (USD $)" — and rewriting only
+     the currency half would read "United States (INR ₹)", which is worse. So
+     the old code left it alone, and a shop pricing in rupees and shipping from
+     Noida carried USD in its header against ₹ on every product below it.
+     Leaving it alone was never the third option: the control is the template's
+     and it does nothing, so it goes. */
+  const dropCountryPicker = (el) => {
+    /* The named wrapper FIRST. `closest` returns the nearest match in one
+       list, and on this theme the nearest was bootstrap-select's own
+       `.dropdown` — hiding that left `.tf-currencies` standing with a hole in
+       it. Ask for the real control, then fall back. */
+    const ctl = el.closest('.tf-currencies, .tf-languages, .header-currency, .currency-switcher')
+      || el.closest('li, .dropdown');
+    if (ctl) show(ctl, false);
+  };
+
+  /* ⭐ AND THE CONTROL IS A <select> UNTIL A PLUGIN REWRITES IT. This theme
+     ships `<select><option>United States (USD $)</option></select>` and
+     bootstrap-select replaces it with divs LATER, so a scan of a/span/div/li
+     finds nothing on our pass and the shop keeps USD in its header against ₹
+     on every product. Read the options too — they are there from parse time. */
+  $$('select').forEach((sel) => {
+    const txt = [...(sel.options || [])].map((o) => o.textContent || '').join(' ');
+    if (!CODE_RE.test(txt) || !COUNTRY_RE.test(txt)) return;
+    dropCountryPicker(sel);
+    /* bootstrap-select may already have built its replacement next to the
+       select; it is not a descendant, so it needs hiding on its own. */
+    const sib = sel.parentElement && sel.parentElement.querySelector('.bootstrap-select, .dropdown');
+    if (sib) show(sib, false);
+  });
+
   if (!labels.length) return;
 
   let list = null;
@@ -2494,7 +3659,7 @@ async function paintCurrencySwitcher() {
      worse lie than the one we are fixing. */
   const retitle = (el, cur) => {
     const t = ownText(el);
-    if (/united states|united kingdom|india|emirates|singapore|japan|canada|australia/i.test(t)) return;
+    if (COUNTRY_RE.test(t)) { dropCountryPicker(el); return; }
     let next = t.replace(CODE_RE, cur.code).replace(/[$£€₹]|د\.إ/g, cur.symbol || '');
     /* A label reading "$ Currency" carries no code, but its SYMBOL is still
        the template's dollar over a rupee shop. Swap the symbol, keep the word. */
@@ -2562,8 +3727,14 @@ function displayCurrencyFor(role) {
    it ships nothing, put the sentence where the grid was, unstyled. */
 function renderEmpty(container, message, spec) {
   if (!container) return;
-  const own = pick('.no-results|.empty-state|.wrap-empty_text|.cart-empty', container.parentElement || document);
-  if (own) { show(own, true); show(container, false); return; }
+  const searchRoot = container.closest?.('.order-table-account, .shipping-address-billing-address-account, .saved-addresses-col, .tab-pane, .table-responsive, .cart-area, .cart-section, .col-lg-7, .col-lg-6') || container.parentElement || document;
+  const own = pick('.no-results|.empty-state|.wrap-empty_text|.cart-empty', searchRoot);
+  if (own) {
+    show(own, true);
+    const hideTarget = container.closest?.('.table-responsive, table') || container;
+    show(hideTarget, false);
+    return;
+  }
 
   /* Take out the ITEMS and nothing else. Replacing everything in the
      container destroyed whatever else lived there — on the account page that
@@ -2595,6 +3766,9 @@ function renderEmpty(container, message, spec) {
 const hydrated = new WeakSet();
 
 function renderProducts(items, spec = THEME.listing, regionEl = null) {
+  /* Every product carries its colour AND that colour's hex, so learn the pair
+     here — this is the one place every product on every page passes through. */
+  rememberColourCodes(items);
   const region = regionEl || pick(spec.container) || document;
   const cards = realCards(spec, region);
   if (!cards.length) { log('no product template in this region'); return null; }
@@ -2656,18 +3830,8 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
    swatch reading "Beige" and a size run of S/M/L/XL. The pictures come from
    the product; the pickers are the template's clothing demo and come off. */
 function paintQuickViewExtras(panel, p) {
-  const miniImage = pick('.product-mini-view .img-product', panel);
-  if (miniImage && p.imageUrls?.[0]) setAttr(miniImage, 'src', mediaUrl(p.imageUrls[0]));
-  setText(pick('.product-mini-view .prd-name', panel), p.name);
-  const miniPrice = pick('.product-mini-view .price-new', panel);
-  if (miniPrice) setText(miniPrice, money(p.price));
-  const miniMrp = pick('.product-mini-view .price-old', panel);
-  if (miniMrp) {
-    setText(miniMrp, p.mrp == null ? '' : money(p.mrp));
-    show(miniMrp, p.mrp != null);
-  }
   const imgs = (p.imageUrls || []).filter(Boolean);
-  const items = pickAll('.mini-quick-image .item-scroll-quickview|.quickView-item|.tf-quick-view-image .item|.tf-quick-view-image .swiper-slide', panel);
+  const items = pickAll('.quickView-item|.tf-quick-view-image .item|.tf-quick-view-image .swiper-slide', panel);
   if (items.length && imgs.length) {
     items.forEach((item, i) => {
       if (i >= imgs.length) { remove(item); return; }     // six slots, two photos
@@ -2680,16 +3844,3555 @@ function paintQuickViewExtras(panel, p) {
       img.classList.remove('lazyload', 'lazyloading');
       img.classList.add('lazyloaded');
     });
-  } else if (!imgs.length) items.forEach(remove);
-  const quickAddButton = pick('.btn-action-price', panel);
-  if (quickAddButton) setText(quickAddButton, 'Add to cart');
-  /* The generic quick-view variant controls are separate from fashion's
-     quick pickers; remove them and paint the store's actual options below. */
+  }
+  /* Static swatches and sizes, hard-coded by the template. They describe a
+     dress, and nothing in the store backs them. */
   pickAll('.tf-product-info-choose-option|.tf-product-info-variant-picker', panel).forEach(remove);
 }
 
+let quickViewProduct = null;
+
+/* ⭐ A CONTROL PLACED OUTSIDE ITS PANEL MUST STILL BE ON SCREEN. These themes
+   park the quick view's close button at `right:-50px; top:-50px`, which works
+   for a dialog narrower than the window — and these panels open full-bleed, so
+   the button landed 50px past the right edge and 50px above the top. Off
+   screen, with the Escape key the only way left to shut the quick view, and
+   the panel appearing to overflow the viewport. Anything that still fits is
+   left exactly where the designer put it. */
+function keepPanelControlsOnScreen(panel) {
+  if (!panel) return;
+  const vw = document.documentElement.clientWidth;
+  pickAll('[class*="close"], .btn-close', panel).forEach((btn) => {
+    const cs = getComputedStyle(btn);
+    if (cs.position !== 'absolute' && cs.position !== 'fixed') return;
+    const r = btn.getBoundingClientRect();
+    if (r.width === 0) return;
+    if (r.right > vw - 2) { btn.style.right = '12px'; btn.style.left = 'auto'; }
+    if (r.top < 2) btn.style.top = '12px';
+  });
+
+  /* ⭐⭐ AND THE PANEL ITSELF MUST HOLD ITS OWN CONTENT. The quick view is sized
+     by the theme for its demo product — a short name, two lines of copy. A real
+     catalogue description, a category path and a SKU run longer, and the panel
+     has `max-height:none; overflow:visible`, so the extra simply spilled out of
+     the bottom of the box: the last rows rendered BELOW the modal, over the
+     page behind it, with "Share:" sliced in half by the panel's edge.
+
+     Measured on grocery at 1440×900: panel 520px tall, content 818px.
+
+     Height is released to auto first — a panel with a computed height cannot
+     grow — and only then capped and allowed to scroll, so a long product reads
+     inside the modal instead of outside it. Untouched when it already fits. */
+  /* ⚠ The INNER box, not the wrapper. `panel.matches('[class*="popup"]')` is
+     true for `.product-details-popup-WRAPPER`, which is the fixed, full-height
+     backdrop — nothing ever overflows that, so the check passed and the real
+     panel went on spilling its last rows onto the page behind it. */
+  const box = pick('.product-details-popup, .modal-content, .modal-dialog', panel) || panel;
+  const deepest = [...box.querySelectorAll('*')]
+    .reduce((m, e) => { const r = e.getBoundingClientRect(); return r.height && r.bottom > m ? r.bottom : m; }, 0);
+  const rect = box.getBoundingClientRect();
+  if (deepest > rect.bottom + 1) {
+    box.style.height = 'auto';
+    box.style.maxHeight = 'calc(100vh - 80px)';
+    box.style.overflowY = 'auto';
+    box.style.overflowX = 'hidden';
+  }
+}
+
+function wireQuickView() {
+  if (THEME?.name === 'fashion') return wireQuickViewFashion();
+  /* A theme can ship more than one of these — fashion has a Quick View
+     offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
+     the shopper opens has to be the product they clicked. */
+  const panels = [];
+  for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper:not(.in-shopdetails)', '.modal-quick-view']) {
+    $$(sel).forEach((el) => { if (!panels.includes(el)) panels.push(el); });
+  }
+  if (!panels.length || panels[0].dataset.merchQuickView) return;
+  panels.forEach((el) => { el.dataset.merchQuickView = '1'; });
+
+  /* The text fields only. Anything carrying an `action` is wired once, below,
+     against whichever product is currently showing — re-running wireAction per
+     open would either be ignored (it guards against double-wiring) or stack a
+     handler per open. */
+  const fields = Object.fromEntries(
+    Object.entries(THEME.product?.fields || {}).filter(([, f]) => f && !f.action),
+  );
+
+  document.addEventListener('click', async (e) => {
+    const trigger = e.target.closest(
+      '.quickview, .cta-quickview, .product-details-popup-btn, [data-quickview], ' +
+      'a[href="#quickView"], a[href="#quick_view"], a[href="#quickAdd"], ' +
+      '[data-bs-target="#quick_view"], [data-bs-target="#quickAdd"]',
+    );
+    if (!trigger) return;
+    const id = trigger.closest('[data-merch-id]')?.dataset.merchId;
+    if (!id) return;                       // a trigger on markup we never filled
+
+    try {
+      const p = await api.product(id);
+      quickViewProduct = p;
+      for (const panel of panels) {
+        fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
+        paintGalleryIn(panel, THEME.product?.gallery, p);
+        paintQuickViewExtras(panel, p);
+        /* After the theme has opened and laid the panel out, not before. */
+        setTimeout(() => keepPanelControlsOnScreen(panel), 0);
+        setTimeout(() => keepPanelControlsOnScreen(panel), 350);
+      }
+    } catch (err) { showError(err); }
+  }, true);                                 // capture, so we fill BEFORE the theme opens it
+
+  /* One handler for the panels' own buttons, reading whatever is showing. */
+  for (const modal of panels) modal.addEventListener('click', (e) => {
+    const add = e.target.closest('.btn-add-to-cart, .btn-action-price, .btn-cart2, .btn-cart, .rts-btn.btn-primary, .tf-btn');
+    if (!add || !quickViewProduct) return;
+    if (/wish/i.test(add.className)) return;
+    e.preventDefault();
+    const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
+    if (quickViewProduct.availability === 'out') return notify('That one is sold out.', 'error');
+    cart.add(quickViewProduct, qty);
+    notify(quickViewProduct.name + ' added to your cart.', 'success');
+    track('add_to_cart', { itemId: quickViewProduct.id, qty, via: 'quickview' });
+  });
+}
+
+/* ───────── COMPARE ─────────────────────────────────────────────────────────
+   Every theme ships a compare table, and nothing ever filled one. The action
+   toggles a local list and says "Added to compare", so the shopper is told it
+   worked — and then the table shows three women's tops at $25.00, $39.25 and
+   $12.00 on a grocery shop, the same three for every basket, forever.
+
+   The table is TRANSPOSED: one row per field, one COLUMN per product. So this
+   fills by column, and keys each row off its own label ("Preview", "Name",
+   "Price") rather than its position, because the themes order their rows
+   differently and a positional map silently writes the price into the name.
+
+   A row we cannot feed is removed rather than left showing the template's
+   value — the same rule as the countdown and the invented tax lines. */
+async function paintCompare() {
+  const spec = THEME?.compare;
+  if (!spec) return;
+  const host = pick(spec.container);
+  if (!host) return;
+
+  const rows = pickAll(spec.row, host);
+  if (!rows.length) return;
+
+  /* Capture the authored row markup ONCE. After the first paint the cells have
+     been rewritten or removed, so a later read would clone our own output. */
+  if (!COMPARE_TEMPLATE.has(host)) {
+    COMPARE_TEMPLATE.set(host, rows.map((r) => ({ row: r, cells: pickAll(spec.cell, r).map((c) => c.cloneNode(true)) })));
+  }
+  const tpl = COMPARE_TEMPLATE.get(host);
+
+  const ids = compare.ids();
+  let items = [];
+  if (ids.length) {
+    try { items = await api.products(ids); } catch (e) { warn('compare', e); return; }
+  }
+  /* Keep the shopper's own order, and drop anything the merchant has withdrawn. */
+  const byId = new Map((items || []).map((x) => [x.id, x]));
+  const picks = ids.map((id) => byId.get(id)).filter(Boolean);
+
+  host.dataset.merchCompare = String(picks.length);
+  const empty = spec.empty ? pick(spec.empty, host) : null;
+  if (empty) show(empty, picks.length === 0);
+  show(host, true);
+
+  for (const { row, cells } of tpl) {
+    const label = (pick(spec.label, row)?.textContent || '').trim().toLowerCase();
+    const field = spec.fields[label];
+    /* A row the catalogue cannot answer (a star rating, say) is taken out, not
+       left advertising the template's five stars against a real product. */
+    if (!field) { show(row, false); continue; }
+    show(row, picks.length > 0);
+    /* ⭐ KEEP THE TEMPLATE'S COLUMN COUNT. Appending one cell per product left
+       the designer's 4-column grid holding 2 children, so a single comparison
+       rendered hard against the right-hand edge with two empty columns beside
+       it. The slots the shopper has not filled are emptied, not removed. */
+    pickAll(spec.cell, row).forEach((c) => c.remove());
+    cells.forEach((tplCell, i) => {
+      const cell = tplCell.cloneNode(true);
+      const prod = picks[i];
+      const target = field.sel ? (pick(field.sel, cell) || cell) : cell;
+      if (!prod) {
+        /* An unused column keeps its box and loses its content — never the
+           template's picture or price. */
+        /* An <img> with no src still renders the browser's broken-image icon
+           and its alt text, so the unused column showed a torn page labelled
+           "grocery". Take the element out; keep the cell that holds the grid. */
+        if (target.tagName === 'IMG') target.remove();
+        else if (field.attr) setAttr(target, field.attr, '');
+        else setText(target, '');
+        cell.classList.add('merch-compare-empty');
+      } else {
+        if (field.attr) setAttr(target, field.attr, value(field.value, prod, { node: cell }));
+        else setText(target, value(field.text, prod, { node: cell }));
+        if (field.each) field.each(cell, prod);
+      }
+      row.appendChild(cell);
+    });
+  }
+}
+const COMPARE_TEMPLATE = new WeakMap();
+
+/* Repaint whenever a compare table could come into view: on the page that owns
+   one, and on the capture phase of any compare trigger — BEFORE the theme's own
+   handler opens the modal, so it is never seen holding the previous contents. */
+function wireCompare() {
+  if (!THEME?.compare) return;
+  paintCompare().catch((e) => warn('compare', e));
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-merch-action="compare"], .compare, [data-bs-target="#exampleModal"], a[href*="compare"]')) return;
+    /* After the toggle handler has run, so the list already includes this item. */
+    setTimeout(() => paintCompare().catch((err) => warn('compare', err)), 0);
+  }, true);
+}
+
+const pages = {};
+
+/* --- HOME ----------------------------------------------------------------
+   The home page is the MERCHANT's: /api/homepage returns their ordered
+   sections, already resolved. We map each section onto the rail the theme
+   already has in that position, so a merchant reordering their sections
+   reorders the shop without anyone touching HTML. */
+/* The jewellery theme's second card design — see THEMES.jewellery.groupRails.
+   Slick is already initialised by the time we have an answer (this theme's
+   main.js runs at parse time), and it has CLONED the slides for its infinite
+   loop. Painting in place would leave those clones showing template products,
+   which is what a shopper sees as soon as the rail advances — so unslick
+   first, which removes the clones and restores the authored DOM, then paint,
+   then re-init with the carousel's OWN captured options so the designer's
+   speed, arrows and breakpoints survive. */
+async function paintJewelleryGroupRails(data) {
+  const spec = THEME?.groupRails;
+  if (!spec) return;
+  const rails = $$(spec.container);
+  if (!rails.length) return;
+
+  /* Prefer the merchant's own curated sections; fall back to the catalogue so
+     a shop that has curated nothing still shows ITS products, never ours. */
+  let pool = (data?.sections || [])
+    .filter((sec) => (sec.products?.length || 0) > 0)
+    .flatMap((sec) => sec.products);
+  if (!pool.length) {
+    try {
+      const res = await api.catalog({ pageSize: 24 });
+      pool = Array.isArray(res) ? res : res?.products || [];
+    } catch (e) { warn('group rails catalogue', e); return; }
+  }
+  if (!pool.length) return;
+
+  const $ = window.jQuery || window.$;
+  rails.forEach((rail, i) => {
+    const slots = realCards(spec, rail).length || 8;
+    /* A different slice per rail: two rails showing the same eight products is
+       a worse lie than one rail, not a smaller one. */
+    const items = pool.slice((i * slots) % pool.length).concat(pool).slice(0, slots);
+    if (!items.length) return;
+    let opts = null;
+    const slick = $ && $.fn && $.fn.slick && rail.classList.contains('slick-initialized');
+    try { if (slick) { opts = $(rail).slick('getSlick').options; $(rail).slick('unslick'); } }
+    catch (e) { opts = null; warn('unslick', e); }
+    try { renderProducts(items, spec, rail); }
+    finally {
+      /* Re-init even if the paint threw: a carousel left unslicked is a broken
+         rail, which is worse than a rail showing the wrong pictures. */
+      try { if (slick && opts) $(rail).slick(opts); } catch (e) { warn('reslick', e); }
+    }
+  });
+}
+
+/* Standalone promo cards that sit beside a rail and name ONE product. A theme
+   that declares `promoPanels` gets them filled from its own catalogue; one that
+   does not is untouched.
+
+   Preference is a genuinely discounted line, because the panel says so — a
+   card headed "Products With Discounts" naming a full-price item is a smaller
+   lie than the template's, not a different kind. */
+async function paintPromoPanels(data) {
+  const spec = THEME?.promoPanels;
+  if (!spec) return;
+  const cards = $$(spec.card);
+  if (!cards.length) return;
+
+  let pool = (data?.sections || []).filter((s) => (s.products?.length || 0) > 0).flatMap((s) => s.products);
+  if (!pool.length) {
+    try {
+      const res = await api.catalog({ pageSize: 40 });
+      pool = Array.isArray(res) ? res : res?.products || [];
+    } catch (e) { warn('promo panels', e); return; }
+  }
+  const discounted = pool.filter((p) => Number(p.mrp) > Number(p.price));
+  const picks = (discounted.length >= cards.length ? discounted : pool);
+  if (!picks.length) return;
+
+  cards.forEach((card, i) => {
+    const p = picks[i % picks.length];
+    fillFields(card, spec.fields, p, { node: card });
+    /* The panel's own artwork is a theme file that may not exist, and its text
+       is written white. Put the PRODUCT behind it under a dark wash so the
+       heading reads whatever the picture turns out to be. */
+    const img = mediaUrl((p.imageUrls || [])[0] || '');
+    card.style.backgroundImage = img
+      ? `linear-gradient(90deg, rgba(17,24,39,.72) 0%, rgba(17,24,39,.35) 60%, rgba(17,24,39,.15) 100%), url(${img})`
+      : 'linear-gradient(120deg,#1f2937 0%,#374151 60%,#4b5563 100%)';
+    card.style.backgroundSize = 'cover';
+    card.style.backgroundPosition = 'center';
+  });
+}
+
+pages.home = async () => {
+  let data = null;
+  try { data = await api.homepage(); } catch (e) { warn('homepage', e); }
+
+  /* Look up the containers AFTER the fetch, never before it.
+
+     A theme whose main.js runs at parse time (jewellery's does — there is no
+     ready wrapper) has already handed its rails to Slick by the time our
+     answer arrives, and Slick REBUILDS the DOM: the elements we would have
+     captured a moment earlier are detached, so every render goes into a node
+     nobody can see. On that theme it left 93 of 99 products showing demo
+     prices, with no error anywhere.
+
+     A DOM reference held across an `await` is a reference to the page as it
+     WAS. Take it after. */
+  const rails = productContainers();
+  const filled = new Set();
+
+  /* The merchant's own ordered sections. These are the types the store
+     actually emits. A plausible guess like 'rail' or 'category-products'
+     matches NOTHING and leaves the whole home page showing demo products,
+     which looks exactly like a working shop. */
+  const PRODUCT_SECTIONS = new Set([
+    'featuredProducts', 'bestSellers', 'newArrivals', 'homepageProducts', 'recentlyViewed', 'categoryProducts',
+  ]);
+  const sections = (data?.sections || []).filter(
+    (sec) => PRODUCT_SECTIONS.has(sec.type) && ((sec.products?.length || 0) > 0 || (sec.groups?.length || 0) > 0),
+  );
+
+  /* One section per rail the theme ships, in the merchant's order. A theme
+     with more rails than the merchant has sections keeps its own content in
+     the extras rather than showing an empty strip. */
+  let railIndex = 0;
+  for (const sec of sections) {
+    const groups = sec.groups?.length ? sec.groups : [{ title: sec.title, products: sec.products || [] }];
+    for (const g of groups) {
+      const rail = rails[railIndex];
+      if (!rail) break;
+      const size = Math.min(24, Math.max(4, templateCount({ ...THEME.listing, el: rail }) || 8));
+      const items = (g.products || []).slice(0, size);
+      if (!items.length) continue;
+      renderProducts(items, THEME.listing, rail);
+      /* ⭐ THE GROUP'S NAME IS `name`, NOT `title`. A categoryProducts section
+         sends `{slug, name, products}` per group and carries no title of its
+         own, so `g.title || sec.title` was null for every group on every one
+         of these shops — and a null title makes setSectionHeading return at
+         its first line. Measured: four rails of the merchant's own products
+         under four headings the FURNITURE DEMO shipped. */
+      const railTitle = g.title || g.name || sec.title;
+      /* A rail behind a tab names its TAB, not the section: four panes share
+         one heading, so heading-setting there would have each pane overwrite
+         the last and leave one group's name standing for all four. */
+      if (!setTabLabel(rail, railTitle)) setSectionHeading(rail, railTitle);
+      filled.add(rail);
+      railIndex++;
+    }
+  }
+
+  /* No homepage sections configured at all: fill the first rail, so a shop is
+     never blank on its own front page. */
+  if (!railIndex && rails.length) {
+    try {
+      const size = Math.min(24, Math.max(4, templateCount({ ...THEME.listing, el: rails[0] }) || 8));
+      const res = await api.catalog({ pageSize: size });
+      renderProducts(Array.isArray(res) ? res : res.products || [], THEME.listing, rails[0]);
+    } catch (e) { warn(e); }
+  }
+
+  paintBanners(data);
+  paintCategoryTiles(data);
+  /* The electronic theme's home tabs — gated as its own copy gated them. */
+  if (THEME?.name === 'electronic') {
+    paintElectronicHomeTabs().catch((e) => warn('electronic home tabs', e));
+  }
+  if (THEME?.name === 'jewellery') {
+    await paintJewelleryGroupRails(data).catch((e) => warn('jewellery group rails', e));
+  }
+  await paintPromoPanels(data).catch((e) => warn('promo panels', e));
+  await paintEditorialBlocks(data).catch((e) => warn('editorial blocks', e));
+  await renderRecentlyViewed(rails[rails.length - 1]);
+  await paintBlogStrip(4);
+  wireQuickView();
+};
+
+/* The strip's own heading, which lives OUTSIDE the container. Searching from a
+   shared ancestor without that constraint finds a product card's `.title`
+   inside the strip and writes the section name into a product. */
+/* ⭐ A RAIL INSIDE A TAB PANE HAS TWO NAMES, and only one of them was ours.
+   The jewellery and electronic themes put four rails behind a tab strip, so
+   every pane filled with the merchant's products while the strip above still
+   read `Entertainment / Storage / Lying / Tables` — this theme family ships a
+   furniture demo. Four panes share one section heading, so setSectionHeading
+   cannot reach them: the label lives in the control that REVEALS the pane,
+   addressed by the pane's id. */
+function setTabLabel(container, title) {
+  const pane = container.closest?.('.tab-pane');
+  if (!pane || !pane.id) return false;
+  const id = pane.id;
+  let link = null;
+  try {
+    link = document.querySelector(
+      'a[href="#' + id + '"], [data-bs-target="#' + id + '"], [data-target="#' + id + '"]',
+    );
+  } catch { return false; }
+  if (!link) return false;
+  /* Found the tab but have nothing to call it: say so, so the caller does not
+     fall back to renaming the heading this pane shares with three others. */
+  if (!title) return true;
+  /* The anchor may wrap an icon or a counter; only the text it owns is the
+     label, so an anchor with element children is left alone rather than
+     flattened to a bare string. */
+  if (link.children.length) {
+    const own = [...link.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+    if (own) own.textContent = title;
+    return true;
+  }
+  setText(link, title);
+  return true;
+}
+
+function setSectionHeading(container, title) {
+  if (!title) return;
+  let scope = container;
+  for (let i = 0; i < 5 && scope.parentElement; i++) {
+    scope = scope.parentElement;
+    const heading = pickAll('h1|h2|h3|h4|.section-title|.title-area .title', scope)
+      .find((el) => !container.contains(el));
+    if (heading) { setText(heading, title); return; }
+    if (scope.matches('section, .rts-section, .section')) break;
+  }
+}
+
+/* The merchant's own hero artwork, copy and links — a `banner` section is
+   { id, title, imageUrl, imageMobileUrl, link, alt }. The slider is rebuilt
+   from the theme's own slide, so a merchant with one banner gets one slide and
+   a merchant with four gets four; the slider is built to handle any count, and
+   refreshSwipers() tells it what changed.
+
+   Left alone, a hero is the loudest lie on the page: full-width demo artwork
+   reading "Get up to 30% off on your first $150 purchase". */
+async function paintBanners(data) {
+  /* The hero is the loudest thing on the page, so it follows the flag: with
+     the template owning the look, its own artwork stays. */
+  if (!useStore('banners')) return;
+  let banners = (data?.sections || []).filter((x) => x.type === 'banner').flatMap((x) => x.banners || []);
+
+  /* No banner sections, but the merchant filled in the Hero block in
+     Appearance. It is the same thing wearing different field names, so it gets
+     the same slot rather than being ignored while the template's artwork
+     claims to be theirs. */
+  const hero = STORE?.hero;
+  if (!banners.length && hero && (hero.headline || hero.imageUrl)) {
+    banners = [{
+      title: hero.headline || '',
+      alt: hero.subtext || '',
+      imageUrl: hero.imageUrl || '',
+      link: hero.ctaHref || '/shop',
+    }];
+  }
+
+  // Fallback: If still no banners configured, dynamically generate from catalog products
+  if (!banners.length) {
+    try {
+      const cat = await api.catalog({ pageSize: 3 });
+      const prods = Array.isArray(cat) ? cat : cat?.products || [];
+      if (prods.length) {
+        banners = prods.slice(0, 3).map((prod) => ({
+          title: prod.name,
+          subtitle: prod.category || 'FEATURED',
+          imageUrl: (prod.imageUrls || [])[0] || prod.image || '',
+          link: productHref(prod),
+          alt: prod.name,
+        }));
+      }
+    } catch (_) {}
+  }
+
+  if (THEME?.name === 'electronic') {
+    const swSlideshow = pick('.tf-sw-slideshow');
+    const container = pick('.tf-sw-slideshow .swiper-wrapper, .tf-slideshow .swiper-wrapper');
+    if (container && banners.length) {
+      const sample = pick('.swiper-slide', container);
+      if (sample) {
+        const template = sample.cloneNode(true);
+        container.replaceChildren();
+
+        banners.forEach((b) => {
+          const slide = template.cloneNode(true);
+          const imgUrl = mediaUrl(b.imageUrl || b.imageMobileUrl || b.image || '');
+
+          // Image
+          const img = pick('.wrap-slider > img, img', slide);
+          if (img && imgUrl) {
+            img.src = imgUrl;
+            img.setAttribute('data-src', imgUrl);
+            img.removeAttribute('srcset');
+            img.classList.remove('lazyload', 'lazyloading');
+            img.classList.add('lazyloaded');
+            if (b.alt || b.title) img.alt = b.alt || b.title;
+          }
+
+          // Text fields
+          const titleText = b.title || (b.alt && b.alt !== 'This is banner' ? b.alt : '');
+          const subText = b.subtitle || b.subtext || '';
+          const descText = b.description || b.desc || '';
+          const linkUrl = storeLink(b.link);
+
+          const titleEl = pick('.title-display, .heading', slide);
+          if (titleEl) {
+            if (titleText) {
+              setText(titleEl, titleText);
+              show(titleEl, true);
+            } else {
+              show(titleEl, false);
+            }
+          }
+
+          const subEl = pick('.subtitle', slide);
+          if (subEl) {
+            if (subText) {
+              setText(subEl, subText);
+              show(subEl, true);
+            } else {
+              show(subEl, false);
+            }
+          }
+
+          const descEl = pick('.subheading', slide);
+          if (descEl) {
+            if (descText) {
+              setText(descEl, descText);
+              show(descEl, true);
+            } else {
+              show(descEl, false);
+            }
+          }
+
+          const btnEl = pick('.box-btn-slider a', slide);
+          const btnBox = pick('.box-btn-slider', slide);
+          if (btnEl) {
+            if (b.link && linkUrl !== '#') {
+              btnEl.setAttribute('href', linkUrl);
+              if (btnBox) show(btnBox, true);
+            } else if (titleText) {
+              btnEl.setAttribute('href', pageUrl('listing'));
+              if (btnBox) show(btnBox, true);
+            } else {
+              if (btnBox) show(btnBox, false);
+            }
+          }
+
+          const boxContent = pick('.box-content', slide);
+          if (boxContent) {
+            if (!titleText && !subText && !descText && (!b.link || linkUrl === '#')) {
+              show(boxContent, false);
+            } else {
+              show(boxContent, true);
+            }
+          }
+
+          const wrap = pick('.wrap-slider', slide);
+          if (wrap && b.link && linkUrl !== '#') {
+            wrap.style.cursor = 'pointer';
+            wrap.onclick = (e) => {
+              if (e.target.closest('a')) return;
+              location.href = linkUrl;
+            };
+          }
+
+          container.appendChild(slide);
+        });
+
+        refreshSwipers();
+        if (swSlideshow?.swiper) {
+          try {
+            if (typeof swSlideshow.swiper.loopDestroy === 'function') {
+              swSlideshow.swiper.loopDestroy();
+              swSlideshow.swiper.update();
+              if (typeof swSlideshow.swiper.loopCreate === 'function') swSlideshow.swiper.loopCreate();
+            } else {
+              swSlideshow.swiper.update();
+            }
+          } catch (_) {}
+        }
+        return;
+      }
+    }
+  }
+
+  const spec = THEME.banners;
+  if (!spec) return;
+  const t = takeTemplate(spec);
+  if (!t) return;
+  if (!banners.length) {
+    /* No banners configured: hide the hero rather than leave the theme's. */
+    const section = t.container.closest('section, .tf-slideshow, .slider-area, .rts-banner-area-one') || t.container;
+    show(section, false);
+    return;
+  }
+  repeat(t, banners, (node, b) => fillFields(node, spec.fields, b, { node }));
+  ensureBannerLegible(spec, t.container);
+  refreshSwipers();
+}
+
+/* ⭐ A HERO THAT CANNOT SHOW ITS ARTWORK MUST STILL BE READABLE.
+   `bg` only writes when the merchant supplied an image, so a store with hero
+   COPY but no PICTURE keeps the template's artwork — and on a theme whose
+   download is incomplete that file does not exist. The slide then renders
+   transparent and grocery's white headline sat on a white page: the shop's own
+   strapline, invisible, on the first screen anyone sees.
+
+   Two cases, one answer: no background at all, and a background whose file
+   404s. The second can only be known by asking for it, so we probe.
+
+   The ground is chosen from the HEADING's colour, never fixed: grocery writes
+   its hero text white and jewellery writes it near-black, so one hard-coded
+   ground would fix the first and break the second. */
+/* ⭐ TEXT OVER A PHOTOGRAPH THE MERCHANT CHOSE, NOT ONE THE THEME SHIPPED.
+   Every one of these themes lays its headings straight onto the artwork, with
+   a colour picked to suit the stock photo behind it — a dark grey over a pale
+   studio shot, a white over a dim one. The moment the picture comes from the
+   shop instead, that assumption is gone: measured on the jewellery home page,
+   `Bangles` in #555 sat on a black-background bangle photo and `Choker` sat on
+   a white one, both invisible, and the hero heading vanished into a bright
+   landscape. The fix is a scrim UNDER THE TEXT ONLY, so the product is still
+   the picture, sized to the text rather than the tile. */
+function ensureOverlayLegible(box, overImage) {
+  if (!box || box.dataset.merchScrim) return;
+  const cs = getComputedStyle(box);
+  /* A block in normal flow sits on the page's own ground and is already
+     legible; only an overlay is at the mercy of the photograph. `overImage`
+     is for the case the position test cannot see: the jewellery hero lays its
+     heading out in NORMAL FLOW inside a slide whose BACKGROUND is the picture,
+     so the text is over the photograph at `position: relative` and the guard
+     waved it through — the heading stayed invisible on a bright banner. */
+  if (!overImage && cs.position !== 'absolute' && cs.position !== 'fixed') return;
+  const probe = pick('h1,h2,h3,h4,h5,h6,p,span,a', box) || box;
+  const m = /rgba?\(([^)]+)\)/.exec(getComputedStyle(probe).color || '');
+  const rgb = m ? m[1].split(',').map((n) => parseFloat(n)) : null;
+  const lum = rgb ? (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255 : 0;
+  /* Light text needs a dark ground and vice versa. */
+  box.style.background = lum > 0.55
+    ? 'linear-gradient(to bottom, rgba(17,17,17,0.58), rgba(17,17,17,0.38))'
+    : 'linear-gradient(to bottom, rgba(255,255,255,0.86), rgba(255,255,255,0.72))';
+  /* The theme gave the box no padding because it had none to give — the text
+     floated free. A scrim with no padding crops the glyphs. */
+  if (!parseFloat(cs.paddingTop)) box.style.padding = '12px 16px';
+  box.style.borderRadius = '3px';
+  /* A hero text block is a full-width column, so a scrim sized to the BLOCK is
+     a pale band running the width of the photograph. Sized to the text it
+     reads as a deliberate panel. Only on this path: the tile overlays are
+     positioned boxes whose width the theme already chose. */
+  if (cs.position !== 'absolute' && cs.position !== 'fixed') {
+    box.style.width = 'fit-content';
+    box.style.maxWidth = '100%';
+  }
+  box.dataset.merchScrim = '1';
+}
+
+function ensureBannerLegible(spec, container) {
+  const DARK = 'linear-gradient(120deg,#1f2937 0%,#374151 55%,#4b5563 100%)';
+  const LIGHT = 'linear-gradient(120deg,#f1efea 0%,#e6e1d8 55%,#dcd6ca 100%)';
+  const luminance = (c) => {
+    const m = /rgba?\(([^)]+)\)/.exec(c || '');
+    if (!m) return null;
+    const [r, g, b] = m[1].split(',').map((n) => parseFloat(n));
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  };
+  pickAll(spec.card, container).forEach((card) => {
+    const el = (spec.fields && spec.fields.bg && spec.fields.bg.sel)
+      ? (pick(spec.fields.bg.sel, card) || card) : card;
+    const title = pick((spec.fields && spec.fields.title && spec.fields.title.sel) || 'h1,h2,h3', card);
+    const lum = title ? luminance(getComputedStyle(title).color) : null;
+    /* Light text needs a dark ground and vice versa; unknown falls to dark,
+       which is what every one of these themes writes its hero text against. */
+    const ground = (lum !== null && lum > 0.6) ? DARK : (lum !== null ? LIGHT : DARK);
+    const current = getComputedStyle(el).backgroundImage;
+    const url = /url\(["']?([^"')]+)/.exec(current || '');
+    if (!url) { el.style.backgroundImage = ground; return; }
+    const probe = new Image();
+    probe.onerror = () => { el.style.backgroundImage = ground; };
+    probe.src = url[1];
+    /* The image LOADS and the heading is still unreadable when the merchant's
+       photograph is busy where the theme's was empty — the branch above only
+       ever covered a broken one. */
+    if (title) ensureOverlayLegible(title.closest('[class*="content"], [class*="caption"], [class*="text"]') || title, true);
+  });
+}
+
+/* "Browse categories" — { slug, name, count, imageUrl }. Every theme ships a
+   strip of these pointing at demo pages; each one becomes a real filter. */
+/* ⭐ The electronic theme ships eleven circular category images and falls back to
+   them when a category has no picture of its own. Those files exist ONLY in that
+   theme, so applying the fallback everywhere made fashion and grocery request
+   `cls-electronic*.jpg` and 404 eleven times each. Electronic keeps its fallback;
+   the others leave the template's own image alone. */
+function categoryTileFallback(i) {
+  return THEME?.name === 'electronic'
+    ? `images/collections/collection-circle/cls-electronic${(i % 11) + 1}.jpg`
+    : '';
+}
+
+/* The theme's editorial collection blocks, filled from the merchant's own
+   categories — and any block that asserts data the catalogue cannot back,
+   removed. A connected store should show the SHOP, not the template: a
+   photograph of someone else's model over a price in someone else's currency
+   is the template talking, whatever section it sits in. */
+/* Blocks every one of these themes ships that assert something no catalogue
+   can back. Kept beside the per-theme list so a new theme inherits them. */
+const UNBACKED_EVERYWHERE = ['.pop-notice-sale'];
+
+/* ⭐ BLOCKS THAT ASSERT PEOPLE OR BRANDS, ON ANY PAGE OF ANY THEME. The home
+   page was swept per-theme and the ABOUT page was never looked at: jewellery's
+   carried twelve invented customer testimonials and four staff portraits,
+   electronic's four portraits and eighteen logos belonging to six companies
+   this shop has never heard of. A catalogue cannot back a face or a mark.
+
+   Each selector is paired with the test that saves it: a block we PAINTED
+   stays. That is what keeps the home page's brand strip — where the real
+   brand names were rendered — while removing the identical strip on About,
+   which merch never reached. */
+const UNBACKED_UNLESS_PAINTED = [
+  '[class*="testimonial"]',
+  '[class*="team-member"]', '[class*="single-team"]', '.team-area', '.our-team', '[class*="team-wrapper"]',
+  /* Electronic calls a staff portrait `.team-item` and its logo wall
+     `.tf-sw-partner`; neither matched the names the other themes use, so its
+     About page kept four portraits and eighteen companies' marks. */
+  '.team-item', '.tf-sw-partner', '[class*="partner"]',
+  '.brand-logo', '.brand-area', '[class*="brand-logo-carousel"]',
+];
+
+/* ⭐ PHOTOGRAPHY THE SHOP DID NOT TAKE, carried in CSS rather than in a tag.
+   A page-title strip, an About hero, a Contact banner, a product gallery thumb
+   — all set through `background-image`, so every <img> sweep walked straight
+   past them. Only folders that hold PHOTOGRAPHS are touched: icons, patterns
+   and textures are part of the theme's design and stay. */
+const ART_FOLDERS = /\/(banner|banners|section|about|contact|shop|team|grocery|slider|hero|product|products)\//i;
+
+function replaceTemplateArt() {
+  const banner = (STORE?.banners || []).find((b) => b && b.imageUrl);
+  const replacement = banner ? mediaUrl(banner.imageUrl) : '';
+  let nodes = [];
+  try { nodes = $$('*'); } catch { return; }
+  nodes.forEach((el) => {
+    if (el.dataset.merchArt) return;
+    const m = /url\(["']?([^"')]+)/.exec(getComputedStyle(el).backgroundImage || '');
+    if (!m) return;
+    const url = m[1];
+    if (/^(data:|blob:)/.test(url)) return;
+    if (/^https?:/.test(url) && !url.includes(location.host)) return;   // already the shop's own media
+    if (!ART_FOLDERS.test(url)) return;
+    /* Only "we filled THIS" protects it. Asking whether an ANCESTOR was
+       painted protected grocery's gallery thumbs — which sit inside a card we
+       did paint, and which merch never reached, so three broken template
+       backgrounds survived on every product page. */
+    if (el.querySelector('[data-merch-id]')) return;
+    el.dataset.merchArt = '1';
+    /* A page header is a frame for a title and reads badly empty, so it takes
+       the merchant's own banner where there is one. A gallery thumb makes a
+       claim about a PRODUCT, so it is cleared rather than filled with a
+       picture of something else. */
+    const header = /page-title|breadcrumb|page-header|banner/i.test(String(el.className || ''));
+    el.style.backgroundImage = (header && replacement) ? 'url("' + replacement + '")' : 'none';
+  });
+
+  /* ⭐ AND THE SAME PHOTOGRAPHS IN <img> TAGS. The sweep above reads
+     `background-image`, so an About hero, a staff portrait and the gallery
+     slides a product did not fill went untouched — they are plain tags. */
+  let imgs = [];
+  try { imgs = $$('img'); } catch { return; }
+  imgs.forEach((img) => {
+    if (img.dataset.merchArt || img.hasAttribute('data-merch-id')) return;
+    const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
+    if (!src || /^(data:|blob:)/.test(src)) return;
+    if (/^https?:/.test(src) && !src.includes(location.host)) return;
+    if (!ART_FOLDERS.test(src)) return;
+    img.dataset.merchArt = '1';
+    /* A face is a person this shop does not employ — there is no honest
+       substitute, so it goes. A hero frames a page and is better carrying the
+       merchant's own banner than nothing. Everything else (gallery slides a
+       product did not fill) is a claim about a product, so it goes too. */
+    const hero = /banner|hero|about/i.test(src) && !/\/team\//i.test(src);
+    if (hero && replacement) {
+      setAttr(img, 'src', replacement);
+      if (img.hasAttribute('data-src')) setAttr(img, 'data-src', replacement);
+      img.removeAttribute('srcset');
+      return;
+    }
+    remove(img);
+  });
+}
+
+/* ⭐ THIS CANNOT RUN WITH THE EARLY SWEEP. `sweepUnbacked` fires before the
+   page painter, so at that moment NOTHING is painted — including the home
+   page's brand strip, which `brandTiles` fills a moment later. Running it
+   there hid the strip and then painted the real brand names into a hidden
+   element. "Unless painted" is only a true test AFTER painting. */
+function sweepUnbackedUnlessPainted() {
+  for (const sel of UNBACKED_UNLESS_PAINTED) {
+    let nodes = [];
+    try { nodes = $$(sel); } catch { continue; }
+    nodes.forEach((n) => {
+      /* Painted by us, or carrying a name we rendered in place of a logo. */
+      if (n.querySelector('[data-merch-id], .merch-brand-name')) return;
+      if (n.closest('[data-merch-id]')) return;
+      show(n, false);
+      collapseEmptiedBand(n);
+    });
+  }
+}
+
+async function paintEditorialBlocks(data) {
+  const specs = [].concat(THEME?.lookbook || []);
+  if (specs.length) {
+    let cats = (data?.sections || []).filter((x) => x.type === 'browseCategories').flatMap((x) => x.categories || []);
+    if (!cats.length) {
+      const raw = await getCategories();
+      cats = (raw || []).map((c) => (typeof c === 'string' ? { name: c } : c));
+    }
+    const withArt = cats.filter((c) => c && c.name);
+    for (const spec of specs) {
+      pickAll(spec.card).forEach((card, i) => {
+        const c = withArt[i % (withArt.length || 1)];
+        /* No category to show here means the block cannot be made true — and
+           the theme's own photograph is not an acceptable stand-in. */
+        if (!c) { show(card, false); collapseEmptiedBand(card); return; }
+        fillFields(card, spec.fields, c, { node: card });
+        if (spec.scrim) pickAll(spec.scrim, card).forEach((b) => ensureOverlayLegible(b, true));
+      });
+    }
+  }
+
+  /* Brand tiles, where the theme ships a logo strip. */
+  const bspec = THEME?.brandTiles;
+  if (bspec) {
+    const brands = (data?.sections || []).filter((x) => x.type === 'brandsCarousel').flatMap((x) => x.brands || []);
+    /* ⭐ THE TWO BLOCKS HAVE TO FAIL THE SAME WAY. When the homepage call came
+       back without its sections — the upstream catalogue 500s now and then —
+       the tiles above hid themselves and this strip did nothing, so the page
+       showed an empty band AND seventeen of the theme vendor's logos. Seen
+       once on jewellery and correct on the next load, which is exactly how a
+       store comes to look fixed one day and not the next.
+
+       No brands is not "leave the template's brands". */
+    pickAll(bspec.card).forEach((card, i) => {
+      const b = brands.length ? brands[i % brands.length] : null;
+      if (!b) { show(card, false); collapseEmptiedBand(card); return; }
+      fillFields(card, bspec.fields, b, { node: card });
+    });
+  }
+
+  sweepUnbacked();
+}
+
+/* ⭐ THE UNBACKED SWEEP RUNS ON EVERY PAGE, not just the home page. Two of
+   these blocks are CHROME: this theme family parks promo banners inside the
+   navigation mega-menu and in the listing sidebar, so they sit on all 40-odd
+   pages. Measured on a connected shop: the home page came back clean while
+   `shop.html` still showed three of the template's own photographs, because
+   the sweep lived inside the home painter. */
+function sweepUnbacked() {
+  for (const sel of [].concat(UNBACKED_EVERYWHERE, THEME?.unbacked || [])) {
+    let nodes = [];
+    try { nodes = $$(sel); } catch { continue; }   // :has() is unsupported on older engines
+    nodes.forEach((n) => { show(n, false); collapseEmptiedBand(n); });
+  }
+
+  /* ⭐ FABRICATED SOCIAL PROOF, wherever it is phrased. These themes ship a
+     "someone just bought this" toast — a named person, a product and a time,
+     all invented, over a picture from the template. It is the one piece of
+     template content that states a FACT about the shop: that a sale happened.
+     Matched by its sentence as well as its class, because each theme names the
+     widget differently and only the wording is reliably the same. */
+  const claimRe = /\b(has|just)\s+(purchas|bought|order)/i;
+  $$('[class*="notice"], [class*="notif"], [class*="popup"], [class*="toast"], [class*="sale"]').forEach((el) => {
+    if (!claimRe.test(el.textContent || '')) return;
+    if (el.querySelector('[data-merch-id]')) return;   // a real order we painted
+    show(el, false);
+  });
+}
+
+async function paintCategoryTiles(data) {
+  let cats = (data?.sections || [])
+    .filter((x) => x.type === 'browseCategories')
+    .flatMap((x) => x.categories || []);
+  if (!cats.length) {
+    const raw = await getCategories();
+    if (raw?.length) {
+      cats = raw.map((c, i) => {
+        const name = typeof c === 'string' ? c : c.name;
+        const img = (typeof c === 'object' && c.imageUrl) ? c.imageUrl : categoryTileFallback(i);
+        return { name, slug: name, imageUrl: img };
+      });
+    }
+  }
+  const spec = THEME.categories;
+  if (!spec || !cats.length) return;
+  const targetContainers = spec.container ? pickAll(spec.container) : productContainers(spec);
+  for (const el of targetContainers) {
+    const t = takeTemplate({ ...spec, el });
+    if (!t) continue;
+    /* Never more tiles than the strip was laid out for: these sit on one row,
+       and forty of them is not a design. */
+    const room = Math.max(1, templateCount({ ...spec, el }));
+    repeat(t, cats.slice(0, Math.max(room, Math.min(cats.length, room * 2))), (node, c, i) => {
+      fillFields(node, spec.fields, c, { node, index: i });
+      const img = node.querySelector('a.img-style img, img');
+      if (img) {
+        const src = c.imageUrl || categoryTileFallback(i);
+        if (src) {
+          img.src = src;
+          img.setAttribute('data-src', src);
+          img.classList.remove('lazyload');
+          img.classList.add('lazyloaded');
+        }
+      }
+    });
+  }
+  refreshSwipers();
+}
+
+/* Blog posts on pages outside the blog archive - e.g. the home page's
+   "Latest Blog Post Insights" strip. Shown with at most `max` posts (default 4). */
+const hydratedBlogs = new WeakSet();
+async function paintBlogStrip(max = 4) {
+  const spec = THEME?.blog;
+  if (!spec) return;
+  const cards = pickAll(spec.card);
+  if (!cards.length) return;
+
+  const containers = productContainers(spec).filter((el) => !hydratedBlogs.has(el));
+  if (!containers.length) return;
+
+  let posts = [];
+  try { posts = (await api.blog()) || []; } catch (e) { return warn('blog strip', e); }
+
+  if (!posts.length) {
+    containers.forEach((el) => show(el.closest('section, .section, .rts-section, .blog-area-start') || el, false));
+    return;
+  }
+
+  for (const el of containers) {
+    hydratedBlogs.add(el);
+    const t = takeTemplate({ ...spec, el });
+    if (!t) continue;
+    repeat(t, posts.slice(0, max), (node, post) => {
+      node.dataset.merchSlug = post.slug;
+      fillFields(node, spec.fields, post, { node });
+    });
+  }
+}
+
+/* A banner's link may be absolute, a mailto/tel, or a store-relative path. The
+   two paths the store owns are mapped onto THIS theme's pages; anything else
+   is left exactly as the merchant wrote it. */
+function storeLink(link) {
+  if (!link) return '#';
+  if (/^(https?:|mailto:|tel:)/i.test(link)) return link;
+
+  const collection = link.match(/^\/collections\/([^/?#]+)/);
+  if (collection) return pageUrl('listing', { collection: collection[1] });
+  const product = link.match(/^\/product\/([^/?#]+)/);
+  if (product) return pageUrl('product', { id: product[1] });
+  const category = link.match(/^\/(?:shop|category|collections)\/?$/) ? '' : null;
+  if (category !== null) return pageUrl('listing');
+
+  /* The merchant writes these against their OWN storefront's routes. Left as
+     sent, a hero button reading "Shop Now" goes to /shop — a 404 on a folder
+     of static pages. Map the ones the store owns; leave the rest alone, since
+     a merchant may well be linking somewhere real. */
+  const known = { '/cart': 'cart', '/checkout': 'checkout', '/account': 'account', '/orders': 'orders', '/track': 'track', '/wishlist': 'wishlist', '/blog': 'blog' };
+  const role = known[link.replace(/\/$/, '')];
+  if (role) return pageUrl(role);
+  return link;
+}
+
+async function renderRecentlyViewed(container) {
+  if (!container) return;
+  try {
+    const seen = (await api.recentlyViewed(sessionId(), 8))?.products || [];
+    /* Worth a rail only once there is something in it. On a first visit a
+       strip of "recently viewed" products the shopper has never seen is a lie. */
+    if (seen.length >= 2) renderProducts(seen, THEME.listing, container);
+  } catch { /* a rail that will not load simply stays as the theme shipped it */ }
+}
+
+/* --- LISTING -------------------------------------------------------------
+   Search, category, brand, sort, price and in-stock, all held in the URL so a
+   filtered grid can be linked, bookmarked and gone Back to. */
+pages.listing = async () => {
+  /* A listing page usually ships the SAME products twice — once as a grid and
+     once as a list, behind the theme's own view toggle. Hydrating only the
+     first leaves the other showing demo data, one click away.
+
+     The theme's own grid also decides the page size: a page laid out for 15
+     cards asks for 15. */
+  /* Measured before the first fetch only to size the request; the containers
+     themselves are looked up again after every answer, because the theme's own
+     scripts may rebuild them in between (see pages.home). */
+  const pageSize = Math.min(60, Math.max(8, Math.max(
+    0, ...pickAll(THEME.listing.container).map((el) => templateCount({ ...THEME.listing, el })),
+  ) || 24));
+
+  const state = {
+    q: param('q') || '',
+    category: param('category') || '',
+    brand: param('brand') || '',
+    color: param('color') || '',
+    size: param('size') || '',
+    collection: param('collection') || '',
+    sort: param('sort') || '',
+    minPrice: param('minPrice') || '',
+    maxPrice: param('maxPrice') || '',
+    inStock: param('inStock') === 'true',
+    page: Number(param('page') || 1),
+  };
+
+  const run = async () => {
+    let res;
+    try {
+      res = state.collection
+        ? (await api.collection(state.collection)).products
+        : await api.catalog({
+            /* The store calls it `search`. A `q=` is silently IGNORED, which
+               reads as "the shop has everything": a narrowing question
+               answered with the full catalogue. */
+            search: state.q || undefined,
+            pageSize,
+            category: state.category || undefined,
+            brand: state.brand || undefined,
+            sort: state.sort || undefined,
+            minPrice: state.minPrice || undefined,
+            maxPrice: state.maxPrice || undefined,
+            inStock: state.inStock || undefined,
+            color: state.color || undefined,
+            size: state.size || undefined,
+            page: state.page > 1 ? state.page : undefined,
+          });
+    } catch (e) { showError(e); return; }
+    const items = Array.isArray(res) ? res : (res.products || res.items || []);
+    for (const grid of pickAll(THEME.listing.container)) renderProducts(items, THEME.listing, grid);
+    wireQuickView();
+    const total = await paintResultCount(items, state, pageSize);
+    renderPagination(total, state, run, pageSize);
+    THEME.reinit?.();
+  };
+
+  wireHorizontalFilterBar(state, run, null);
+  wireSearchInputs((q) => { state.q = q; state.page = 1; pushState(state); run(); });
+  wireSortSelects((sort) => { state.sort = sort; state.page = 1; pushState(state); run(); });
+  wireCategoryLinks();
+  wirePagination(state, run, pageSize);
+  wirePriceFilter(state, run);
+  wireStockFilter(state, run);
+  await paintFilters(state, run);
+  await run();
+};
+
+/* Render responsive dynamic pagination controls */
+function renderPagination(total, state, run, pageSize) {
+  const pager = pick('.pagination-area-main-wrappper, .pagination-area, .pagination, ul.wg-pagination');
+  if (!pager) return;
+  const ul = pager.tagName === 'UL' ? pager : pager.querySelector('ul');
+  if (!ul) return;
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(Math.max(1, state.page || 1), totalPages);
+
+  let startPage = Math.max(1, curPage - 2);
+  let endPage = Math.min(totalPages, startPage + 4);
+  if (endPage - startPage < 4) {
+    startPage = Math.max(1, endPage - 4);
+  }
+
+  const isWgPagination = ul.classList.contains('wg-pagination') || pager.classList.contains('wg-pagination');
+  if (isWgPagination) {
+    let html = '';
+    if (curPage > 1) {
+      html += `<li><a href="#" class="pagination-item text-button prev-page" data-page="${curPage - 1}"><i class="icon-arrLeft"></i></a></li>`;
+    }
+    if (startPage > 1) {
+      html += `<li><a href="#" class="pagination-item text-button page-num" data-page="1">1</a></li>`;
+      if (startPage > 2) html += `<li><span class="pagination-item text-button" style="border:none;">...</span></li>`;
+    }
+    for (let p = startPage; p <= endPage; p++) {
+      if (p === curPage) {
+        html += `<li class="active"><div class="pagination-item text-button">${p}</div></li>`;
+      } else {
+        html += `<li><a href="#" class="pagination-item text-button page-num" data-page="${p}">${p}</a></li>`;
+      }
+    }
+    if (endPage < totalPages) {
+      if (endPage < totalPages - 1) html += `<li><span class="pagination-item text-button" style="border:none;">...</span></li>`;
+      html += `<li><a href="#" class="pagination-item text-button page-num" data-page="${totalPages}">${totalPages}</a></li>`;
+    }
+    if (curPage < totalPages) {
+      html += `<li><a href="#" class="pagination-item text-button next-page" data-page="${curPage + 1}"><i class="icon-arrRight"></i></a></li>`;
+    }
+    ul.innerHTML = html;
+    ul.querySelectorAll('[data-page]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const p = Number(btn.dataset.page);
+        if (p && p !== curPage) {
+          state.page = p;
+          pushState(state);
+          run();
+          const topEl = document.querySelector('.wrapper-shop, .tf-grid-layout') || document.body;
+          topEl.scrollIntoView({ behavior: 'smooth' });
+        }
+      });
+    });
+    return;
+  }
+
+  let html = '';
+  html += `<li><button type="button" class="prev-page ${curPage <= 1 ? 'disabled' : ''}" ${curPage <= 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''} aria-label="Previous"><i class="fa-regular fa-chevron-left"></i></button></li>`;
+
+  if (startPage > 1) {
+    html += `<li><button type="button" class="page-num" data-page="1">1</button></li>`;
+    if (startPage > 2) {
+      html += `<li><span style="display:inline-block;padding:0 5px;color:#999;">...</span></li>`;
+    }
+  }
+
+  for (let p = startPage; p <= endPage; p++) {
+    html += `<li><button type="button" class="page-num ${p === curPage ? 'active' : ''}" data-page="${p}">${p}</button></li>`;
+  }
+
+  if (endPage < totalPages) {
+    if (endPage < totalPages - 1) {
+      html += `<li><span style="display:inline-block;padding:0 5px;color:#999;">...</span></li>`;
+    }
+    html += `<li><button type="button" class="page-num" data-page="${totalPages}">${totalPages}</button></li>`;
+  }
+
+  html += `<li><button type="button" class="next-page ${curPage >= totalPages ? 'disabled' : ''}" ${curPage >= totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''} aria-label="Next"><i class="fa-regular fa-chevron-right"></i></button></li>`;
+
+  ul.innerHTML = html;
+
+  ul.querySelectorAll('button.page-num').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const p = Number(btn.dataset.page);
+      if (p && p !== curPage) {
+        state.page = p;
+        pushState(state);
+        run();
+        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+        topEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  });
+
+  const prevBtn = ul.querySelector('button.prev-page:not(.disabled)');
+  if (prevBtn) {
+    prevBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (curPage > 1) {
+        state.page = curPage - 1;
+        pushState(state);
+        run();
+        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+        topEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  }
+
+  const nextBtn = ul.querySelector('button.next-page:not(.disabled)');
+  if (nextBtn) {
+    nextBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (curPage < totalPages) {
+        state.page = curPage + 1;
+        pushState(state);
+        run();
+        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+        topEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  }
+}
+
+/* Helper to sync horizontal filter bar with state */
+function syncHorizontalDropdownFromState(state) {
+  const bar = pick('.nice-select-area-wrapper-and-button');
+  if (!bar) return;
+
+  const types = [
+    { type: 'category', stateVal: state.category || '', defaultLabel: 'All Categories' },
+    { type: 'brand',    stateVal: state.brand || '',    defaultLabel: 'All Brands' },
+    { type: 'size',     stateVal: state.size || '',     defaultLabel: 'All Size' },
+    { type: 'weight',   stateVal: state.size || '',     defaultLabel: 'All Weight' },
+  ];
+
+  types.forEach(({ type, stateVal, defaultLabel }) => {
+    const dd = bar.querySelector(`.filter-dropdown[data-filter-type="${type}"]`);
+    if (!dd) return;
+
+    const toggle = dd.querySelector('.filter-dropdown-toggle');
+    const toggleText = dd.querySelector('.toggle-text');
+    let matchedItem = null;
+
+    dd.querySelectorAll('.filter-check').forEach((chk) => {
+      const isMatch = stateVal && (
+        chk.value.toLowerCase() === stateVal.toLowerCase() ||
+        (chk.dataset.slug && chk.dataset.slug.toLowerCase() === stateVal.toLowerCase()) ||
+        (chk.dataset.name && chk.dataset.name.toLowerCase() === stateVal.toLowerCase())
+      );
+      chk.checked = !!isMatch;
+      const itemRow = chk.closest('.filter-dropdown-item');
+      if (itemRow) {
+        if (isMatch) {
+          itemRow.classList.add('checked');
+          matchedItem = chk;
+        } else {
+          itemRow.classList.remove('checked');
+        }
+      }
+    });
+
+    if (matchedItem && stateVal) {
+      const labelText = matchedItem.closest('.filter-dropdown-item')?.querySelector('.item-text')?.textContent || stateVal;
+      if (toggleText) toggleText.textContent = labelText;
+      if (toggle) toggle.classList.add('has-value');
+    } else {
+      if (type === 'size' || type === 'weight') {
+        const hasAny = dd.querySelector('.filter-check:checked');
+        if (!hasAny) {
+          if (toggleText) toggleText.textContent = defaultLabel;
+          if (toggle) toggle.classList.remove('has-value');
+        }
+      } else {
+        if (toggleText) toggleText.textContent = defaultLabel;
+        if (toggle) toggle.classList.remove('has-value');
+      }
+    }
+  });
+}
+
+/* Helper to sync sidebar checkboxes when horizontal bar is changed */
+function syncSidebarCheckboxes(filterKey, value) {
+  const normVal = (value || '').toLowerCase().trim();
+  const rx = filterKey === 'category' ? /categor/i :
+             filterKey === 'brand' ? /brand|manufacturer/i : /size|weight/i;
+  const scope = filterGroupScope(rx);
+  if (!scope) return;
+
+  scope.querySelectorAll('input[type="checkbox"]').forEach((chk) => {
+    const row = chk.closest('label, li, .single-category') || chk.parentElement;
+    const txt = (row?.textContent || '').replace(/\(\d+\)/g, '').toLowerCase().trim();
+    if (normVal && txt === normVal) {
+      chk.checked = true;
+    } else {
+      chk.checked = false;
+    }
+  });
+}
+
+/* Wire horizontal filter bar with categories, brands, size, weight */
+function wireHorizontalFilterBar(state, run, facets) {
+  const bar = pick('.nice-select-area-wrapper-and-button');
+  if (!bar) return;
+
+  // 1. If the bar contains old <select> elements, transform them into custom .filter-dropdown structures
+  const dropdownConfigs = [
+    { type: 'category', defaultLabel: 'All Categories', searchPlaceholder: 'Search category...' },
+    { type: 'brand',    defaultLabel: 'All Brands',     searchPlaceholder: 'Search brand...' },
+    { type: 'size',     defaultLabel: 'All Size',       searchPlaceholder: 'Search size...' },
+    { type: 'weight',   defaultLabel: 'All Weight',     searchPlaceholder: 'Search weight...' },
+  ];
+
+  bar.querySelectorAll('.single-select').forEach((container, idx) => {
+    const cfg = dropdownConfigs[idx] || { type: 'filter-' + idx, defaultLabel: 'Filter', searchPlaceholder: 'Search...' };
+    if (!container.classList.contains('filter-dropdown')) {
+      container.classList.add('filter-dropdown');
+      container.setAttribute('data-filter-type', cfg.type);
+    }
+    const select = container.querySelector('select');
+    if (select && !container.querySelector('.filter-dropdown-toggle')) {
+      const options = [...select.options].filter((o) => o.value && !o.disabled);
+      let itemsHtml = '';
+      options.forEach((opt) => {
+        itemsHtml += `
+          <label class="filter-dropdown-item">
+            <input type="checkbox" class="filter-check" value="${escapeHtml(opt.value)}">
+            <span class="item-text">${escapeHtml(opt.text || opt.value)}</span>
+          </label>`;
+      });
+      container.innerHTML = `
+        <button type="button" class="filter-dropdown-toggle">
+          <span class="toggle-text">${escapeHtml(cfg.defaultLabel)}</span>
+          <i class="fa-regular fa-chevron-down"></i>
+        </button>
+        <div class="filter-dropdown-menu">
+          <div class="filter-dropdown-header-bar">
+            <input type="text" class="filter-dropdown-search" placeholder="${escapeHtml(cfg.searchPlaceholder)}">
+            <button type="button" class="btn-clear-dropdown" title="Clear filter">Clear</button>
+          </div>
+          <div class="filter-dropdown-list">
+            ${itemsHtml}
+          </div>
+        </div>`;
+    }
+  });
+
+  // 2. If facets are provided, dynamically populate/refresh the lists
+  if (facets) {
+    const catDd = bar.querySelector('.filter-dropdown[data-filter-type="category"] .filter-dropdown-list');
+    if (catDd && facets.categories && facets.categories.length) {
+      let html = '';
+      facets.categories.forEach((c) => {
+        html += `
+          <label class="filter-dropdown-item">
+            <input type="checkbox" class="filter-check" value="${escapeHtml(c.name)}">
+            <span class="item-text">${escapeHtml(c.name)}</span>
+            <span class="item-count">(${c.count})</span>
+          </label>`;
+      });
+      catDd.innerHTML = html;
+    }
+
+    const brandDd = bar.querySelector('.filter-dropdown[data-filter-type="brand"] .filter-dropdown-list');
+    if (brandDd && facets.brands && facets.brands.length) {
+      let html = '';
+      facets.brands.forEach((b) => {
+        const val = b.slug || b.name;
+        html += `
+          <label class="filter-dropdown-item">
+            <input type="checkbox" class="filter-check" value="${escapeHtml(val)}" data-name="${escapeHtml(b.name)}" data-slug="${escapeHtml(b.slug || '')}">
+            <span class="item-text">${escapeHtml(b.name)}</span>
+            <span class="item-count">(${b.count})</span>
+          </label>`;
+      });
+      brandDd.innerHTML = html;
+    }
+
+    const sizeAttr = (facets.attributes || []).find((a) => (a.key || '').toLowerCase() === 'size');
+    if (sizeAttr && sizeAttr.values && sizeAttr.values.length) {
+      const sizeDd = bar.querySelector('.filter-dropdown[data-filter-type="size"] .filter-dropdown-list');
+      if (sizeDd) {
+        let html = '';
+        const sizes = sizeAttr.values.filter((v) => !/^\d+\s*(gm|kg|ltr|ml)$/i.test(v.value.trim())).slice(0, 40);
+        const listToUse = sizes.length ? sizes : sizeAttr.values.slice(0, 40);
+        listToUse.forEach((s) => {
+          html += `
+            <label class="filter-dropdown-item">
+              <input type="checkbox" class="filter-check" value="${escapeHtml(s.value)}">
+              <span class="item-text">${escapeHtml(s.value)}</span>
+              <span class="item-count">(${s.count})</span>
+            </label>`;
+        });
+        sizeDd.innerHTML = html;
+      }
+
+      const weightDd = bar.querySelector('.filter-dropdown[data-filter-type="weight"] .filter-dropdown-list');
+      if (weightDd) {
+        const weights = sizeAttr.values.filter((v) => /gm|kg|ltr|ml/i.test(v.value)).slice(0, 40);
+        if (weights.length) {
+          let html = '';
+          weights.forEach((w) => {
+            html += `
+              <label class="filter-dropdown-item">
+                <input type="checkbox" class="filter-check" value="${escapeHtml(w.value)}">
+                <span class="item-text">${escapeHtml(w.value)}</span>
+                <span class="item-count">(${w.count})</span>
+              </label>`;
+          });
+          weightDd.innerHTML = html;
+        }
+      }
+    }
+  }
+
+  // 3. Setup event listeners on each dropdown
+  bar.querySelectorAll('.filter-dropdown').forEach((dd) => {
+    const filterType = dd.getAttribute('data-filter-type');
+    const toggle = dd.querySelector('.filter-dropdown-toggle');
+    const searchInput = dd.querySelector('.filter-dropdown-search');
+    const clearBtn = dd.querySelector('.btn-clear-dropdown');
+    const list = dd.querySelector('.filter-dropdown-list');
+
+    // Toggle open / close
+    if (toggle && !toggle.__wiredToggle) {
+      toggle.__wiredToggle = true;
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wasActive = dd.classList.contains('active');
+        bar.querySelectorAll('.filter-dropdown.active').forEach((other) => {
+          if (other !== dd) other.classList.remove('active');
+        });
+        dd.classList.toggle('active', !wasActive);
+        if (!wasActive && searchInput) {
+          setTimeout(() => searchInput.focus(), 50);
+        }
+      });
+    }
+
+    // Stop propagation inside menu
+    const menu = dd.querySelector('.filter-dropdown-menu');
+    if (menu && !menu.__wiredMenu) {
+      menu.__wiredMenu = true;
+      menu.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
+    }
+
+    // Search inside dropdown
+    if (searchInput && !searchInput.__wiredSearch) {
+      searchInput.__wiredSearch = true;
+      searchInput.addEventListener('input', () => {
+        const q = searchInput.value.toLowerCase().trim();
+        const items = list?.querySelectorAll('.filter-dropdown-item') || [];
+        let visibleCount = 0;
+        items.forEach((item) => {
+          const text = item.querySelector('.item-text')?.textContent.toLowerCase() || '';
+          const match = text.includes(q);
+          item.style.display = match ? 'flex' : 'none';
+          if (match) visibleCount++;
+        });
+
+        let emptyMsg = list?.querySelector('.filter-empty-message');
+        if (visibleCount === 0) {
+          if (!emptyMsg) {
+            emptyMsg = document.createElement('div');
+            emptyMsg.className = 'filter-empty-message';
+            emptyMsg.textContent = 'No matching options found';
+            list?.appendChild(emptyMsg);
+          }
+          emptyMsg.style.display = 'block';
+        } else if (emptyMsg) {
+          emptyMsg.style.display = 'none';
+        }
+      });
+    }
+
+    // Checkbox change event (INSTANT FILTERING ON SELECT)
+    if (list && !list.__wiredCheckChange) {
+      list.__wiredCheckChange = true;
+      list.addEventListener('change', (e) => {
+        const target = e.target;
+        if (!target || !target.classList.contains('filter-check')) return;
+
+        const isChecked = target.checked;
+        const val = target.value;
+
+        // Uncheck all other checkboxes in this dropdown
+        list.querySelectorAll('.filter-check').forEach((chk) => {
+          if (chk !== target) {
+            chk.checked = false;
+            chk.closest('.filter-dropdown-item')?.classList.remove('checked');
+          }
+        });
+
+        const row = target.closest('.filter-dropdown-item');
+        if (isChecked) {
+          row?.classList.add('checked');
+        } else {
+          row?.classList.remove('checked');
+        }
+
+        // Also if this is size or weight, uncheck the other one because state.size is shared
+        if (filterType === 'size') {
+          const weightDd = bar.querySelector('.filter-dropdown[data-filter-type="weight"]');
+          weightDd?.querySelectorAll('.filter-check').forEach((c) => {
+            c.checked = false;
+            c.closest('.filter-dropdown-item')?.classList.remove('checked');
+          });
+          const weightToggle = weightDd?.querySelector('.filter-dropdown-toggle');
+          const weightText = weightDd?.querySelector('.toggle-text');
+          if (weightText) weightText.textContent = 'All Weight';
+          weightToggle?.classList.remove('has-value');
+        } else if (filterType === 'weight') {
+          const sizeDd = bar.querySelector('.filter-dropdown[data-filter-type="size"]');
+          sizeDd?.querySelectorAll('.filter-check').forEach((c) => {
+            c.checked = false;
+            c.closest('.filter-dropdown-item')?.classList.remove('checked');
+          });
+          const sizeToggle = sizeDd?.querySelector('.filter-dropdown-toggle');
+          const sizeText = sizeDd?.querySelector('.toggle-text');
+          if (sizeText) sizeText.textContent = 'All Size';
+          sizeToggle?.classList.remove('has-value');
+        }
+
+        // Update state
+        if (filterType === 'category') {
+          state.category = isChecked ? val : '';
+        } else if (filterType === 'brand') {
+          state.brand = isChecked ? val : '';
+        } else if (filterType === 'size' || filterType === 'weight') {
+          state.size = isChecked ? val : '';
+        }
+
+        // Sync button text & highlight
+        const toggleText = dd.querySelector('.toggle-text');
+        const defaultLabel = filterType === 'category' ? 'All Categories' :
+                             filterType === 'brand' ? 'All Brands' :
+                             filterType === 'size' ? 'All Size' : 'All Weight';
+
+        if (isChecked) {
+          const labelName = row?.querySelector('.item-text')?.textContent || val;
+          if (toggleText) toggleText.textContent = labelName;
+          toggle?.classList.add('has-value');
+        } else {
+          if (toggleText) toggleText.textContent = defaultLabel;
+          toggle?.classList.remove('has-value');
+        }
+
+        // Sync sidebar checkboxes
+        syncSidebarCheckboxes(filterType, isChecked ? val : '');
+
+        // Trigger INSTANT FILTER
+        state.page = 1;
+        pushState(state);
+        run();
+      });
+    }
+
+    // Clear button inside dropdown
+    if (clearBtn && !clearBtn.__wiredClear) {
+      clearBtn.__wiredClear = true;
+      clearBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        list?.querySelectorAll('.filter-check').forEach((chk) => {
+          chk.checked = false;
+          chk.closest('.filter-dropdown-item')?.classList.remove('checked');
+        });
+
+        if (searchInput) {
+          searchInput.value = '';
+          searchInput.dispatchEvent(new Event('input'));
+        }
+
+        const defaultLabel = filterType === 'category' ? 'All Categories' :
+                             filterType === 'brand' ? 'All Brands' :
+                             filterType === 'size' ? 'All Size' : 'All Weight';
+        const toggleText = dd.querySelector('.toggle-text');
+        if (toggleText) toggleText.textContent = defaultLabel;
+        toggle?.classList.remove('has-value');
+
+        if (filterType === 'category') state.category = '';
+        else if (filterType === 'brand') state.brand = '';
+        else if (filterType === 'size' || filterType === 'weight') state.size = '';
+
+        syncSidebarCheckboxes(filterType, '');
+
+        state.page = 1;
+        pushState(state);
+        run();
+      });
+    }
+  });
+
+  // Global click outside to close open dropdowns
+  if (!window.__filterDropdownGlobalWired) {
+    window.__filterDropdownGlobalWired = true;
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.filter-dropdown')) {
+        document.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        document.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+      }
+    });
+  }
+
+  // Initial sync with state (e.g. from URL params or page reload)
+  syncHorizontalDropdownFromState(state);
+
+  // Apply Filter Button
+  const filterBtn = bar.querySelector('.btn-filter-apply, .button-area button:first-child');
+  if (filterBtn && !filterBtn.__wiredFilter) {
+    filterBtn.__wiredFilter = true;
+    filterBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      bar.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+      state.page = 1;
+      pushState(state);
+      run();
+      const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+      topEl.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
+
+  // Reset Filter Button
+  const resetBtn = bar.querySelector('.btn-filter-reset, .button-area button:last-child');
+  if (resetBtn && !resetBtn.__wiredReset) {
+    resetBtn.__wiredReset = true;
+    resetBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      bar.querySelectorAll('.filter-dropdown.active').forEach((d) => d.classList.remove('active'));
+
+      // Uncheck all checkboxes in all horizontal dropdowns
+      bar.querySelectorAll('.filter-check').forEach((chk) => {
+        chk.checked = false;
+        chk.closest('.filter-dropdown-item')?.classList.remove('checked');
+      });
+
+      // Reset search inputs
+      bar.querySelectorAll('.filter-dropdown-search').forEach((s) => {
+        s.value = '';
+        s.dispatchEvent(new Event('input'));
+      });
+
+      // Reset labels & highlight classes
+      bar.querySelectorAll('.filter-dropdown').forEach((d) => {
+        const type = d.getAttribute('data-filter-type');
+        const defaultLabel = type === 'category' ? 'All Categories' :
+                             type === 'brand' ? 'All Brands' :
+                             type === 'size' ? 'All Size' : 'All Weight';
+        const txt = d.querySelector('.toggle-text');
+        if (txt) txt.textContent = defaultLabel;
+        d.querySelector('.filter-dropdown-toggle')?.classList.remove('has-value');
+      });
+
+      // Uncheck all sidebar checkboxes
+      document.querySelectorAll('.single-filter-box input[type="checkbox"]').forEach((i) => { i.checked = false; });
+
+      // Reset state
+      state.category = '';
+      state.brand = '';
+      state.size = '';
+      state.color = '';
+      state.minPrice = '';
+      state.maxPrice = '';
+      state.page = 1;
+      pushState(state);
+      run();
+      const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+      topEl.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
+}
+
+/* Every theme ships a static pager. We keep its markup and give its numbers
+   meaning; a page beyond the last simply comes back empty, which the store
+   answers honestly rather than by wrapping around. */
+function wirePagination(state, run, pageSize) {
+  const pager = pick('.pagination|.pagination-area|.wd-navigation|.page-numbers');
+  if (!pager) return;
+  const links = pickAll('a, li', pager).filter((el) => /^\d+$|prev|next|\u2039|\u203A/i.test((el.textContent || '').trim()));
+  for (const el of links) {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const label = (el.textContent || '').trim().toLowerCase();
+      if (/prev|\u2039/.test(label)) state.page = Math.max(1, state.page - 1);
+      else if (/next|\u203A/.test(label)) state.page += 1;
+      else if (/^\d+$/.test(label)) state.page = Number(label);
+      else return;
+      pushState(state);
+      run();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  }
+}
+
+/* The price slider every one of these themes ships. We read whatever it ends
+   up with rather than driving it, because each theme uses a different widget
+   and re-implementing four of them would change how they feel. */
+function wirePriceFilter(state, run) {
+  const apply = pick('.price-input-area button, .filter-value-min-max button, .price-filter button, .filter-btn');
+  const from = pick('.price-range .from|#slider-range-value1|input[name="min_price"]|#min');
+  const to = pick('.price-range .to|#slider-range-value2|input[name="max_price"]|#max');
+  if (!apply || (!from && !to)) return;
+  apply.addEventListener('click', (e) => {
+    e.preventDefault();
+    const num = (el) => { const n = Number(String(el?.textContent || el?.value || '').replace(/[^\d.]/g, '')); return Number.isFinite(n) && n > 0 ? n : ''; };
+    state.minPrice = num(from);
+    state.maxPrice = num(to);
+    state.page = 1;
+    pushState(state);
+    run();
+  });
+}
+
+/* /api/catalog answers a plain array with no total, so the honest number for
+   "N products found" comes from the facets endpoint, which counts the same
+   filter. Without it we would print the PAGE size and call it the total. */
+async function paintResultCount(items, state, pageSize) {
+  /* Themes write this as a sentence in an unnamed <span> ("Showing 1-20 of 57
+     results"), so the reliable way to find it is the SENTENCE, not a class.
+     Left alone it keeps announcing the demo's 57 products forever. */
+  const named = pickAll(THEME.resultCount);
+  const sentence = named.length ? named : $$('*').filter(
+    (el) => el.children.length === 0 && /showing\s+[\d,]+\s*[-\u2013]\s*[\d,]+\s+of\s+[\d,]+/i.test(el.textContent || ''),
+  );
+
+  let total = items.length;
+  try {
+    const f = await api.facets({
+      search: state.q || undefined,
+      category: state.category || undefined,
+      brand: state.brand || undefined,
+      inStock: state.inStock || undefined,
+    });
+    if (Number.isFinite(f?.total)) total = f.total;
+  } catch { /* the page count is a fair fallback */ }
+
+  const from = items.length ? (state.page - 1) * pageSize + 1 : 0;
+  const to = (state.page - 1) * pageSize + items.length;
+  if (sentence.length) {
+    sentence.forEach((el) => setText(el, 'Showing ' + from + '\u2013' + to + ' of ' + total + ' results'));
+  }
+  return total;
+}
+
+function pushState(state) {
+  const url = new URL(location.href);
+  for (const [k, v] of Object.entries(state)) {
+    if (v === '' || v === false || v === 1) url.searchParams.delete(k);
+    else url.searchParams.set(k, String(v));
+  }
+  history.replaceState(null, '', url);
+}
+
+/* Themes put a search box in the header of every page. One handler covers all
+   of them, on every page, and sends the shopper to this theme's listing. */
+function wireSearchInputs(onSearch) {
+  const inputs = pickAll('input[placeholder*="Search" i]|input[type="search"]|.header-search-field|.form-search-select input|.form-search input');
+  for (const input of inputs) {
+    const form = input.closest('form');
+    const go = (e) => {
+      e.preventDefault();
+      const q = input.value.trim();
+      if (onSearch) onSearch(q);
+      else location.href = pageUrl('listing', { q });
+    };
+    if (form) {
+      form.addEventListener('submit', go);
+      const btn = form.querySelector('button');
+      if (btn) btn.addEventListener('click', go);
+    }
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(e); });
+  }
+}
+
+function wireSortSelects(onSort) {
+  /* The store accepts price_asc, price_desc and name — nothing else. A theme's
+     "Best selling" option has nothing behind it, so it sorts by name rather
+     than sending a value the store will ignore. */
+  const map = {
+    'price, low to high': 'price_asc', 'price: low to high': 'price_asc', 'low to high': 'price_asc', 'price-low-high': 'price_asc',
+    'price, high to low': 'price_desc', 'price: high to low': 'price_desc', 'high to low': 'price_desc', 'price-high-low': 'price_desc',
+    'alphabetically, a-z': 'name', 'name': 'name', 'a to z': 'name', 'alphabetically-a-z': 'name',
+    'alphabetically, z-a': 'name', 'alphabetically-z-a': 'name',
+    'best selling': 'name', 'best-selling': 'name',
+  };
+  pickAll('select.sort|select[name="sort"]|.sort-by select|.nice-select').forEach((sel) => {
+    sel.addEventListener('change', () => {
+      const label = (sel.options?.[sel.selectedIndex]?.text || '').trim().toLowerCase();
+      onSort(map[label] || '');
+    });
+  });
+  /* Themes that render sorting as a list of links or select-items in a dropdown. */
+  pickAll('.sort-list a|.dropdown-menu a[data-sort]|.tf-dropdown-sort .select-item|.dropdown-menu .select-item').forEach((item) => {
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      const val = item.dataset.sortValue || item.dataset.sort || (item.textContent || '').trim().toLowerCase();
+      const mapped = map[val.toLowerCase()] || map[(item.textContent || '').trim().toLowerCase()] || '';
+      const parentDropdown = item.closest('.tf-dropdown-sort');
+      if (parentDropdown) {
+        parentDropdown.querySelectorAll('.select-item').forEach((si) => si.classList.remove('active'));
+        item.classList.add('active');
+        const textValEl = parentDropdown.querySelector('.text-sort-value');
+        if (textValEl) setText(textValEl, (item.querySelector('.text-value-item') || item).textContent.trim());
+      }
+      onSort(mapped);
+    });
+  });
+}
+
+let headerCategoriesPainted = false;
+let categoriesPromise = null;
+function getCategories() {
+  if (!categoriesPromise) categoriesPromise = api.categories().catch(() => []);
+  return categoriesPromise;
+}
+
+function paintHeaderCategories(cats) {
+  if (headerCategoriesPainted || !cats?.length) return;
+
+  // 1. Grocery theme menus
+  const menus = [...new Set(document.querySelectorAll('.category-btn > ul.category-sub-menu, #category-active-four, #category-active-menu'))];
+  if (menus.length) {
+    const html = cats.map((cat, i) => {
+      const name = typeof cat === 'string' ? cat : cat.name;
+      const iconNum = String((i % 10) + 1).padStart(2, '0');
+      const href = pageUrl('listing', { category: name });
+      return `<li><a href="${escapeHtml(href)}" class="menu-item"><img src="assets/images/icons/${iconNum}.svg" alt="icons"><span>${escapeHtml(name)}</span></a></li>`;
+    }).join('');
+    menus.forEach((menu) => {
+      menu.innerHTML = html;
+    });
+  }
+
+  // 2. Electronic theme desktop header dropdown
+  const tfCategoriesList = pick('.tf-list-categories .list-categories-inner > ul');
+  if (tfCategoriesList) {
+    tfCategoriesList.style.maxHeight = '380px';
+    tfCategoriesList.style.overflowY = 'auto';
+    tfCategoriesList.style.overflowX = 'hidden';
+    tfCategoriesList.innerHTML = cats.map((cat) => {
+      const name = typeof cat === 'string' ? cat : cat.name;
+      const href = pageUrl('listing', { category: name });
+      const icon = categoryIcon(name);
+      return `<li><a href="${escapeHtml(href)}" class="categories-item"><span class="inner-left"><i class="icon ${icon}"></i> ${escapeHtml(name)}</span><i class="icon icon-arrRight"></i></a></li>`;
+    }).join('');
+    const bottomCate = pick('.tf-list-categories .box-cate-bottom');
+    if (bottomCate) bottomCate.style.display = 'none';
+  }
+
+  // 3. Electronic theme mobile offcanvas categories drawer #shopCategories
+  const shopCategoriesCanvas = pick('#shopCategories .canvas-body');
+  if (shopCategoriesCanvas) {
+    shopCategoriesCanvas.innerHTML = `
+      <div class="wd-facet-categories p-3">
+        <ul class="facet-body">
+          ${cats.map((cat) => {
+            const name = typeof cat === 'string' ? cat : cat.name;
+            const href = pageUrl('listing', { category: name });
+            const icon = categoryIcon(name);
+            return `
+              <li class="mb-2">
+                <a href="${escapeHtml(href)}" class="d-flex align-items-center justify-content-between p-2 rounded" style="color: inherit; text-decoration: none; border-bottom: 1px solid #f1f5f9;">
+                  <span><i class="icon ${icon} me-2"></i> ${escapeHtml(name)}</span>
+                  <i class="icon icon-arrRight"></i>
+                </a>
+              </li>
+            `;
+          }).join('')}
+        </ul>
+      </div>
+    `;
+  }
+
+  // 4. Electronic theme mobile menu navigation #mobileMenu #wrapper-menu-navigation
+  const mbNav = pick('#mobileMenu #wrapper-menu-navigation');
+  if (mbNav && !mbNav.querySelector('#dropdown-menu-categories')) {
+    const catLi = document.createElement('li');
+    catLi.className = 'nav-mb-item';
+    catLi.innerHTML = `
+      <a href="#dropdown-menu-categories" class="collapsed mb-menu-link" data-bs-toggle="collapse" aria-expanded="false" aria-controls="dropdown-menu-categories">
+        <span>Categories</span>
+        <span class="btn-open-sub"></span>
+      </a>
+      <div id="dropdown-menu-categories" class="collapse">
+        <ul class="sub-nav-menu">
+          ${cats.map((cat) => {
+            const name = typeof cat === 'string' ? cat : cat.name;
+            const href = pageUrl('listing', { category: name });
+            return `<li><a href="${escapeHtml(href)}" class="sub-nav-link">${escapeHtml(name)}</a></li>`;
+          }).join('')}
+        </ul>
+      </div>
+    `;
+    const firstLi = mbNav.firstElementChild;
+    if (firstLi && firstLi.nextElementSibling) {
+      mbNav.insertBefore(catLi, firstLi.nextElementSibling);
+    } else {
+      mbNav.appendChild(catLi);
+    }
+  }
+
+  // 5. Electronic theme desktop mega menu under "Shop"
+  pickAll('.mega-menu-item').forEach((item) => {
+    const heading = pick('.menu-heading', item);
+    if (heading && /Shop Features/i.test(heading.textContent || '')) {
+      heading.textContent = 'Categories';
+      const list = pick('ul.menu-list', item);
+      if (list) {
+        list.innerHTML = cats.map((cat) => {
+          const name = typeof cat === 'string' ? cat : cat.name;
+          const href = pageUrl('listing', { category: name });
+          return `<li><a href="${escapeHtml(href)}" class="menu-link-text">${escapeHtml(name)}</a></li>`;
+        }).join('');
+      }
+    }
+  });
+
+  // 6. Electronic theme mega menu recent products swiper (.tf-product-header)
+  const headerProdSwiper = pick('.tf-product-header .swiper-wrapper');
+  if (headerProdSwiper && !headerProdSwiper._merchFilled) {
+    headerProdSwiper._merchFilled = true;
+    api.catalog({ pageSize: 4 }).then((res) => {
+      const prods = Array.isArray(res) ? res : res?.products || [];
+      if (prods.length) {
+        renderProducts(prods, THEME.listing, headerProdSwiper);
+        hydrated.add(headerProdSwiper);
+      }
+    }).catch(() => {});
+  }
+
+  headerCategoriesPainted = true;
+}
+
+/* The category menus in every theme's header are static links to demo pages.
+   Point them at the real categories without touching how they look. */
+async function wireCategoryLinks() {
+  let cats = [];
+  try { cats = await getCategories(); } catch { return; }
+  /* This endpoint answers an array of plain STRINGS — category names, which
+     are also what ?category= takes. There is no id or slug to look up. */
+  if (!cats?.length) return;
+  paintHeaderCategories(cats);
+  const known = new Map(cats.map((name) => [String(name).trim().toLowerCase(), name]));
+  pickAll('.menu-item a|.sub-menu a|.category-list a|.single-category a|.categories a').forEach((a) => {
+    const name = known.get((a.textContent || '').trim().toLowerCase());
+    if (name) a.setAttribute('href', pageUrl('listing', { category: name }));
+  });
+}
+
+/* --- PRODUCT -------------------------------------------------------------
+   One product. The gallery, the variants, the reviews and the add button.
+   `?id=` says which; without one we show the store's first product rather
+   than leaving the theme's demo copy on screen pretending to be real. */
+pages.product = async () => {
+  const id = param('id');
+  let p;
+  try {
+    const first = id ? null : await api.catalog({ pageSize: 1 });
+    p = id ? await api.product(id) : (Array.isArray(first) ? first : first?.products || [])[0];
+  } catch (e) { return showError(e); }
+  if (!p) return;
+
+  const spec = THEME.product;
+  fillFields(document, spec.fields, p, { node: document, qtyEl: pick(THEME.qtyInput) });
+  setDocumentTitle(p.name);
+
+  paintBreadcrumbs(p);
+  paintGallery(spec.gallery, p);
+  await paintVariants(spec, p);
+  paintProductUniques(p);
+  paintProductTabs(p);
+  /* Both no-op without the electronic theme's own selectors. */
+  paintStickyAtcBar(p);
+  wireProductDetailCartFlow(p);
+  await paintReviews(p);
+  await paintRelated(p);
+
+  /* Tell the store it was seen, so the shopper's own recently-viewed rail
+     fills as they browse. Best-effort: a failure here must never break a PDP. */
+  try { wireReviewForm(p); } catch (e) { warn('review form', e); }
+  api.recordView(p.id, sessionId()).catch(() => {});
+  track('product_view', { itemId: p.id });
+  THEME.reinit?.();
+  onThemeReady(() => paintPriceButtons(p));
+};
+
+function paintBreadcrumbs(p) {
+  const wrapper = pick('.tf-breadcrumb-list, .navigator-breadcrumb-wrapper, .breadcrumbs');
+  if (wrapper) {
+    const catLink = pick('.breadcrumb-cat, a:nth-of-type(2)', wrapper);
+    if (catLink && p.category) {
+      setText(catLink, p.category);
+      catLink.setAttribute('href', pageUrl('listing', { category: p.category }));
+    }
+    /* ⭐ THE LAST CRUMB IS NOT ALWAYS A <span>. Fashion closes its trail with
+       `<p class="text-caption-01">`, which none of these matched, so the
+       breadcrumb read "Home > Varsity > Lyocell Wrap Top" over a page showing
+       the JUXAR varsity jacket — the category was this shop's and the product
+       was the template's. Fall back to the last element that carries text and
+       is not a link or a separator icon. */
+    let prodLink = pick('.breadcrumb-prod, .current, span:last-child, p:last-of-type', wrapper);
+    if (!prodLink) {
+      prodLink = [...wrapper.children].reverse().find(
+        (el) => el.tagName !== 'A' && el.tagName !== 'I' && (el.textContent || '').trim(),
+      ) || null;
+    }
+    if (prodLink) {
+      setText(prodLink, p.name);
+      if (prodLink.tagName === 'A') prodLink.setAttribute('href', 'javascript:void(0);');
+    }
+  }
+  const catTag = pick('.tf-product-info-name .text, .product-catagory');
+  if (catTag && p.category) {
+    catTag.innerHTML = `<a href="${escapeHtml(pageUrl('listing', { category: p.category }))}" style="color: inherit; text-decoration: none;">${escapeHtml(p.category)}</a>`;
+  }
+  const backBtn = pick('.tf-breadcrumb-back');
+  if (backBtn) backBtn.href = p.category ? pageUrl('listing', { category: p.category }) : pageUrl('listing');
+  pickAll('.tf-breadcrumb-prev, .tf-breadcrumb-next').forEach((el) => show(el, false));
+}
+
+/* Any control whose LABEL carries the price. The theme rewrites these from the
+   price element after it loads, so they are corrected here, last. */
+function paintPriceButtons(p) {
+  /* EVERY one of these, not the first selector that matches something —
+     `pickAll` stops at the first non-empty list, which left the sticky bar
+     still offering "Add To Cart - $79.99" under a ₹468 product. */
+  const buttons = new Set();
+  for (const sel of ['.btn-action-price', '.btn-add-to-cart', '.btn-main-product']) {
+    $$(sel).forEach((el) => buttons.add(el));
+  }
+  for (const btn of buttons) {
+    if (btn.closest('.tf-sticky-btn-atc, #quickView, #quick_view, #quickAdd, .modal-quick-view, .tf-minicart-recommendations, .tf-product-info-wrap, .tf-product-info-by-btn')) continue;
+    if (!/add to (cart|bag)/i.test(btn.textContent || '')) continue;
+    setText(btn, 'Add to cart' + (p.availability === 'out' ? '' : ' - ' + money(p.price)));
+    wireAction(btn, 'add', p, { node: document });
+  }
+}
+
+/* Galleries are the one place where the number of nodes matters: a theme's
+   slider was built around N images. We rewrite the first N and drop the rest,
+   which keeps the slider's own arrows and counters honest. */
+function paintGalleryIn(root, gallery, p) {
+  if (!gallery) return;
+  const scoped = {
+    images: gallery.images, thumbs: gallery.thumbs,
+  };
+  const within = (sel) => pickAll(sel, root);
+  paintGallery(scoped, p, within);
+}
+
+function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
+  if (!gallery) return;
+  const urls = (p.imageUrls || []).map(mediaUrl);
+  if (!urls.length) return;
+
+  // Grocery interactive zoom gallery with dynamic thumbnails
+  const thumbArea = pick('.product-thumb-area');
+  const filterGroup = pick('.product-thumb-filter-group', thumbArea || document);
+  if (thumbArea && filterGroup) {
+    const existingWrappers = pickAll('.thumb-wrapper', thumbArea);
+    existingWrappers.forEach((el) => remove(el));
+    filterGroup.replaceChildren();
+
+    urls.forEach((url, i) => {
+      const wrapper = document.createElement('div');
+      wrapper.className = `thumb-wrapper thumb-idx-${i} filterd-items ${i === 0 ? 'figure' : 'hide'}`;
+      wrapper.innerHTML = `
+        <div class="product-thumb zoom" onmousemove="zoom(event)" style="background-image: url('${url}')">
+          <img src="${url}" alt="${escapeHtml(p.name)}">
+        </div>
+      `;
+      thumbArea.insertBefore(wrapper, filterGroup);
+
+      if (urls.length > 1) {
+        const filterBtn = document.createElement('div');
+        filterBtn.className = `thumb-filter filter-btn ${i === 0 ? 'active' : ''}`;
+        filterBtn.dataset.show = `.thumb-idx-${i}`;
+        filterBtn.innerHTML = `<img src="${url}" alt="${escapeHtml(p.name)} thumb ${i + 1}">`;
+
+        filterBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          pickAll('.thumb-wrapper.filterd-items', thumbArea).forEach((w) => {
+            w.classList.add('hide');
+            w.classList.remove('figure');
+          });
+          wrapper.classList.remove('hide');
+          wrapper.classList.add('figure');
+          pickAll('.thumb-filter.filter-btn', filterGroup).forEach((b) => b.classList.remove('active'));
+          filterBtn.classList.add('active');
+        });
+        filterGroup.appendChild(filterBtn);
+      }
+    });
+
+    if (urls.length <= 1) {
+      show(filterGroup, false);
+    }
+    return;
+  }
+
+  for (const sel of [gallery.images, gallery.thumbs]) {
+    const nodes = within(sel);
+    if (!nodes.length) continue;
+    nodes.forEach((node, i) => {
+      if (i >= urls.length) {
+        const slide = node.closest('.swiper-slide, .slick-slide, .item, .thumb-wrapper') || node;
+        remove(slide);
+        return;
+      }
+      /* A zoom gallery paints the visible image as a CSS BACKGROUND and keeps
+         a hidden <img> for the lens. Setting only the <img> changes nothing on
+         screen, so set whichever the node actually uses — and both when it
+         uses both. */
+      if (node.style.backgroundImage || node.tagName !== 'IMG') {
+        node.style.backgroundImage = 'url(' + urls[i] + ')';
+        if (node.dataset.image !== undefined) node.dataset.image = urls[i];
+      }
+      const img = node.tagName === 'IMG' ? node : node.querySelector('img');
+      if (img) {
+        setAttr(img, 'src', urls[i]);
+        if (img.hasAttribute('data-src')) setAttr(img, 'data-src', urls[i]);
+        img.removeAttribute('srcset');
+        /* ⭐ THE PICTURE A SHOPPER SEES ON HOVER IS A DIFFERENT ATTRIBUTE. The
+           magnifier reads `data-zoom`, not `src`, so the main image showed the
+           shop's jacket and hovering it showed the template's olive wrap top —
+           a different garment, in a different colour, over the real one. */
+        ['data-zoom', 'data-zoom-image', 'data-large', 'data-large-image', 'data-image', 'data-pswp-src']
+          .forEach((a) => { if (img.hasAttribute(a)) setAttr(img, a, urls[i]); });
+      }
+      /* The lightbox opens the wrapping link's href, which points at the
+         full-size file. Only swapped when it IS an image file — a gallery
+         item can be wrapped in a link to the product page. */
+      const link = node.closest('a[href]') || (node.tagName !== 'IMG' ? node.querySelector('a[href]') : null);
+      if (link && /\.(jpe?g|png|webp|gif|avif)(\?|#|$)/i.test(link.getAttribute('href') || '')) {
+        setAttr(link, 'href', urls[i]);
+      }
+    });
+  }
+}
+
+/* Variants & Attributes. Displays variant choices (navigates between products in a group)
+   and dynamic product attributes (e.g. Size, Color) with responsive styling. */
+async function paintVariants(spec, p) {
+  if (THEME?.name === 'fashion') return paintVariantsFashion(spec, p);
+  let group = null;
+  try { group = await api.variants(p.id); } catch { /* best effort */ }
+  const options = group?.options || [];
+  const attrs = Array.isArray(p.attributes) ? p.attributes.filter((a) => a.key && a.value) : [];
+
+  const container = pick('.product-variants-container') || (spec?.variants?.container ? pick(spec.variants.container) : null);
+  if (!container) return;
+
+  container.replaceChildren();
+
+  // 1. Variant Group Selector (Mustard Oil: Groundnut, Mustard, Sunflower)
+  if (options.length >= 2) {
+    const cur = options.find((o) => o.current) || options[0];
+    const groupDiv = document.createElement('div');
+    groupDiv.className = 'variant-selection mb--20';
+    groupDiv.innerHTML = `
+      <div class="variant-label mb--10" style="font-weight: 600; font-size: 15px; color: #222;">
+        <span>${escapeHtml(group.title || 'Options')}:</span> 
+        <span class="selected-variant-label" style="font-weight: 500; color: var(--color-primary); margin-left: 6px;">${escapeHtml(cur?.label || cur?.name || '')}</span>
+      </div>
+      <div class="variant-options d-flex flex-wrap gap-2"></div>
+    `;
+    const optsRow = groupDiv.querySelector('.variant-options');
+    options.forEach((o) => {
+      const isCur = !!o.current;
+      const a = document.createElement('a');
+      a.href = productHref({ id: o.id });
+      a.className = `rts-btn ${isCur ? 'btn-primary' : 'btn-outline-primary'}`;
+      a.style.cssText = `padding: 7px 18px; font-size: 14px; border-radius: 6px; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; border: 1.5px solid var(--color-primary); cursor: pointer; transition: all 0.2s ease; ${isCur ? 'background: var(--color-primary); color: #fff;' : 'background: #fff; color: var(--color-primary);'}`;
+      a.innerHTML = `${escapeHtml(o.label || o.name)}${o.price ? ` <span style="font-size: 12px; margin-left: 6px; opacity: 0.85;">(${money(o.price)})</span>` : ''}`;
+      const optDot = colourDot(labelColour(o.label || o.name), 13);
+      if (optDot) a.insertBefore(optDot, a.firstChild);
+      if (isCur) {
+        a.addEventListener('click', (e) => e.preventDefault());
+      }
+      optsRow.appendChild(a);
+    });
+    container.appendChild(groupDiv);
+  }
+
+  // 2. Product Attributes Display (Size: 500 gm, Color: ..., etc.)
+  if (attrs.length) {
+    const attrsDiv = document.createElement('div');
+    attrsDiv.className = 'product-attributes-row mb--20';
+    attrs.forEach((attr) => {
+      /* The code paints the swatch beside the colour; printed on its own it is
+         a hex string in a spec table, which is noise to a shopper. */
+      if (/^colou?r[_ ]?code$/i.test(attr.key)) return;
+      const row = document.createElement('div');
+      row.className = 'd-flex align-items-center mb--10';
+      const label = attr.key.charAt(0).toUpperCase() + attr.key.slice(1);
+      row.innerHTML = `
+        <span style="font-weight: 600; font-size: 15px; color: #222; min-width: 70px;">${escapeHtml(label)}:</span>
+        <span class="attr-pill" style="display: inline-flex; align-items: center; padding: 6px 16px; border: 1.5px solid var(--color-primary); background: rgba(98, 155, 41, 0.08); color: var(--color-primary); border-radius: 6px; font-weight: 600; font-size: 14px;">
+          ${escapeHtml(attr.value)}
+        </span>
+      `;
+      if (/^colou?r$/i.test(attr.key)) {
+        const code = attrs.find((a) => /^colou?r[_ ]?code$/i.test(a.key))?.value;
+        const dot = colourDot(attr.value, 14, code);
+        const pill = row.querySelector('.attr-pill');
+        if (dot && pill) pill.insertBefore(dot, pill.firstChild);
+      }
+      attrsDiv.appendChild(row);
+    });
+    container.appendChild(attrsDiv);
+  }
+}
+
+function paintProductUniques(p) {
+  const container = pick('.product-uniques');
+  if (!container) return;
+  container.replaceChildren();
+
+  const list = [];
+  if (p.id) {
+    list.push({ label: 'Product Code', value: p.id.split('-')[0].toUpperCase() });
+  }
+  if (p.brandName) {
+    list.push({ label: 'Brand', value: p.brandName });
+  }
+  if (p.category) {
+    list.push({ label: 'Category', value: p.category });
+  }
+  if (p.unit) {
+    list.push({ label: 'Unit', value: p.unit });
+  }
+  if (Array.isArray(p.attributes)) {
+    p.attributes.forEach((attr) => {
+      if (attr.key && attr.value) {
+        list.push({
+          label: attr.key.charAt(0).toUpperCase() + attr.key.slice(1),
+          value: attr.value
+        });
+      }
+    });
+  }
+  list.push({
+    label: 'Availability',
+    value: p.availability === 'in_stock' ? 'In Stock' : 'Out of Stock'
+  });
+
+  list.forEach((item) => {
+    const span = document.createElement('span');
+    span.className = 'product-unipue mb--10';
+    span.innerHTML = `<span style="font-weight: 600; margin-right: 10px; color: #222;">${escapeHtml(item.label)}:</span> <span style="font-weight: 400; color: #666;">${escapeHtml(item.value)}</span>`;
+    container.appendChild(span);
+  });
+}
+
+function paintProductTabs(p) {
+  // --- Tab 1: Product Details (#home-tab-pane) ---
+  const homeTab = pick('#home-tab-pane');
+  if (homeTab) {
+    const desc = (p.description || '').trim();
+    let topDisc = desc;
+    let bodyDesc = desc;
+
+    if (desc) {
+      // Split on sentence boundaries so overview and detailed text are distinct
+      const sentences = desc.match(/[^.!?]+[.!?]+/g)?.map((s) => s.trim()) || [desc];
+      if (sentences.length >= 3) {
+        topDisc = sentences.slice(0, 2).join(' ');
+        bodyDesc = sentences.slice(2).join(' ');
+      } else if (sentences.length === 2) {
+        topDisc = sentences[0];
+        bodyDesc = sentences[1];
+      } else {
+        topDisc = desc;
+        bodyDesc = `Discover the authentic taste and unmatched quality of ${p.name || 'this product'}. Carefully sourced and packed to preserve freshness and nutrition for you and your family.`;
+      }
+    }
+
+    const disc = pick('.disc', homeTab);
+    if (disc) setText(disc, topDisc || '');
+
+    const detailsRow = pick('.details-row-2', homeTab);
+    if (detailsRow) {
+      const primaryImg = (p.imageUrls && p.imageUrls[0]) || (p.images && p.images[0]) || '';
+      const img = pick('.left-area img', detailsRow);
+      if (img && primaryImg) {
+        setAttr(img, 'src', mediaUrl(primaryImg));
+        setAttr(img, 'alt', p.name || 'product');
+      }
+      const title = pick('.right .title', detailsRow);
+      if (title) setText(title, p.name || '');
+
+      const pDesc = pick('.right p', detailsRow);
+      if (pDesc) setText(pDesc, bodyDesc || '');
+
+      const ul = pick('.bottom-ul', detailsRow);
+      if (ul) {
+        ul.replaceChildren();
+        const bullets = [
+          '100% Genuine and Quality Assured',
+          p.brandName ? `Brand: ${p.brandName}` : null,
+          p.category ? `Category: ${p.category}` : null,
+          p.unit ? `Packaging Unit: ${p.unit}` : null,
+          ...(Array.isArray(p.attributes) ? p.attributes.filter((a) => a.key && a.value).map((a) => `${a.key.charAt(0).toUpperCase() + a.key.slice(1)}: ${a.value}`) : []),
+          p.taxNote ? `Tax: ${p.taxNote}` : 'Inclusive of all taxes',
+          `Availability: ${p.availability === 'in_stock' ? 'In Stock' : 'Out of Stock'}`
+        ].filter(Boolean);
+
+        bullets.forEach((text) => {
+          const li = document.createElement('li');
+          const colonIdx = text.indexOf(':');
+          if (colonIdx > -1) {
+            const label = text.slice(0, colonIdx);
+            const val = text.slice(colonIdx + 1);
+            li.innerHTML = `<strong>${escapeHtml(label)}:</strong>${escapeHtml(val)}`;
+          } else {
+            li.textContent = text;
+          }
+          ul.appendChild(li);
+        });
+      }
+    }
+  }
+
+  // --- Tab 2: Additional Information (#profile-tab-pane) ---
+  const profileTab = pick('#profile-tab-pane');
+  if (profileTab) {
+    const disc = pick('.disc', profileTab);
+    if (disc) disc.remove(); // Remove static lorem ipsum
+
+    const table = pick('table', profileTab);
+    if (table) {
+      const thead = pick('thead', table);
+      if (thead) {
+        thead.innerHTML = `<tr><th style="font-weight: 700; color: #222;">Specification</th><th style="font-weight: 700; color: #222;">Details</th></tr>`;
+      }
+      const tbody = pick('tbody', table) || table;
+      tbody.replaceChildren();
+
+      const specs = [
+        { key: 'Product Name', val: p.name },
+        p.brandName ? { key: 'Brand', val: p.brandName } : null,
+        p.category ? { key: 'Category', val: p.category } : null,
+        p.unit ? { key: 'Unit', val: p.unit } : null,
+        ...(Array.isArray(p.attributes) ? p.attributes.filter((a) => a.key && a.value).map((a) => ({ key: a.key.charAt(0).toUpperCase() + a.key.slice(1), val: a.value })) : []),
+        { key: 'Price', val: money(p.price) },
+        p.taxNote ? { key: 'Tax Note', val: p.taxNote } : null,
+        { key: 'Stock Status', val: p.availability === 'in_stock' ? 'In Stock' : 'Out of Stock' }
+      ].filter(Boolean);
+
+      specs.forEach((s) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td style="font-weight: 600; color: #444; width: 35%;">${escapeHtml(s.key)}</td><td style="color: #666;">${escapeHtml(s.val)}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+  }
+}
+
+async function paintReviews(p) {
+  let data = null;
+  try { data = await api.reviews(p.id); } catch { return; }
+  const reviews = data?.reviews || [];
+  const summary = data?.summary || { average: 0, count: 0 };
+  const avg = Number(summary.average || 0);
+  const count = Number(summary.count || 0);
+
+  // Tab Header: Customer Reviews (01)
+  pickAll('#profile-tabt, [aria-controls="profile-tab-panes"]').forEach((el) => {
+    setText(el, `Customer Reviews (${count})`);
+  });
+
+  // Top Stars & Count
+  pickAll('.rating-count|.review-count|[data-review-count]').forEach((el) => setText(el, count + ' Reviews'));
+  pickAll('.rating-average|[data-review-average]').forEach((el) => setText(el, avg.toFixed(1)));
+
+  // Rating stars above title in product status:
+  const headerRating = pick('.product-status .rating-stars-group');
+  if (headerRating) {
+    const countSpan = pick('span', headerRating);
+    if (countSpan) setText(countSpan, `${count} Review${count === 1 ? '' : 's'}`);
+    const starsDivs = pickAll('.rating-star', headerRating);
+    starsDivs.forEach((starEl, idx) => {
+      const starNum = idx + 1;
+      if (avg >= starNum) {
+        starEl.innerHTML = '<i class="fas fa-star" style="color: #ffb800;"></i>';
+      } else if (avg >= starNum - 0.5) {
+        starEl.innerHTML = '<i class="fas fa-star-half-alt" style="color: #ffb800;"></i>';
+      } else {
+        starEl.innerHTML = '<i class="far fa-star" style="color: #ffb800;"></i>';
+      }
+    });
+  }
+
+  // Reviews Tab: Average number & stars in review section
+  const reviewScore = pick('#profile-tab-panes .top-stars-wrapper .review');
+  if (reviewScore) setText(reviewScore, count > 0 ? avg.toFixed(1) : '0.0');
+
+  const reviewStars = pick('#profile-tab-panes .top-stars-wrapper .stars');
+  if (reviewStars) {
+    let starsHtml = '';
+    for (let i = 1; i <= 5; i++) {
+      if (avg >= i) starsHtml += '<i class="fa-solid fa-star" style="color: #ffb800;"></i> ';
+      else if (avg >= i - 0.5) starsHtml += '<i class="fa-solid fa-star-half-alt" style="color: #ffb800;"></i> ';
+      else starsHtml += '<i class="fa-regular fa-star" style="color: #ffb800;"></i> ';
+    }
+    starsHtml += `<span>(${count} Review${count === 1 ? '' : 's'})</span>`;
+    reviewStars.innerHTML = starsHtml;
+  }
+
+  // Recommended percentage
+  const avgArea = pick('#profile-tab-panes .average-stars-area');
+  if (avgArea) {
+    if (count > 0) {
+      const highRatings = reviews.filter((r) => (r.rating || 5) >= 4).length;
+      const pct = Math.round((highRatings / count) * 100);
+      const h4 = pick('.average', avgArea);
+      if (h4) setText(h4, `${pct}%`);
+      const span = pick('span', avgArea);
+      if (span) setText(span, `Recommended (${highRatings} of ${count})`);
+      show(avgArea, true);
+    } else {
+      show(avgArea, false);
+    }
+  }
+
+  // Breakdown bars (5 to 1)
+  const barRows = pickAll('#profile-tab-panes .review-charts-details .single-review');
+  if (barRows.length === 5) {
+    for (let star = 5; star >= 1; star--) {
+      const idx = 5 - star;
+      const row = barRows[idx];
+      const starCount = reviews.filter((r) => Math.round(r.rating || 5) === star).length;
+      const pct = count > 0 ? Math.round((starCount / count) * 100) : 0;
+      const bar = pick('.progress-bar', row);
+      if (bar) bar.style.width = pct + '%';
+      const pac = pick('.pac', row);
+      if (pac) setText(pac, pct + '%');
+    }
+  }
+
+  // List of real customer reviews:
+  const reviewStyle = pick('.product-details-review-product-style');
+  if (reviewStyle) {
+    let listContainer = pick('.customer-reviews-list-container', reviewStyle);
+    if (!listContainer) {
+      listContainer = document.createElement('div');
+      listContainer.className = 'customer-reviews-list-container mt--40 mb--40';
+      const submitArea = pick('.submit-review-area', reviewStyle);
+      if (submitArea) {
+        reviewStyle.insertBefore(listContainer, submitArea);
+      } else {
+        reviewStyle.appendChild(listContainer);
+      }
+    }
+
+    listContainer.replaceChildren();
+    const heading = document.createElement('h5');
+    heading.className = 'title mb--20';
+    heading.style.fontWeight = '700';
+    heading.textContent = `Customer Reviews (${count})`;
+    listContainer.appendChild(heading);
+
+    if (reviews.length === 0) {
+      const emptyMsg = document.createElement('p');
+      emptyMsg.className = 'text-muted';
+      emptyMsg.textContent = 'There are no reviews for this product yet. Be the first to review!';
+      listContainer.appendChild(emptyMsg);
+    } else {
+      reviews.forEach((r) => {
+        const item = document.createElement('div');
+        item.className = 'single-customer-review-card mb--20 p-4';
+        item.style.cssText = 'border: 1px solid #eef0f4; border-radius: 8px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.03);';
+
+        let stars = '';
+        const rating = r.rating || 5;
+        for (let i = 1; i <= 5; i++) {
+          stars += i <= rating 
+            ? '<i class="fa-solid fa-star" style="color: #ffb800; font-size: 13px; margin-right: 2px;"></i>' 
+            : '<i class="fa-regular fa-star" style="color: #ffb800; font-size: 13px; margin-right: 2px;"></i>';
+        }
+
+        const dateStr = r.createdAt ? new Date(r.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+
+        item.innerHTML = `
+          <div class="d-flex justify-content-between align-items-center mb--10">
+            <div>
+              <h6 class="mb-1" style="font-size: 16px; font-weight: 700; color: #222;">${escapeHtml(r.reviewer || r.name || 'Verified Buyer')}</h6>
+              <span class="text-muted" style="font-size: 13px;">${escapeHtml(dateStr)}</span>
+            </div>
+            <div class="stars">${stars}</div>
+          </div>
+          ${r.title ? `<h6 style="font-size: 15px; font-weight: 600; color: #333; margin-bottom: 6px;">${escapeHtml(r.title)}</h6>` : ''}
+          <p class="mb-0" style="color: #555; font-size: 14px; line-height: 1.6;">${escapeHtml(r.body || r.comment || '')}</p>
+        `;
+        listContainer.appendChild(item);
+      });
+    }
+  }
+
+  // Also maintain template repeater if present:
+  const spec = { container: '.review-list|.product-reviews|.comment-list|.tab-reviews', card: '.review-item|li' };
+  const t = takeTemplate(spec);
+  if (!t) return;
+  if (!reviews.length) return renderEmpty(t.container, 'No reviews yet.', spec);
+  repeat(t, reviews, (node, r) => {
+    setText(pick('.review-author|.author|h5|h6', node), r.reviewer || r.author || r.name || 'Verified buyer');
+    setText(pick('.review-body|.comment-text|p', node), r.body || r.comment || '');
+    setText(pick('.review-date|.date', node), r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '');
+  });
+}
+
+/* The review form every product template ships. Without this it looks like a
+   shopper can leave a review and nothing happens when they press send. */
+function wireReviewForm(product) {
+  for (const form of $$('form')) {
+    const body = pick('textarea', form);
+    if (!body) continue;
+    if (!/review|comment|rating/i.test(form.className + ' ' + (form.id || '') + ' ' + (body.placeholder || '') + ' ' + (form.closest('[class*="review"], [id*="review"]') ? 'review' : ''))) continue;
+    if (form.dataset.merchReview) continue;
+    form.dataset.merchReview = '1';
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = pick('input[type="text"]', form)?.value.trim();
+      const email = pick('input[type="email"]', form)?.value.trim();
+      /* Themes draw the stars as radios, or as a row of links with an index. */
+      const checked = pickAll('input[type="radio"]', form).find((r) => r.checked);
+      const rating = Number(checked?.value) || Number(form.dataset.merchRating) || 5;
+      if (!body.value.trim()) return notify('Please write your review first.', 'error');
+      try {
+        await api.postReview(product.id, { rating, title: '', body: body.value.trim(), author: name || '', email: email || '' });
+        notify('Thank you — your review has been sent.', 'success');
+        form.reset();
+      } catch (err) { showError(err); }
+    });
+
+    /* Star widgets that are not radios: remember which one was pressed. */
+    pickAll('.rating a, .rating-stars a, .stars a, .rate a', form).forEach((a, i) => {
+      a.addEventListener('click', (e) => { e.preventDefault(); form.dataset.merchRating = String(i + 1); });
+    });
+  }
+}
+
+async function paintRelated(p) {
+  /* "Related products" is the last strip on a product page. */
+  const rail = productContainers().pop();
+  if (!rail) return;
+  try {
+    const size = Math.min(16, Math.max(4, templateCount({ ...THEME.listing, el: rail }) || 8));
+    let items = [];
+    if (p.category) {
+      const res = await api.catalog({ category: p.category, pageSize: size + 1 });
+      items = (Array.isArray(res) ? res : res?.products || []).filter((x) => x.id !== p.id).slice(0, size);
+    }
+    if (!items.length) {
+      const res = await api.catalog({ pageSize: size + 1 });
+      items = (Array.isArray(res) ? res : res?.products || []).filter((x) => x.id !== p.id).slice(0, size);
+    }
+    if (items.length) renderProducts(items, THEME.listing, rail);
+  } catch { /* related is a nicety; never let it fail a product page */ }
+}
+
+/* --- CART ----------------------------------------------------------------
+   What the shopper has, priced by the store rather than by us. The coupon and
+   gift card they enter here are carried to checkout in sessionStorage — the
+   only figures that count are the ones the store returns at checkout. */
+
+const PENDING_KEY = 'merch.pending';
+const pending = {
+  get: () => { try { return JSON.parse(sessionStorage.getItem(PENDING_KEY) || '{}'); } catch { return {}; } },
+  set: (patch) => {
+    const next = { ...pending.get(), ...patch };
+    try { sessionStorage.setItem(PENDING_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+    return next;
+  },
+  clear: () => { try { sessionStorage.removeItem(PENDING_KEY); } catch { /* ignore */ } },
+};
+
+pages.cart = async () => {
+  const spec = THEME.cart;
+  const lines = await cart.refresh();
+
+  const draw = () => {
+    const t = takeTemplate(spec);
+    const current = cart.lines();
+    if (!t) return;
+
+    const renderCartEmpty = () => {
+      // 1. Hide table headers
+      const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+      if (head) show(head, false);
+
+      // 2. Remove all product rows
+      const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
+      rows.forEach((r) => r.remove());
+
+      // 3. Hide coupon code area
+      const couponArea = pick('.bottom-cupon-code-cart-area', t.container) || pick('.bottom-cupon-code-cart-area');
+      if (couponArea) show(couponArea, false);
+
+      // 4. Hide shipping note & progress bar
+      const noteArea = pick('.cart-area-main-wrapper, .cart-top-area-note');
+      if (noteArea) show(noteArea, false);
+
+      // 5. Hide right sidebar (Cart Totals)
+      const rightSidebar = pick('.cart-total-area-start-right');
+      if (rightSidebar) {
+        const sideCol = rightSidebar.closest('[class*="col-xl-3"]') || rightSidebar.parentElement || rightSidebar;
+        show(sideCol, false);
+      }
+
+      // 6. Expand left column to full width so the empty state is centered
+      const leftCol = t.container.closest('[class*="col-xl-9"]');
+      if (leftCol) {
+        leftCol.classList.remove('col-xl-9');
+        leftCol.classList.add('col-xl-12');
+      }
+
+      // 7. Render empty message with Continue Shopping button (matching wishlist design!)
+      if (!pick('.merch-empty', t.container)) {
+        const emptyDiv = document.createElement('div');
+        emptyDiv.className = 'merch-empty text-center';
+        emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
+        emptyDiv.innerHTML = `
+          <i class="fa-sharp fa-regular fa-cart-shopping" style="font-size:48px;color:#94a3b8;margin-bottom:16px;display:block;"></i>
+          <h4 style="margin-bottom:8px;font-weight:600;">Your cart is empty</h4>
+          <p style="color:#64748b;margin-bottom:20px;">Looks like you haven't added anything to your cart yet.</p>
+          <a href="shop.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
+        `;
+        t.container.prepend(emptyDiv);
+      }
+      paintCartTotals(spec, current);
+      paintHeader();
+    };
+
+    if (!current.length) {
+      renderCartEmpty();
+      return;
+    }
+
+    // Restore left column width if previously modified
+    const leftCol = t.container.closest('[class*="col-xl-12"]');
+    if (leftCol) {
+      leftCol.classList.remove('col-xl-12');
+      leftCol.classList.add('col-xl-9');
+    }
+
+    // Show table head
+    const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+    if (head) show(head, true);
+
+    // Show coupon bar
+    const couponArea = pick('.bottom-cupon-code-cart-area', t.container) || pick('.bottom-cupon-code-cart-area');
+    if (couponArea) show(couponArea, true);
+
+    // Show right sidebar
+    const rightSidebar = pick('.cart-total-area-start-right');
+    if (rightSidebar) {
+      const sideCol = rightSidebar.closest('[class*="col-xl-3"]') || rightSidebar.parentElement || rightSidebar;
+      show(sideCol, true);
+    }
+
+    // Remove empty state container
+    pickAll('.merch-empty', t.container).forEach(remove);
+
+    // Render cart items
+    repeat(t, current, (node, l) => {
+      node.dataset.merchId = l.itemId;
+      fillFields(node, spec.fields, l, { node, rerender: draw });
+
+      // Image & thumbnail link
+      const imgEl = pick('.thumbnail img, .pro-thumbnail img', node);
+      if (imgEl) {
+        if (l.image) imgEl.src = mediaUrl(l.image);
+        imgEl.alt = l.name || 'product';
+        imgEl.style.cssText = 'width:65px;height:65px;object-fit:contain;border-radius:4px;';
+      }
+      const thumbLink = pick('.thumbnail a, .pro-thumbnail a', node);
+      if (thumbLink) {
+        thumbLink.href = productHref({ id: l.itemId });
+      } else if (imgEl && imgEl.parentElement) {
+        const a = document.createElement('a');
+        a.href = productHref({ id: l.itemId });
+        imgEl.parentElement.insertBefore(a, imgEl);
+        a.appendChild(imgEl);
+      }
+
+      // Title link
+      const titleEl = pick('.information .title, .pro-title', node);
+      if (titleEl) {
+        titleEl.innerHTML = `<a href="${escapeHtml(productHref({ id: l.itemId }))}" style="color:inherit;">${escapeHtml(l.name)}</a>`;
+      }
+    });
+
+    // Wire Clear All button
+    const clearBtn = pick('.bottom-cupon-code-cart-area a', t.container);
+    if (clearBtn && !clearBtn._merchWired) {
+      clearBtn._merchWired = true;
+      clearBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        cart.clear();
+        draw();
+        notify('Cart cleared.', 'info');
+      });
+    }
+
+    wireQuantityWidgets(t.container, draw);
+    paintCartTotals(spec, current);
+    try { paintFreeShippingBar(current); } catch (e) { warn('free-shipping bar', e); }
+    paintHeader();
+    THEME.reinit?.();
+  };
+
+  draw();
+  wireCoupon(spec, draw);
+  wireGiftCard(spec, draw);
+
+  /* "Proceed to checkout" is a link on some themes and a plain <button> on
+     others — a <button> outside a form goes NOWHERE on its own, so the button
+     the designer drew has to be given the navigation as well as the guard. */
+  pickAll(spec.checkoutBtn).forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      if (!cart.count()) { e.preventDefault(); notify('Your cart is empty.', 'error'); return; }
+      const href = btn.tagName === 'A' ? (btn.getAttribute('href') || '') : '';
+      if (/checkout/i.test(href)) return;        // already points at the right page
+      e.preventDefault();
+      location.href = pageUrl('checkout');
+    });
+  });
+
+  cart.onChange(() => paintHeader());
+};
+
+/* --- COLOUR SWATCHES ------------------------------------------------------
+   An item carries BOTH a colour name and, optionally, a `color_code` hex. They
+   are two columns on purpose: the name is also the `?color=` filter value, the
+   facet label here, the option on a variant pill and a line on the merchant's
+   invoice and POS screen, so a hex in that one field would show "#1A1A1A" to a
+   shopper in all of them — and a literal '#' in a query string is a fragment
+   delimiter, so the filter would quietly stop round-tripping.
+
+   So: the code paints, the name reads. When a catalogue supplies no code (most
+   do not), these fall back to resolving the NAME, and a name we cannot resolve
+   gets no swatch at all — painting "Sea Foam" grey is worse than painting
+   nothing. */
+const COLOUR_HEX = {
+  black: '#1a1a1a', white: '#ffffff', ivory: '#fffff0', cream: '#fdf5e0',
+  grey: '#808080', gray: '#808080', charcoal: '#36454f', silver: '#c0c0c0',
+  navy: '#1a2a52', 'royal blue': '#2b4fa2', blue: '#2563eb', denim: '#3b5b86',
+  teal: '#117a7a', mint: '#8fd9b6', green: '#2e7d32', olive: '#6b7030',
+  sage: '#9caf88', khaki: '#b6a66f', beige: '#e3d5b8', sand: '#dcc9a6',
+  stone: '#d2cabb', brown: '#6b4a2f', coffee: '#4b352a', rust: '#9c4a1a',
+  orange: '#e3721f', mustard: '#d4a017', yellow: '#f2c200', peach: '#ffb997',
+  pink: '#e8a0b8', red: '#c62828', maroon: '#6d1f2b', wine: '#722f37',
+  purple: '#6b3fa0', lavender: '#c3b1e1', turquoise: '#30bfc4', neon: '#ccff00',
+  'red wine': '#6b2230',
+  /* Metals. A jewellery catalogue's whole colour axis is these, and without
+     them "Rose Gold", "Platinum" and "Three Tone" resolved to NOTHING and got
+     no swatch, while "Yellow Gold" and "White Gold" quietly resolved on their
+     SECOND word to plain yellow and plain white — a rose-gold ring wearing a
+     yellow dot. `gold` last would never be reached for those two anyway; it is
+     here for a bare "Gold". */
+  gold: '#d4af37', 'rose gold': '#b76e79', 'yellow gold': '#d4af37',
+  'white gold': '#e8e8e8', platinum: '#e5e4e2',
+};
+
+/* What the CATALOGUE says a colour looks like, learned from the products on
+   this page: `color` and `color_code` arrive together on every item, so the
+   shop's own hex is available even where the facet list is not — the facets
+   endpoint deliberately omits `color_code`, because a sidebar of hex chips is
+   not a filter anyone shops by. Learning it here means the swatch is the
+   merchant's ACTUAL colour rather than our guess at their word for it, and a
+   catalogue using names no table could hold ("Antique Rose", "Champagne")
+   still paints exactly. */
+const COLOUR_CODE_SEEN = new Map();
+function rememberColourCodes(products) {
+  for (const p of products || []) {
+    const attrs = p?.optionValues?.length ? p.optionValues : p?.attributes;
+    if (!Array.isArray(attrs)) continue;
+    let name = null, code = null;
+    for (const a of attrs) {
+      const k = String(a?.key || '').trim().toLowerCase();
+      if (k === 'color' || k === 'colour') name = a.value;
+      else if (k === 'color_code' || k === 'colour_code') code = a.value;
+    }
+    /* Only a pair teaches anything, and only a code the browser would read. */
+    if (name && code && HEX_RE.test(String(code).trim())) {
+      COLOUR_CODE_SEEN.set(String(name).trim().toLowerCase(), String(code).trim());
+    }
+  }
+}
+
+/* Modifiers shade the base word they qualify — "Dark Green" is green pushed
+   toward black — rather than being colours themselves. Without this most real
+   catalogue values miss: 17 of Juxar's 41 are compound or carry two colours. */
+const COLOUR_MODIFIERS = {
+  dark: -0.30, deep: -0.30, bright: -0.05, light: 0.32, pale: 0.40,
+  pastel: 0.42, melange: 0.18, heather: 0.18, washed: 0.22,
+};
+
+/* #RGB, #RRGGBB or #RRGGBBAA — the only shapes a browser reads as a literal.
+   ⭐ This guard is not cosmetic: the value goes into a style attribute, so any
+   other string is a CSS injection carried by catalogue data. */
+const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+function shade(hex, amount) {
+  if (!amount) return hex;
+  const n = parseInt(hex.slice(1), 16);
+  const target = amount > 0 ? 255 : 0;
+  const a = Math.min(Math.abs(amount), 1);
+  const ch = (shift) => {
+    const v = (n >> shift) & 255;
+    return Math.round(v + (target - v) * a).toString(16).padStart(2, '0');
+  };
+  return '#' + ch(16) + ch(8) + ch(0);
+}
+
+/* One colour phrase -> a hex, or null. Two-word names win over single words, so
+   "Navy Blue" resolves as navy rather than as the blue that follows it. */
+function colourHex(name) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return null;
+  if (COLOUR_HEX[key]) return COLOUR_HEX[key];
+  const words = key.split(/[^a-z]+/).filter(Boolean);
+  for (let i = 0; i < words.length - 1; i++) {
+    const pair = COLOUR_HEX[words[i] + ' ' + words[i + 1]];
+    if (pair) return pair;
+  }
+  let base = null, shift = 0;
+  for (const w of words) {
+    if (base === null && COLOUR_HEX[w]) base = COLOUR_HEX[w];
+    else if (w in COLOUR_MODIFIERS) shift += COLOUR_MODIFIERS[w];
+  }
+  return base ? shade(base, shift) : null;
+}
+
+/* The CSS background for a swatch. An explicit, VALIDATED code wins; otherwise
+   the name is resolved, and a name carrying two colours ("Blue & Yellow") gets
+   both on the diagonal, because showing only the first says something false. */
+function colourBackground(name, code) {
+  const explicit = String(code || '').trim();
+  if (HEX_RE.test(explicit)) return explicit;
+  /* No code was handed in — but the catalogue may already have told us this
+     colour's hex on a product. The facet sidebar is the case that matters: it
+     is built from /api/catalog/facets, which carries no code at all. */
+  const learned = COLOUR_CODE_SEEN.get(String(name || '').trim().toLowerCase());
+  if (learned) return learned;
+  const parts = String(name || '')
+    .split(/\s*(?:&|\/|\+|\band\b)\s*/i)
+    .map((s) => colourHex(s))
+    .filter(Boolean);
+  if (parts.length > 1) return `linear-gradient(135deg, ${parts[0]} 0 50%, ${parts[1]} 50% 100%)`;
+  return parts[0] || colourHex(name);
+}
+
+/* A dot for one colour, or null when we cannot resolve it. Built with DOM calls
+   rather than innerHTML because the name is catalogue data. */
+function colourDot(name, px, code) {
+  const bg = colourBackground(name, code);
+  if (!bg) return null;
+  const dot = document.createElement('span');
+  dot.className = 'merch-swatch';
+  dot.setAttribute('aria-hidden', 'true');   /* the name is already in the text */
+  dot.title = String(name || '');
+  /* The ring is unconditional: White and Ivory are invisible on a white
+     sidebar without one, and a border on every swatch keeps them a set. */
+  dot.style.cssText = 'display:inline-block;flex:0 0 auto;border-radius:50%;'
+    + `width:${px}px;height:${px}px;background:${bg};`
+    + 'border:1px solid rgba(0,0,0,.28);margin-right:7px;vertical-align:-2px;';
+  return dot;
+}
+
+/* The colour of a variant label: "Black / XL" -> "Black". The catalogue puts
+   colour first precisely so this is the first segment. */
+function labelColour(label) {
+  const first = String(label || '').split('/')[0].trim();
+  return colourHex(first) ? first : null;
+}
+
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ELECTRONIC THEME — ported up from electronic/merch.js, which had forked.
+
+   These eight are the theme's own: a sticky add-to-cart bar, its home tabs, its
+   cart sidebar, an account-details form with avatar initials, and a dead-link
+   remapper. They are self-contained — they call only each other and what the
+   master already had — and each returns early when the selector it needs is
+   absent, so they are no-ops on the other three themes.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function categoryIcon(name = '') {
+  const n = String(name).toLowerCase();
+  if (n.includes('phone') || n.includes('mobile')) return 'icon-smartphone';
+  if (n.includes('laptop') || n.includes('computer') || n.includes('pc')) return 'icon-laptop';
+  if (n.includes('camera') || n.includes('photo')) return 'icon-camera';
+  if (n.includes('tv') || n.includes('video') || n.includes('display')) return 'icon-tv';
+  if (n.includes('headphone') || n.includes('ear') || n.includes('sound')) return 'icon-headphones';
+  if (n.includes('audio') || n.includes('speaker')) return 'icon-audio';
+  if (n.includes('watch') || n.includes('wearable')) return 'icon-watch';
+  return 'icon-laptop';
+}
+
+function openCartSidebar() {
+  const modalEl = document.getElementById('shoppingCart');
+  if (!modalEl) return;
+  try { paintMiniCart(); } catch {}
+  try {
+    if (window.bootstrap?.Modal) {
+      const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+      modal.show();
+      return;
+    }
+  } catch {}
+  try {
+    if (window.$ && typeof window.$.fn?.modal === 'function') {
+      window.$(modalEl).modal('show');
+      return;
+    }
+  } catch {}
+  modalEl.classList.add('show');
+  modalEl.style.display = 'block';
+  modalEl.removeAttribute('aria-hidden');
+  modalEl.setAttribute('aria-modal', 'true');
+}
+
+async function paintElectronicHomeTabs() {
+  const tabList = pick('.tab-product-v3');
+  if (!tabList) return;
+
+  const tabLinks = pickAll('a[data-bs-toggle="tab"]', tabList);
+  if (!tabLinks.length) return;
+
+  let allProducts = [];
+  try {
+    const catalogRes = await api.catalog({ pageSize: 24 });
+    allProducts = Array.isArray(catalogRes) ? catalogRes : catalogRes?.products || [];
+  } catch (e) {
+    warn('all products tab fetch', e);
+  }
+
+  // 1. Paint #AllProducts tab
+  const allPane = document.getElementById('AllProducts');
+  if (allPane && allProducts.length) {
+    const rail = pick('.swiper-wrapper', allPane);
+    if (rail) {
+      renderProducts(allProducts.slice(0, 8), THEME.listing, rail);
+      hydrated.add(rail);
+    }
+  }
+
+  // 2. Fetch categories for remaining tabs
+  let cats = [];
+  try { cats = await getCategories(); } catch { cats = []; }
+
+  // Map remaining tabs: tabLinks[1], tabLinks[2], tabLinks[3]
+  const remainingTabs = tabLinks.slice(1);
+  for (let i = 0; i < remainingTabs.length; i++) {
+    const tabLink = remainingTabs[i];
+    const targetId = (tabLink.getAttribute('href') || '').replace('#', '');
+    const targetPane = targetId ? document.getElementById(targetId) : null;
+    if (!targetPane) continue;
+
+    const cat = cats[i];
+    const rail = pick('.swiper-wrapper', targetPane);
+    if (!rail) continue;
+
+    let tabProducts = [];
+    if (cat) {
+      const catName = typeof cat === 'string' ? cat : cat.name;
+      tabLink.textContent = catName;
+      try {
+        const catRes = await api.catalog({ category: catName, pageSize: 8 });
+        tabProducts = Array.isArray(catRes) ? catRes : catRes?.products || [];
+      } catch (e) {
+        warn('tab category catalog', e);
+      }
+    }
+
+    // If category has no products or not enough, take a distinct non-overlapping slice from allProducts
+    if (!tabProducts.length && allProducts.length) {
+      const startIdx = ((i + 1) * 4) % allProducts.length;
+      tabProducts = allProducts.slice(startIdx, startIdx + 8);
+      if (tabProducts.length < 4) {
+        tabProducts = allProducts.slice(0, 8);
+      }
+    }
+
+    if (tabProducts.length) {
+      renderProducts(tabProducts, THEME.listing, rail);
+      hydrated.add(rail);
+    }
+  }
+
+  tabLinks.forEach((link) => {
+    link.addEventListener('shown.bs.tab', () => {
+      refreshSwipers();
+    });
+  });
+}
+
+async function paintStickyAtcBar(p) {
+  const bar = pick('.tf-sticky-btn-atc');
+  if (!bar || !p) return;
+
+  // 1. Product Image
+  const img = pick('.tf-sticky-atc-product .image img', bar);
+  if (img) {
+    const src = mediaUrl((p.imageUrls || [])[0] || p.image || '');
+    if (src) {
+      img.src = src;
+      img.setAttribute('data-src', src);
+      img.removeAttribute('srcset');
+      img.classList.remove('lazyload', 'lazyloading');
+      img.classList.add('lazyloaded');
+    }
+    img.alt = p.name || '';
+  }
+
+  // 2. Title & Meta & Price
+  const titleEl = pick('.tf-sticky-atc-title, .tf-sticky-atc-product .content .text-title:first-child', bar);
+  if (titleEl) setText(titleEl, p.name || '');
+
+  const metaEl = pick('.tf-sticky-atc-meta, .tf-sticky-atc-product .content .text-caption-1', bar);
+  if (metaEl) setText(metaEl, p.category || '');
+
+  const priceEl = pick('.tf-sticky-atc-price, .tf-sticky-atc-product .content .text-title:last-child', bar);
+  if (priceEl && priceEl !== titleEl) setText(priceEl, money(p.price));
+
+  // 3. Size dropdown / variants
+  const sizeBox = pick('.tf-sticky-atc-size', bar);
+  let selectedVariant = null;
+  /* ⭐ The options come from /api/products/{id}/variants — they are NOT on the product. This gated on
+     `p.variants`, a field the catalogue has never returned, so `hasVariants` was false for every
+     product and the sticky bar's size dropdown was hidden on the whole catalogue. The main product
+     painter had been calling the endpoint all along; this one simply never did. */
+  let variants = Array.isArray(p.variants) ? p.variants : [];
+  if (!variants.length) {
+    try {
+      const group = await api.variants(p.id);
+      variants = group?.options || [];
+    } catch { variants = []; }
+  }
+  const hasVariants = variants.length > 1;
+
+  if (sizeBox) {
+    if (!hasVariants) {
+      show(sizeBox, false);
+      sizeBox.style.setProperty('display', 'none', 'important');
+    } else {
+      show(sizeBox, true);
+      sizeBox.style.display = '';
+      const valLabel = pick('.text-sort-value', sizeBox);
+      const menu = pick('.dropdown-menu', sizeBox);
+      if (menu) {
+        menu.replaceChildren();
+        variants.forEach((v, idx) => {
+          const item = document.createElement('div');
+          item.className = 'select-item' + (idx === 0 ? ' active' : '');
+          const label = v.label || v.title || v.name || ('Option ' + (idx + 1));
+          item.innerHTML = `<span class="text-value-item">${escapeHtml(label)}</span>`;
+          item.addEventListener('click', (e) => {
+            e.preventDefault();
+            selectedVariant = v;
+            p._selectedVariant = v;
+            if (valLabel) setText(valLabel, label);
+            pickAll('.select-item', menu).forEach((si) => si.classList.remove('active'));
+            item.classList.add('active');
+            if (v.price != null && priceEl && priceEl !== titleEl) setText(priceEl, money(v.price));
+            if (v.imageUrl && img) {
+              const vsrc = mediaUrl(v.imageUrl);
+              img.src = vsrc;
+              img.setAttribute('data-src', vsrc);
+            }
+          });
+          menu.appendChild(item);
+        });
+        const cur = variants.find((v) => v.current) || variants[0];
+        if (cur) {
+          selectedVariant = cur;
+          p._selectedVariant = cur;
+          if (valLabel) setText(valLabel, cur.label || cur.title || cur.name || '');
+        }
+      }
+    }
+  }
+}
+
+function remapDeadLinks() {
+  const shopPages = [
+    'shop-default-grid.html', 'shop-default-list.html', 'shop-fullwidth-list.html',
+    'shop-fullwidth-grid.html', 'shop-right-sidebar.html', 'shop-filter-dropdown.html',
+    'shop-filter-canvas.html', 'shop-categories-top-02.html', 'shop-collection.html',
+    'shop-breadcrumb-img.html', 'shop-breadcrumb-left.html', 'shop-breadcrumb-background.html',
+    'shop-load-button.html', 'shop-pagination.html', 'shop-infinite-scrolling.html'
+  ];
+  const prodPages = [
+    'product-grid-1.html', 'product-grid-2.html', 'product-stacked.html',
+    'product-right-thumbnails.html', 'product-bottom-thumbnails.html',
+    'product-description-accordion.html', 'product-description-list.html',
+    'product-description-menutab.html', 'product-description-fullwidth.html',
+    'product-fixed-price.html', 'product-fixed-scroll.html', 'product-swatch-color.html',
+    'product-swatch-rounded.html', 'product-swatch-rounded-color.html',
+    'product-swatch-image.html', 'product-swatch-rounded-image.html',
+    'product-swatch-dropdown.html', 'product-swatch-dropdown-color.html',
+    'product-style-01.html', 'product-style-02.html', 'product-style-03.html',
+    'product-style-04.html', 'product-style-05.html', 'product-style-06.html', 'product-style-07.html'
+  ];
+
+  $$('a[href]').forEach((a) => {
+    const href = a.getAttribute('href');
+    if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+    const cleanHref = href.split('?')[0].split('#')[0];
+    if (shopPages.includes(cleanHref)) {
+      a.setAttribute('href', href.replace(cleanHref, 'shop-left-sidebar.html'));
+    } else if (prodPages.includes(cleanHref)) {
+      a.setAttribute('href', href.replace(cleanHref, 'product-detail.html'));
+    }
+  });
+}
+
+function updateAvatarInitials(first, last, fullName, email) {
+  let f = (first || '').trim().charAt(0);
+  let l = (last || '').trim().charAt(0);
+  if (!f && !l && fullName) {
+    const parts = fullName.trim().split(/\s+/).filter(Boolean);
+    if (parts.length > 0) f = parts[0].charAt(0);
+    if (parts.length > 1) l = parts[parts.length - 1].charAt(0);
+  }
+  if (!f && email) f = email.trim().charAt(0);
+  const initials = ((f + l) || 'U').toUpperCase();
+
+  const avatarWraps = pickAll('.account-avatar');
+  avatarWraps.forEach((wrap) => {
+    let initEl = wrap.querySelector('.avatar-initials');
+    if (!initEl) {
+      const imgWrap = wrap.querySelector('.image');
+      if (imgWrap) imgWrap.style.display = 'none';
+      initEl = document.createElement('div');
+      initEl.className = 'avatar-initials';
+      initEl.style.cssText = 'width: 80px; height: 80px; border-radius: 50%; background: #181818; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; margin: 0 auto 16px; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);';
+      wrap.insertBefore(initEl, wrap.firstChild);
+    }
+    initEl.textContent = initials;
+
+    const nameEl = wrap.querySelector('h6, .customer-name, .account-name');
+    if (nameEl) nameEl.textContent = fullName || 'Account';
+    const emailEl = wrap.querySelector('.body-text-1, .customer-email, .account-email');
+    if (emailEl) emailEl.textContent = email || '';
+  });
+}
+
+function wireAccountDetailsForm() {
+  const form = pick('form.form-account-details') || $$('form').find((f) => {
+    return pick('input[placeholder*="first" i]', f) && pick('input[placeholder*="last" i]', f) && pick('input[type="email"]', f);
+  });
+  if (!form || form._merchDetailsWired) return;
+  form._merchDetailsWired = true;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const fn = pick('input[placeholder*="first" i]|input[name*="first" i]', form)?.value.trim() || '';
+    const ln = pick('input[placeholder*="last" i]|input[name*="last" i]', form)?.value.trim() || '';
+    const em = pick('input[type="email"]|input[placeholder*="email address" i]', form)?.value.trim() || '';
+    const ph = pick('input[type="tel"]|input[placeholder*="phone" i]|input[name*="phone" i]|input[placeholder*="mobile" i]', form)?.value.trim() || '';
+    const stateEl = pick('#account-state, select[name*="state"]', form);
+    const stateVal = stateEl?.value || '';
+
+    const fullName = [fn, ln].filter(Boolean).join(' ') || em.split('@')[0] || '';
+
+    try {
+      if (fn) localStorage.setItem('merch.shopper_first_name', fn);
+      if (ln) localStorage.setItem('merch.shopper_last_name', ln);
+      if (fullName) localStorage.setItem('merch.shopper_name', fullName);
+      if (em) localStorage.setItem('merch.shopper_email', em);
+      if (ph) localStorage.setItem('merch.shopper_phone', ph);
+      if (stateVal && stateVal !== 'Choose State') localStorage.setItem('merch.shopper_state', stateVal);
+    } catch {}
+
+    updateAvatarInitials(fn, ln, fullName, em);
+    pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, fullName));
+    pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, em));
+    applyShopperHeader(fullName, em);
+
+    const currentPw = pick('input[placeholder*="current" i][type="password"], .account-password input[placeholder*="password*" i]', form);
+    const newPw = pick('input[placeholder*="new" i][type="password"]', form);
+    const confirmPw = pick('input[placeholder*="confirm" i][type="password"]', form);
+
+    if (currentPw?.value || newPw?.value || confirmPw?.value) {
+      if (!currentPw?.value || !newPw?.value) {
+        return notify('Please fill both current and new password to change password.', 'error');
+      }
+      if (confirmPw && confirmPw.value !== newPw.value) {
+        return notify('The two new passwords do not match.', 'error');
+      }
+      try {
+        await api.changePassword(currentPw.value, newPw.value);
+        currentPw.value = '';
+        newPw.value = '';
+        if (confirmPw) confirmPw.value = '';
+        notify('Account information and password updated successfully.', 'success');
+      } catch (err) {
+        showError(err);
+      }
+    } else {
+      notify('Account information updated successfully.', 'success');
+    }
+  });
+}
+
+function wireProductDetailCartFlow(p) {
+  const wrap = pick('.tf-product-info-wrap');
+  if (!wrap || !p) return;
+
+  const bar = pick('.tf-sticky-btn-atc');
+
+  // Quantity containers
+  const mainQtyBox = pick('.tf-product-info-quantity', wrap);
+  const stickyQtyBox = bar ? pick('.tf-sticky-atc-quantity', bar) : null;
+
+  // Quantity inputs and buttons
+  const mainQtyInput = pick('.tf-product-info-quantity .quantity-product, .tf-product-info-quantity input', wrap);
+  const mainMinus = pick('.tf-product-info-quantity .btn-decrease, .tf-product-info-quantity .minus-btn, .tf-product-info-quantity .btn-quantity:first-child', wrap);
+  const mainPlus = pick('.tf-product-info-quantity .btn-increase, .tf-product-info-quantity .plus-btn, .tf-product-info-quantity .btn-quantity:last-child', wrap);
+  const stickyQtyInput = bar ? pick('.tf-sticky-atc-quantity input', bar) : null;
+  const stickyMinus = bar ? pick('.tf-sticky-atc-quantity .minus-btn, .tf-sticky-atc-quantity .btn-decrease, .tf-sticky-atc-quantity .btn-quantity:first-child', bar) : null;
+  const stickyPlus = bar ? pick('.tf-sticky-atc-quantity .plus-btn, .tf-sticky-atc-quantity .btn-increase, .tf-sticky-atc-quantity .btn-quantity:last-child', bar) : null;
+
+  // Main action buttons
+  const mainBtn = pick('.tf-product-info-by-btn .btn-add-to-cart, .tf-product-info-by-btn .btn-style-2', wrap);
+  const secondaryBuyBtn = pick('.tf-product-info-by-btn .btn-buy-now, .tf-product-info-by-btn .btn-style-3, .btn-buy-now', wrap);
+
+  // Sticky action buttons
+  const stickyAddBtn = bar ? pick('.tf-sticky-atc-btns .btn-add-to-cart', bar) : null;
+  let stickyBuyBtn = bar ? pick('.tf-sticky-atc-btns .btn-sticky-buy', bar) : null;
+
+  // If stickyBuyBtn does not exist yet, create it dynamically
+  if (bar && !stickyBuyBtn) {
+    const btnsContainer = pick('.tf-sticky-atc-btns', bar);
+    if (btnsContainer) {
+      btnsContainer.classList.add('d-flex', 'gap-10');
+      stickyBuyBtn = document.createElement('a');
+      stickyBuyBtn.className = 'tf-btn btn-fill radius-4 btn-sticky-buy flex-grow-1';
+      stickyBuyBtn.href = pageUrl('checkout');
+      stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
+      btnsContainer.appendChild(stickyBuyBtn);
+    }
+  }
+
+  // Remove Bootstrap modal triggers to prevent unexpected popups
+  [mainBtn, secondaryBuyBtn, stickyAddBtn, stickyBuyBtn].forEach((btn) => {
+    if (btn) {
+      btn.removeAttribute('data-bs-toggle');
+      btn.removeAttribute('data-bs-target');
+    }
+  });
+
+  // Detach jQuery click handlers if present
+  if (window.$) {
+    if (mainQtyBox) window.$(mainQtyBox).find('.btn-quantity, .btn-decrease, .btn-increase, input').off('click change input');
+    if (stickyQtyBox) window.$(stickyQtyBox).find('.btn-quantity, .minus-btn, .plus-btn, input').off('click change input');
+    if (mainBtn) window.$(mainBtn).off('click');
+    if (secondaryBuyBtn) window.$(secondaryBuyBtn).off('click');
+    if (stickyAddBtn) window.$(stickyAddBtn).off('click');
+    if (stickyBuyBtn) window.$(stickyBuyBtn).off('click');
+  }
+
+  const getLine = () => {
+    const lines = cart.lines();
+    const pid = String(p?.id || p?.itemId || p?._id || '');
+    if (pid) {
+      const found = lines.find((l) => String(l.itemId) === pid);
+      if (found) return found;
+    }
+    if (p?.name) {
+      const found = lines.find((l) => l.name && l.name.toLowerCase() === p.name.toLowerCase());
+      if (found) return found;
+    }
+    return null;
+  };
+
+  const getItemId = () => {
+    const line = getLine();
+    if (line && line.itemId) return String(line.itemId);
+    return String(p?.id || p?.itemId || p?._id || '');
+  };
+
+  function getProductToAdd() {
+    return p._selectedVariant ? { ...p, price: p._selectedVariant.price ?? p.price, variant: p._selectedVariant } : p;
+  }
+
+  function updatePriceDisplay(qty) {
+    const toAdd = getProductToAdd();
+    const unitPrice = Number(toAdd.price) || 0;
+    const total = unitPrice * qty;
+    pickAll('.tf-qty-price.total-price', wrap).forEach((el) => {
+      setText(el, money(total));
+    });
+  }
+
+  function syncUI() {
+    const line = getLine();
+    const inCart = !!line;
+    const toAdd = getProductToAdd();
+
+    if (inCart) {
+      // --- IN CART STATE ---
+      const cartQty = Number(line.qty) || 1;
+
+      // 1. Show Steppers synced with cart quantity
+      if (mainQtyBox) {
+        mainQtyBox.style.removeProperty('display');
+        mainQtyBox.style.setProperty('display', 'block', 'important');
+      }
+      if (stickyQtyBox) {
+        stickyQtyBox.style.removeProperty('display');
+        stickyQtyBox.style.setProperty('display', 'flex', 'important');
+      }
+      if (mainQtyInput) mainQtyInput.value = cartQty;
+      if (stickyQtyInput) stickyQtyInput.value = cartQty;
+      updatePriceDisplay(cartQty);
+
+      // 2. Hide "Add to cart", Show "Buy Now"
+      if (secondaryBuyBtn) {
+        if (mainBtn) mainBtn.style.setProperty('display', 'none', 'important');
+        secondaryBuyBtn.style.removeProperty('display');
+        secondaryBuyBtn.style.display = '';
+        secondaryBuyBtn.style.flex = '1';
+        secondaryBuyBtn.innerHTML = `<span class="text">Buy Now</span>`;
+        secondaryBuyBtn.setAttribute('href', pageUrl('checkout'));
+        secondaryBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        };
+      } else if (mainBtn) {
+        mainBtn.style.removeProperty('display');
+        mainBtn.style.display = '';
+        mainBtn.style.flex = '1';
+        mainBtn.innerHTML = `<span class="text">Buy Now</span>`;
+        mainBtn.setAttribute('href', pageUrl('checkout'));
+        mainBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        };
+      }
+
+      // 3. Sticky Bar: Hide Add to Cart, Show Buy Now full width
+      if (stickyAddBtn) {
+        stickyAddBtn.style.setProperty('display', 'none', 'important');
+      }
+      if (stickyBuyBtn) {
+        stickyBuyBtn.style.removeProperty('display');
+        stickyBuyBtn.style.display = '';
+        stickyBuyBtn.classList.remove('flex-grow-1');
+        stickyBuyBtn.classList.add('w-100');
+        stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
+        stickyBuyBtn.setAttribute('href', pageUrl('checkout'));
+        stickyBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        };
+      }
+    } else {
+      // --- NOT IN CART STATE ---
+      // 1. HIDE Quantity Steppers ("by default one nahi aana chahiye")
+      if (mainQtyBox) mainQtyBox.style.setProperty('display', 'none', 'important');
+      if (stickyQtyBox) stickyQtyBox.style.setProperty('display', 'none', 'important');
+      if (mainQtyInput) mainQtyInput.value = '1';
+      if (stickyQtyInput) stickyQtyInput.value = '1';
+      updatePriceDisplay(1);
+
+      // 2. Main Button is "Add to cart"
+      if (mainBtn) {
+        mainBtn.style.removeProperty('display');
+        mainBtn.style.display = '';
+        mainBtn.style.flex = '1';
+        mainBtn.innerHTML = `<span class="text">Add to cart</span>`;
+        mainBtn.setAttribute('href', 'javascript:void(0);');
+        mainBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          openCartSidebar();
+          notify((itemToAdd.name || 'Item') + ' added to your cart.', 'success');
+          track('add_to_cart', { itemId: itemToAdd.id, qty: 1 });
+          syncUI();
+        };
+      }
+
+      // 3. Secondary Button is "Buy Now" -> adds 1 and goes directly to checkout
+      if (secondaryBuyBtn) {
+        secondaryBuyBtn.style.removeProperty('display');
+        secondaryBuyBtn.style.display = '';
+        secondaryBuyBtn.style.flex = '1';
+        secondaryBuyBtn.innerHTML = `<span class="text">Buy Now</span>`;
+        secondaryBuyBtn.setAttribute('href', pageUrl('checkout'));
+        secondaryBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          location.href = pageUrl('checkout');
+        };
+      }
+
+      // 4. Sticky Bar: Show Add to Cart AND Buy Now side by side
+      if (stickyAddBtn) {
+        stickyAddBtn.style.removeProperty('display');
+        stickyAddBtn.style.display = '';
+        stickyAddBtn.classList.remove('w-100');
+        stickyAddBtn.classList.add('flex-grow-1');
+        stickyAddBtn.innerHTML = '<span class="text text-btn-uppercase">Add To Cart</span>';
+        stickyAddBtn.setAttribute('href', 'javascript:void(0);');
+        stickyAddBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          openCartSidebar();
+          notify((itemToAdd.name || 'Item') + ' added to your cart.', 'success');
+          track('add_to_cart', { itemId: itemToAdd.id, qty: 1 });
+          syncUI();
+        };
+      }
+      if (stickyBuyBtn) {
+        stickyBuyBtn.style.removeProperty('display');
+        stickyBuyBtn.style.display = '';
+        stickyBuyBtn.classList.remove('w-100');
+        stickyBuyBtn.classList.add('flex-grow-1');
+        stickyBuyBtn.innerHTML = '<span class="text text-btn-uppercase">Buy Now</span>';
+        stickyBuyBtn.setAttribute('href', pageUrl('checkout'));
+        stickyBuyBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const itemToAdd = getProductToAdd();
+          cart.add(itemToAdd, 1);
+          location.href = pageUrl('checkout');
+        };
+      }
+    }
+  }
+
+  function handleIncrease(e) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    }
+    const line = getLine();
+    const itemId = getItemId();
+    if (!itemId) return;
+
+    if (line) {
+      const cur = Number(line.qty) || 1;
+      cart.setQty(itemId, Math.min(99, cur + 1));
+    } else {
+      const toAdd = getProductToAdd();
+      cart.add(toAdd, 1);
+    }
+    syncUI();
+  }
+
+  function handleDecrease(e) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    }
+    const line = getLine();
+    const itemId = getItemId();
+    if (!itemId) return;
+
+    const cur = line ? (Number(line.qty) || 1) : 1;
+    if (cur > 1) {
+      cart.setQty(itemId, cur - 1);
+    } else {
+      // Dropping to 0 -> remove from cart and notify
+      cart.remove(itemId);
+      notify((p.name || line?.name || 'Item') + ' removed from your cart.', 'info');
+    }
+    syncUI();
+  }
+
+  function handleInputChange(e) {
+    const val = parseInt(e.target.value, 10);
+    const itemId = getItemId();
+    if (!itemId) return;
+    if (isNaN(val) || val <= 0) {
+      cart.remove(itemId);
+      notify((p.name || 'Item') + ' removed from your cart.', 'info');
+      syncUI();
+    } else {
+      const clamped = Math.min(99, val);
+      e.target.value = clamped;
+      cart.setQty(itemId, clamped);
+      syncUI();
+    }
+  }
+
+  // Bind direct onclick on buttons
+  if (mainMinus) mainMinus.onclick = handleDecrease;
+  if (mainPlus) mainPlus.onclick = handleIncrease;
+  if (stickyMinus) stickyMinus.onclick = handleDecrease;
+  if (stickyPlus) stickyPlus.onclick = handleIncrease;
+
+  // Bind delegated onclick on containers
+  if (mainQtyBox) {
+    mainQtyBox.onclick = (e) => {
+      const dec = e.target.closest('.btn-decrease, .minus-btn, .btn-quantity:first-child');
+      if (dec && (dec.textContent.trim() === '-' || dec.classList.contains('btn-decrease') || dec.classList.contains('minus-btn'))) {
+        handleDecrease(e);
+        return;
+      }
+      const inc = e.target.closest('.btn-increase, .plus-btn, .btn-quantity:last-child');
+      if (inc && (inc.textContent.trim() === '+' || inc.classList.contains('btn-increase') || inc.classList.contains('plus-btn'))) {
+        handleIncrease(e);
+        return;
+      }
+    };
+  }
+
+  if (stickyQtyBox) {
+    stickyQtyBox.onclick = (e) => {
+      const dec = e.target.closest('.minus-btn, .btn-decrease, .btn-quantity:first-child');
+      if (dec && (dec.textContent.trim() === '-' || dec.classList.contains('minus-btn') || dec.classList.contains('btn-decrease'))) {
+        handleDecrease(e);
+        return;
+      }
+      const inc = e.target.closest('.plus-btn, .btn-increase, .btn-quantity:last-child');
+      if (inc && (inc.textContent.trim() === '+' || inc.classList.contains('plus-btn') || inc.classList.contains('btn-increase'))) {
+        handleIncrease(e);
+        return;
+      }
+    };
+  }
+
+  if (mainQtyInput) {
+    mainQtyInput.oninput = handleInputChange;
+    mainQtyInput.onchange = handleInputChange;
+  }
+  if (stickyQtyInput) {
+    stickyQtyInput.oninput = handleInputChange;
+    stickyQtyInput.onchange = handleInputChange;
+  }
+
+  if (!p._merchPdpCartListenerWired) {
+    p._merchPdpCartListenerWired = true;
+    cart.onChange(() => {
+      syncUI();
+    });
+  }
+
+  syncUI();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FASHION THEME — ported up from fashion/merch.js, which had forked.
+
+   The fashion theme ships separate colour and size pickers, its own offcanvas
+   basket and its own cart/checkout totals. That work lived only in the theme's
+   own copy, so the master could not be synced onto it without deleting it. It
+   is reproduced here VERBATIM, reached only behind a theme guard, so the other
+   three themes behave exactly as they did before.
+
+   `paintVariantsFashion` and `wireQuickViewFashion` are DELEGATED to wholesale
+   rather than merged into their master counterparts. The theme's versions carry
+   changes that are not theme-gated — a different quick-view selector, an extra
+   painter call — and applying those to all four themes would be a decision
+   about intent that belongs to whoever wrote them, not to this merge.
+
+   Note for whoever owns this: COLOR_PALETTE here and COLOUR_HEX below are two
+   colour tables. `resolveColorSwatch` already prefers this one and falls back
+   to `colourBackground`, so nothing is broken — but they are worth reconciling.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 /* --- Fashion Color & Size Variant Swatch Engine --- */
 const COLOR_IMAGE_CACHE = new Map();
+
 const COLOR_PRODUCT_CACHE = new Map();
 
 const COLOR_PALETTE = {
@@ -2736,6 +7439,14 @@ const COLOR_PALETTE = {
   magenta: '#d946ef',
   gold: '#ffd700',
 };
+
+/* Variant options are returned as products. A selected size/color therefore
+   supplies the product id and price used by both cart views. */
+let PDP_VARIANT_REQUIRED = false;
+
+let PDP_SELECTED_VARIANT = null;
+
+let FASHION_MINI_CART_TEMPLATE = null;
 
 function resolveColorSwatch(colorName) {
   if (!colorName) return '#e5e5e5';
@@ -3170,1105 +7881,129 @@ async function paintQuickVariants(panel, p) {
   });
 }
 
-let quickViewProduct = null;
-
-function wireQuickView() {
-  /* A theme can ship more than one of these — fashion has a Quick View
-     offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
-     the shopper opens has to be the product they clicked. */
-  const panels = [];
-  for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper', '.modal-quick-view']) {
-    $$(sel).forEach((el) => { if (!panels.includes(el)) panels.push(el); });
+/* Keep the fashion offcanvas basket in step with the actual basket. Its HTML
+   ships with demo rows, including demo sizes and prices, so use one row only
+   as a visual template and rebuild the contents from local cart data. */
+function paintFashionMiniCart() {
+  if (THEME?.name !== 'fashion') return;
+  const host = pick('.popup-shopping-cart .tf-mini-cart-items');
+  if (!host) return;
+  const rows = pickAll('.tf-mini-cart-item', host);
+  if (!FASHION_MINI_CART_TEMPLATE && rows[0]) FASHION_MINI_CART_TEMPLATE = rows[0].cloneNode(true);
+  rows.forEach(remove);
+  const lines = cart.lines();
+  const empty = pick('.box-text_empty', host);
+  show(empty, !lines.length);
+  host.classList.toggle('list-empty', !lines.length);
+  if (lines.length && FASHION_MINI_CART_TEMPLATE) {
+    const frag = document.createDocumentFragment();
+    lines.forEach((line) => {
+      const row = FASHION_MINI_CART_TEMPLATE.cloneNode(true);
+      row.dataset.merchId = line.itemId;
+      const img = pick('.tf-mini-cart-image img', row);
+      if (line.image) {
+        setAttr(img, 'src', mediaUrl(line.image));
+        img?.removeAttribute('data-src');
+      } else remove(img);
+      const name = pick('.tf-mini-cart-info .name', row);
+      setText(name, line.name);
+      setAttr(name, 'href', productHref({ id: line.itemId }));
+      pickAll('.tf-prd-select', row).forEach(remove);
+      if (line.variantLabel) {
+        const variant = document.createElement('div');
+        variant.className = 'tf-prd-select text-caption-01';
+        setText(variant, line.variantLabel);
+        pick('.tf-mini-cart-info', row)?.appendChild(variant);
+      }
+      setText(pick('.tf-mini-cart-price .number', row), line.qty);
+      setText(pick('.tf-mini-card-price', row), money(line.price));
+      pick('.tf-mini-cart-price .remove', row)?.addEventListener('click', () => cart.remove(line.itemId));
+      frag.appendChild(row);
+    });
+    host.appendChild(frag);
   }
-  if (!panels.length || panels[0].dataset.merchQuickView) return;
-  panels.forEach((el) => { el.dataset.merchQuickView = '1'; });
-
-  /* The text fields only. Anything carrying an `action` is wired once, below,
-     against whichever product is currently showing — re-running wireAction per
-     open would either be ignored (it guards against double-wiring) or stack a
-     handler per open. */
-  const fields = Object.fromEntries(
-    Object.entries(THEME.product?.fields || {}).filter(([, f]) => f && !f.action),
+  pickAll('.popup-shopping-cart .tf-mini-cart-total .total-price').forEach((el) =>
+    setText(el, money(cart.localSubtotal())),
   );
 
-  document.addEventListener('click', async (e) => {
-    const trigger = e.target.closest(
-      '.quickview, .cta-quickview, .product-details-popup-btn, [data-quickview], ' +
-      'a[href="#quickView"], a[href="#quick_view"], a[href="#quickAdd"], ' +
-      '[data-bs-target="#quick_view"], [data-bs-target="#quickAdd"]',
-    );
-    if (!trigger) return;
-    const id = trigger.closest('[data-merch-id]')?.dataset.merchId;
-    if (!id) return;                       // a trigger on markup we never filled
+  pickAll('.popup-shopping-cart').forEach((popup) => {
+    let bottom = pick('.tf-mini-cart-bottom', popup);
+    const wrap = pick('.wrap-empty_text', popup) || pick('.wrap', popup) || popup;
+    if (!bottom && wrap) {
+      bottom = document.createElement('div');
+      bottom.className = 'tf-mini-cart-bottom box-empty_clear';
+      bottom.innerHTML = `
+        <div class="tf-mini-cart-bottom-wrap">
+          <div class="tf-mini-cart-total">
+            <h5 class="text-total d-flex align-content-center justify-content-between">
+              <span class="subtotal">Subtotal</span>
+              <span class="total-price tf-totals-total-value">${money(cart.localSubtotal())}</span>
+            </h5>
+          </div>
+          <div class="tf-mini-cart-view-checkout">
+            <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
+            <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
+          </div>
+        </div>
+      `;
+      wrap.appendChild(bottom);
+    }
 
-    try {
-      const p = await api.product(id);
-      quickViewProduct = p;
-      for (const panel of panels) {
-        fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
-        paintGalleryIn(panel, THEME.product?.gallery, p);
-        paintQuickViewExtras(panel, p);
-        await paintQuickVariants(panel, p);
+    if (bottom) {
+      if (lines.length) {
+        bottom.style.display = 'block';
+        bottom.classList.remove('d-none');
+      } else {
+        bottom.style.display = 'none';
       }
-    } catch (err) { showError(err); }
-  }, true);                                 // capture, so we fill BEFORE the theme opens it
 
-  /* One handler for the panels' own buttons, reading whatever is showing. */
-  for (const modal of panels) modal.addEventListener('click', (e) => {
-    const add = e.target.closest(THEME?.name === 'fashion'
-      ? '.btn-add-to-cart, .btn-action-price'
-      : '.btn-add-to-cart, .btn-action-price, .btn-cart2, .btn-cart, .rts-btn.btn-primary, .tf-btn');
-    if (!add || !quickViewProduct) return;
-    if (/wish/i.test(add.className)) return;
-    e.preventDefault();
-    const selected = modal._merchSelectedVariant;
-    if (modal.dataset.merchSizeRequired === 'true' && !selected) return notify('Please select a size first.', 'error');
-    const item = selected?.product || quickViewProduct;
-    if (item.availability === 'out') return notify('That option is sold out.', 'error');
-    const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
-    cart.add(item, qty, selected?.label || '');
-    notify(item.name + ' added to your cart.', 'success');
-    track('add_to_cart', { itemId: item.id, qty, via: 'quickview' });
-    if (THEME?.name === 'fashion') {
-      try {
-        if (window.bootstrap?.Modal) {
-          window.bootstrap.Modal.getInstance(modal)?.hide();
-        }
-        if (window.bootstrap?.Offcanvas) {
-          window.bootstrap.Offcanvas.getInstance(modal)?.hide();
-        }
-        const cartEl = document.getElementById('shoppingCart');
-        if (cartEl && window.bootstrap?.Offcanvas) {
-          const bsOffcanvas = window.bootstrap.Offcanvas.getInstance(cartEl) || new window.bootstrap.Offcanvas(cartEl);
-          bsOffcanvas.show();
-        }
-      } catch { /* ignore */ }
+      const bottomWrap = pick('.tf-mini-cart-bottom-wrap', bottom) || bottom;
+      let viewCheckout = pick('.tf-mini-cart-view-checkout', bottomWrap);
+      if (!viewCheckout) {
+        viewCheckout = document.createElement('div');
+        viewCheckout.className = 'tf-mini-cart-view-checkout';
+        viewCheckout.innerHTML = `
+          <a href="${pageUrl('cart')}" class="tf-btn btn-stroke">View cart</a>
+          <a href="${pageUrl('checkout')}" class="tf-btn animate-btn">Check Out</a>
+        `;
+        const continueLink = pick('a[href*="shop"]', bottomWrap);
+        if (continueLink) bottomWrap.insertBefore(viewCheckout, continueLink);
+        else bottomWrap.appendChild(viewCheckout);
+      }
+
+      let viewCartBtn = pick('a[href*="cart"], .btn-stroke', viewCheckout);
+      if (!viewCartBtn) {
+        viewCartBtn = document.createElement('a');
+        viewCartBtn.className = 'tf-btn btn-stroke';
+        viewCartBtn.textContent = 'View cart';
+        viewCheckout.insertBefore(viewCartBtn, viewCheckout.firstChild);
+      }
+      setAttr(viewCartBtn, 'href', pageUrl('cart'));
+      if (!viewCartBtn._merchWired) {
+        viewCartBtn._merchWired = true;
+        viewCartBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          location.href = pageUrl('cart');
+        });
+      }
+
+      let checkoutBtn = pick('a[href*="checkout"], .animate-btn', viewCheckout);
+      if (!checkoutBtn) {
+        checkoutBtn = document.createElement('a');
+        checkoutBtn.className = 'tf-btn animate-btn';
+        checkoutBtn.textContent = 'Check Out';
+        viewCheckout.appendChild(checkoutBtn);
+      }
+      setAttr(checkoutBtn, 'href', pageUrl('checkout'));
+      if (!checkoutBtn._merchWired) {
+        checkoutBtn._merchWired = true;
+        checkoutBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          location.href = pageUrl('checkout');
+        });
+      }
     }
   });
-}
-
-const pages = {};
-
-/* --- HOME ----------------------------------------------------------------
-   The home page is the MERCHANT's: /api/homepage returns their ordered
-   sections, already resolved. We map each section onto the rail the theme
-   already has in that position, so a merchant reordering their sections
-   reorders the shop without anyone touching HTML. */
-pages.home = async () => {
-  let data = null;
-  try { data = await api.homepage(); } catch (e) { warn('homepage', e); }
-
-  /* Look up the containers AFTER the fetch, never before it.
-
-     A theme whose main.js runs at parse time (jewellery's does — there is no
-     ready wrapper) has already handed its rails to Slick by the time our
-     answer arrives, and Slick REBUILDS the DOM: the elements we would have
-     captured a moment earlier are detached, so every render goes into a node
-     nobody can see. On that theme it left 93 of 99 products showing demo
-     prices, with no error anywhere.
-
-     A DOM reference held across an `await` is a reference to the page as it
-     WAS. Take it after. */
-  const rails = productContainers();
-  const filled = new Set();
-
-  /* The merchant's own ordered sections. These are the types the store
-     actually emits. A plausible guess like 'rail' or 'category-products'
-     matches NOTHING and leaves the whole home page showing demo products,
-     which looks exactly like a working shop. */
-  const PRODUCT_SECTIONS = new Set([
-    'featuredProducts', 'bestSellers', 'newArrivals', 'homepageProducts', 'recentlyViewed', 'categoryProducts',
-  ]);
-  const sections = (data?.sections || []).filter(
-    (sec) => PRODUCT_SECTIONS.has(sec.type) && ((sec.products?.length || 0) > 0 || (sec.groups?.length || 0) > 0),
-  );
-
-  /* One section per rail the theme ships, in the merchant's order. A theme
-     with more rails than the merchant has sections keeps its own content in
-     the extras rather than showing an empty strip. */
-  let railIndex = 0;
-  for (const sec of sections) {
-    const groups = sec.groups?.length ? sec.groups : [{ title: sec.title, products: sec.products || [] }];
-    for (const g of groups) {
-      const rail = rails[railIndex];
-      if (!rail) break;
-      const size = Math.min(24, Math.max(4, templateCount({ ...THEME.listing, el: rail }) || 8));
-      const items = (g.products || []).slice(0, size);
-      if (!items.length) continue;
-      renderProducts(items, THEME.listing, rail);
-      setSectionHeading(rail, g.title || sec.title);
-      filled.add(rail);
-      railIndex++;
-    }
-  }
-
-  /* No homepage sections configured at all: fill the first rail, so a shop is
-     never blank on its own front page. */
-  if (!railIndex && rails.length) {
-    try {
-      const size = Math.min(24, Math.max(4, templateCount({ ...THEME.listing, el: rails[0] }) || 8));
-      const res = await api.catalog({ pageSize: size });
-      renderProducts(Array.isArray(res) ? res : res.products || [], THEME.listing, rails[0]);
-    } catch (e) { warn(e); }
-  }
-
-  paintBanners(data);
-  await paintCategoryTiles(data);
-  await renderRecentlyViewed(rails[rails.length - 1]);
-  wireQuickView();
-};
-
-/* The strip's own heading, which lives OUTSIDE the container. Searching from a
-   shared ancestor without that constraint finds a product card's `.title`
-   inside the strip and writes the section name into a product. */
-function setSectionHeading(container, title) {
-  if (!title) return;
-  let scope = container;
-  for (let i = 0; i < 5 && scope.parentElement; i++) {
-    scope = scope.parentElement;
-    const heading = pickAll('h1|h2|h3|h4|.section-title|.title-area .title', scope)
-      .find((el) => !container.contains(el));
-    if (heading) { setText(heading, title); return; }
-    if (scope.matches('section, .rts-section, .section')) break;
-  }
-}
-
-/* The merchant's own hero artwork, copy and links — a `banner` section is
-   { id, title, imageUrl, imageMobileUrl, link, alt }. The slider is rebuilt
-   from the theme's own slide, so a merchant with one banner gets one slide and
-   a merchant with four gets four; the slider is built to handle any count, and
-   refreshSwipers() tells it what changed.
-
-   Left alone, a hero is the loudest lie on the page: full-width demo artwork
-   reading "Get up to 30% off on your first $150 purchase". */
-function paintBanners(data) {
-  /* The hero is the loudest thing on the page, so it follows the flag: with
-     the template owning the look, its own artwork stays. */
-  if (!useStore('banners')) return;
-  let banners = (data?.sections || []).filter((x) => x.type === 'banner').flatMap((x) => x.banners || []);
-
-  /* No banner sections, but the merchant filled in the Hero block in
-     Appearance. It is the same thing wearing different field names, so it gets
-     the same slot rather than being ignored while the template's artwork
-     claims to be theirs. */
-  const hero = STORE?.hero;
-  if (!banners.length && hero && (hero.headline || hero.imageUrl)) {
-    banners = [{
-      title: hero.headline || '',
-      alt: hero.subtext || '',
-      imageUrl: hero.imageUrl || '',
-      link: hero.ctaHref || '/shop',
-    }];
-  }
-
-  const spec = THEME.banners;
-  if (!spec) return;
-  const t = takeTemplate(spec);
-  if (!t) return;
-  if (!banners.length) {
-    /* No banners configured: hide the hero rather than leave the theme's. */
-    const section = t.container.closest('section, .tf-slideshow, .slider-area, .rts-banner-area-one') || t.container;
-    show(section, false);
-    return;
-  }
-  repeat(t, banners, (node, b) => fillFields(node, spec.fields, b, { node }));
-}
-
-/* "Browse categories" — { slug, name, count, imageUrl }. Every theme ships a
-   strip of these pointing at demo pages; each one becomes a real filter. */
-async function paintCategoryTiles(data) {
-  let cats = (data?.sections || [])
-    .filter((x) => x.type === 'browseCategories')
-    .flatMap((x) => x.categories || []);
-  const spec = THEME.categories;
-  if (!spec) return;
-  if (!cats.length) {
-    try {
-      const response = await api.categories();
-      cats = (Array.isArray(response) ? response : response?.categories || []).map((c) =>
-        typeof c === 'string' ? { name: c } : c,
-      );
-    } catch { /* hide the demo category tiles if the store cannot answer */ }
-  }
-  const containers = productContainers(spec);
-  if (!cats.length) {
-    containers.forEach((el) => show(el.closest('section') || el, false));
-    return;
-  }
-  /* A home page often carries the SAME strip twice (a compact one in the
-     header band and a full one below). Filling only the first leaves the
-     other insisting the shop sells Organic Vegetable. */
-  for (const el of containers) {
-    show(el.closest('section') || el, true);
-    const t = takeTemplate({ ...spec, el });
-    if (!t) continue;
-    /* Never more tiles than the strip was laid out for: these sit on one row,
-       and forty of them is not a design. */
-    const room = Math.max(1, templateCount({ ...spec, el }));
-    repeat(t, cats.slice(0, Math.max(room, Math.min(cats.length, room * 2))), (node, c) => {
-      fillFields(node, spec.fields, c, { node });
-    });
-  }
-}
-
-/* A banner's link may be absolute, a mailto/tel, or a store-relative path. The
-   two paths the store owns are mapped onto THIS theme's pages; anything else
-   is left exactly as the merchant wrote it. */
-function storeLink(link) {
-  if (!link) return '#';
-  if (/^(https?:|mailto:|tel:)/i.test(link)) return link;
-
-  const collection = link.match(/^\/collections\/([^/?#]+)/);
-  if (collection) return pageUrl('listing', { collection: collection[1] });
-  const product = link.match(/^\/product\/([^/?#]+)/);
-  if (product) return pageUrl('product', { id: product[1] });
-  const category = link.match(/^\/(?:shop|category|collections)\/?$/) ? '' : null;
-  if (category !== null) return pageUrl('listing');
-
-  /* The merchant writes these against their OWN storefront's routes. Left as
-     sent, a hero button reading "Shop Now" goes to /shop — a 404 on a folder
-     of static pages. Map the ones the store owns; leave the rest alone, since
-     a merchant may well be linking somewhere real. */
-  const known = { '/cart': 'cart', '/checkout': 'checkout', '/account': 'account', '/orders': 'orders', '/track': 'track', '/wishlist': 'wishlist', '/blog': 'blog' };
-  const role = known[link.replace(/\/$/, '')];
-  if (role) return pageUrl(role);
-  return link;
-}
-
-async function renderRecentlyViewed(container) {
-  if (!container) return;
-  try {
-    const seen = (await api.recentlyViewed(sessionId(), 8))?.products || [];
-    /* Worth a rail only once there is something in it. On a first visit a
-       strip of "recently viewed" products the shopper has never seen is a lie. */
-    if (seen.length >= 2) renderProducts(seen, THEME.listing, container);
-  } catch { /* a rail that will not load simply stays as the theme shipped it */ }
-}
-
-/* --- LISTING -------------------------------------------------------------
-   Search, category, brand, sort, price and in-stock, all held in the URL so a
-   filtered grid can be linked, bookmarked and gone Back to. */
-pages.listing = async () => {
-  /* A listing page usually ships the SAME products twice — once as a grid and
-     once as a list, behind the theme's own view toggle. Hydrating only the
-     first leaves the other showing demo data, one click away.
-
-     The theme's own grid also decides the page size: a page laid out for 15
-     cards asks for 15. */
-  /* Measured before the first fetch only to size the request; the containers
-     themselves are looked up again after every answer, because the theme's own
-     scripts may rebuild them in between (see pages.home). */
-  const pageSize = Math.min(60, Math.max(8, Math.max(
-    0, ...pickAll(THEME.listing.container).map((el) => templateCount({ ...THEME.listing, el })),
-  ) || 24));
-
-  const state = {
-    q: param('q') || '',
-    category: param('category') || '',
-    brand: param('brand') || '',
-    color: param('color') || '',
-    size: param('size') || '',
-    collection: param('collection') || '',
-    sort: param('sort') || '',
-    minPrice: param('minPrice') || '',
-    maxPrice: param('maxPrice') || '',
-    inStock: param('inStock') === 'true',
-    page: Number(param('page') || 1),
-  };
-
-  const run = async () => {
-    let res;
-    try {
-      res = state.collection
-        ? (await api.collection(state.collection)).products
-        : await api.catalog({
-            /* The store calls it `search`. A `q=` is silently IGNORED, which
-               reads as "the shop has everything": a narrowing question
-               answered with the full catalogue. */
-            search: state.q || undefined,
-            pageSize,
-            category: state.category || undefined,
-            brand: state.brand || undefined,
-            sort: state.sort || undefined,
-            minPrice: state.minPrice || undefined,
-            maxPrice: state.maxPrice || undefined,
-            inStock: state.inStock || undefined,
-            color: state.color || undefined,
-            size: state.size || undefined,
-            page: state.page > 1 ? state.page : undefined,
-          });
-    } catch (e) { showError(e); return; }
-    const items = Array.isArray(res) ? res : (res.products || res.items || []);
-    for (const grid of pickAll(THEME.listing.container)) renderProducts(items, THEME.listing, grid);
-    wireQuickView();
-    paintResultCount(items, state, pageSize);
-    THEME.reinit?.();
-  };
-
-  wireSearchInputs((q) => { state.q = q; state.page = 1; pushState(state); run(); });
-  wireSortSelects((sort) => { state.sort = sort; state.page = 1; pushState(state); run(); });
-  wireCategoryLinks();
-  wirePagination(state, run, pageSize);
-  wirePriceFilter(state, run);
-  wireStockFilter(state, run);
-  await paintFilters(state, run);
-  await run();
-};
-
-/* Every theme ships a static pager. We keep its markup and give its numbers
-   meaning; a page beyond the last simply comes back empty, which the store
-   answers honestly rather than by wrapping around. */
-function wirePagination(state, run, pageSize) {
-  const pager = pick('.pagination|.pagination-area|.wd-navigation|.page-numbers');
-  if (!pager) return;
-  const links = pickAll('a, li', pager).filter((el) => /^\d+$|prev|next|\u2039|\u203A/i.test((el.textContent || '').trim()));
-  for (const el of links) {
-    el.addEventListener('click', (e) => {
-      e.preventDefault();
-      const label = (el.textContent || '').trim().toLowerCase();
-      if (/prev|\u2039/.test(label)) state.page = Math.max(1, state.page - 1);
-      else if (/next|\u203A/.test(label)) state.page += 1;
-      else if (/^\d+$/.test(label)) state.page = Number(label);
-      else return;
-      pushState(state);
-      run();
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
-  }
-}
-
-/* The price slider every one of these themes ships. We read whatever it ends
-   up with rather than driving it, because each theme uses a different widget
-   and re-implementing four of them would change how they feel. */
-function wirePriceFilter(state, run) {
-  const apply = pick('.price-filter button|.filter-btn|.button-area .rts-btn');
-  const from = pick('.price-range .from|#slider-range-value1|input[name="min_price"]');
-  const to = pick('.price-range .to|#slider-range-value2|input[name="max_price"]');
-  if (!apply || (!from && !to)) return;
-  apply.addEventListener('click', (e) => {
-    e.preventDefault();
-    const num = (el) => { const n = Number(String(el?.textContent || el?.value || '').replace(/[^\d.]/g, '')); return Number.isFinite(n) && n > 0 ? n : ''; };
-    state.minPrice = num(from);
-    state.maxPrice = num(to);
-    state.page = 1;
-    pushState(state);
-    run();
-  });
-}
-
-/* /api/catalog answers a plain array with no total, so the honest number for
-   "N products found" comes from the facets endpoint, which counts the same
-   filter. Without it we would print the PAGE size and call it the total. */
-async function paintResultCount(items, state, pageSize) {
-  /* Themes write this as a sentence in an unnamed <span> ("Showing 1-20 of 57
-     results"), so the reliable way to find it is the SENTENCE, not a class.
-     Left alone it keeps announcing the demo's 57 products forever. */
-  const named = pickAll(THEME.resultCount);
-  const sentence = named.length ? named : $$('*').filter(
-    (el) => el.children.length === 0 && /showing\s+[\d,]+\s*[-\u2013]\s*[\d,]+\s+of\s+[\d,]+/i.test(el.textContent || ''),
-  );
-  if (!sentence.length) return;
-
-  let total = items.length;
-  try {
-    const f = await api.facets({
-      search: state.q || undefined,
-      category: state.category || undefined,
-      brand: state.brand || undefined,
-      inStock: state.inStock || undefined,
-    });
-    if (Number.isFinite(f?.total)) total = f.total;
-  } catch { /* the page count is a fair fallback */ }
-
-  const from = items.length ? (state.page - 1) * pageSize + 1 : 0;
-  const to = (state.page - 1) * pageSize + items.length;
-  sentence.forEach((el) => setText(el, 'Showing ' + from + '\u2013' + to + ' of ' + total + ' results'));
-}
-
-function pushState(state) {
-  const url = new URL(location.href);
-  for (const [k, v] of Object.entries(state)) {
-    if (v === '' || v === false || v === 1) url.searchParams.delete(k);
-    else url.searchParams.set(k, String(v));
-  }
-  history.replaceState(null, '', url);
-}
-
-/* Themes put a search box in the header of every page. One handler covers all
-   of them, on every page, and sends the shopper to this theme's listing. */
-function wireSearchInputs(onSearch) {
-  const inputs = pickAll('input[placeholder*="Search" i]|input[type="search"]|.header-search-field');
-  for (const input of inputs) {
-    const form = input.closest('form');
-    const go = (e) => {
-      e.preventDefault();
-      const q = input.value.trim();
-      if (onSearch) onSearch(q);
-      else location.href = pageUrl('listing', { q });
-    };
-    if (form) form.addEventListener('submit', go);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(e); });
-  }
-}
-
-function wireSortSelects(onSort) {
-  /* The store accepts price_asc, price_desc and name — nothing else. A theme's
-     "Best selling" option has nothing behind it, so it sorts by name rather
-     than sending a value the store will ignore. */
-  const map = {
-    'price, low to high': 'price_asc', 'price: low to high': 'price_asc', 'low to high': 'price_asc',
-    'price, high to low': 'price_desc', 'price: high to low': 'price_desc', 'high to low': 'price_desc',
-    'alphabetically, a-z': 'name', 'name': 'name', 'a to z': 'name',
-  };
-  pickAll('select.sort|select[name="sort"]|.sort-by select|.nice-select').forEach((sel) => {
-    sel.addEventListener('change', () => {
-      const label = (sel.options?.[sel.selectedIndex]?.text || '').trim().toLowerCase();
-      onSort(map[label] || '');
-    });
-  });
-  /* Themes that render sorting as a list of links rather than a <select>. */
-  pickAll('.sort-list a|.dropdown-menu a[data-sort]').forEach((a) => {
-    a.addEventListener('click', (e) => {
-      e.preventDefault();
-      onSort(a.dataset.sort || map[(a.textContent || '').trim().toLowerCase()] || '');
-    });
-  });
-}
-
-/* The category menus in every theme's header are static links to demo pages.
-   Point them at the real categories without touching how they look. */
-async function wireCategoryLinks() {
-  let cats = [];
-  try { cats = await api.categories(); } catch { return; }
-  /* This endpoint answers an array of plain STRINGS — category names, which
-     are also what ?category= takes. There is no id or slug to look up. */
-  if (!cats?.length) return;
-  const known = new Map(cats.map((name) => [String(name).trim().toLowerCase(), name]));
-  pickAll('.menu-item a|.sub-menu a|.category-list a|.single-category a|.categories a').forEach((a) => {
-    const name = known.get((a.textContent || '').trim().toLowerCase());
-    if (name) a.setAttribute('href', pageUrl('listing', { category: name }));
-  });
-}
-
-/* --- PRODUCT -------------------------------------------------------------
-   One product. The gallery, the variants, the reviews and the add button.
-   `?id=` says which; without one we show the store's first product rather
-   than leaving the theme's demo copy on screen pretending to be real. */
-pages.product = async () => {
-  const id = param('id');
-  let p;
-  try {
-    const first = id ? null : await api.catalog({ pageSize: 1 });
-    p = id ? await api.product(id) : (Array.isArray(first) ? first : first?.products || [])[0];
-  } catch (e) { return showError(e); }
-  if (!p) return;
-
-  const spec = THEME.product;
-  fillFields(document, spec.fields, p, { node: document, qtyEl: pick(THEME.qtyInput) });
-  document.title = p.name + document.title.replace(/^[^|–-]*/, '');
-
-  paintGallery(spec.gallery, p);
-  await paintVariants(spec, p);
-  await paintReviews(p);
-  await paintRelated(p);
-
-  /* Tell the store it was seen, so the shopper's own recently-viewed rail
-     fills as they browse. Best-effort: a failure here must never break a PDP. */
-  try { wireReviewForm(p); } catch (e) { warn('review form', e); }
-  api.recordView(p.id, sessionId()).catch(() => {});
-  track('product_view', { itemId: p.id });
-  THEME.reinit?.();
-  onThemeReady(() => paintPriceButtons(p));
-};
-
-/* Any control whose LABEL carries the price. The theme rewrites these from the
-   price element after it loads, so they are corrected here, last. */
-function paintPriceButtons(p) {
-  /* EVERY one of these, not the first selector that matches something —
-     `pickAll` stops at the first non-empty list, which left the sticky bar
-     still offering "Add To Cart - $79.99" under a ₹468 product. */
-  const buttons = new Set();
-  for (const sel of ['.btn-action-price', '.btn-add-to-cart', '.btn-main-product']) {
-    $$(sel).forEach((el) => buttons.add(el));
-  }
-  for (const btn of buttons) {
-    if (!/add to (cart|bag)/i.test(btn.textContent || '')) continue;
-    setText(btn, 'Add to cart');
-    wireAction(btn, 'add', p, { node: document });
-  }
-}
-
-/* Galleries are the one place where the number of nodes matters: a theme's
-   slider was built around N images. We rewrite the first N and drop the rest,
-   which keeps the slider's own arrows and counters honest. */
-function paintGalleryIn(root, gallery, p) {
-  if (!gallery) return;
-  const scoped = {
-    images: gallery.images, thumbs: gallery.thumbs,
-  };
-  const within = (sel) => pickAll(sel, root);
-  paintGallery(scoped, p, within);
-}
-
-function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
-  if (!gallery) return;
-  const urls = (p.imageUrls || []).map(mediaUrl);
-  if (!urls.length) return;
-  for (const sel of [gallery.images, gallery.thumbs]) {
-    const nodes = within(sel);
-    if (!nodes.length) continue;
-    nodes.forEach((node, i) => {
-      if (i >= urls.length) {
-        const slide = node.closest('.swiper-slide, .slick-slide, .item, .thumb-wrapper') || node;
-        remove(slide);
-        return;
-      }
-      /* A zoom gallery paints the visible image as a CSS BACKGROUND and keeps
-         a hidden <img> for the lens. Setting only the <img> changes nothing on
-         screen, so set whichever the node actually uses — and both when it
-         uses both. */
-      if (node.style.backgroundImage || node.tagName !== 'IMG') {
-        node.style.backgroundImage = 'url(' + urls[i] + ')';
-        if (node.dataset.image !== undefined) node.dataset.image = urls[i];
-      }
-      const img = node.tagName === 'IMG' ? node : node.querySelector('img');
-      if (img) {
-        setAttr(img, 'src', urls[i]);
-        if (img.hasAttribute('data-src')) setAttr(img, 'data-src', urls[i]);
-        img.removeAttribute('srcset');
-      }
-    });
-  }
-}
-
-/* Variants. Where a theme has a picker we relabel its options; where it has
-   none we leave the page alone and the add button sends the base item. */
-/* Variant options are returned as products. A selected size/color therefore
-   supplies the product id and price used by both cart views. */
-let PDP_VARIANT_REQUIRED = false;
-let PDP_SELECTED_VARIANT = null;
-let FASHION_MINI_CART_TEMPLATE = null;
-
-async function paintVariants(spec, p) {
-  if (!spec.variants) return;
-  PDP_VARIANT_REQUIRED = false;
-  PDP_SELECTED_VARIANT = null;
-  remove(pick('.tf-sticky-atc-variant-price'));
-
-  let group = null;
-  try { group = await api.variants(p.id); } catch { group = null; }
-  const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
-  const container = pick(spec.variants.container);
-  if (!container) return;
-
-  pickAll(spec.variants.group, container).forEach(remove);
-  if (!options.length) { remove(container); return; }
-
-  const parsedList = options.map((o) => parseVariantOption(o, p));
-  const hasSizes = parsedList.some((x) => x.size);
-  PDP_VARIANT_REQUIRED = hasSizes;
-
-  renderVariantPickers({
-    host: container,
-    p,
-    options,
-    isQuick: false,
-    onSelect: (variant, label) => {
-      PDP_SELECTED_VARIANT = { product: variant, label };
-      $$('.btn-action-price, .btn-add-to-cart').forEach((btn) => setText(btn, 'Add to cart'));
-      const detailPrice = pick('.product-infor-price .price-on-sale');
-      if (detailPrice) setText(detailPrice, money(variant.price));
-      const stickyVariant = pick('.tf-sticky-atc-product .distribute__prd');
-      if (stickyVariant) setText(stickyVariant, label);
-      const stickyPrice = pick('.tf-sticky-atc-product .price__prd');
-      if (stickyPrice) setText(stickyPrice, money(variant.price));
-    },
-    onClear: () => {
-      PDP_SELECTED_VARIANT = null;
-    },
-  });
-}
-
-async function paintReviews(p) {
-  let data = null;
-  try { data = await api.reviews(p.id); } catch { return; }
-  /* { summary: { average, count }, reviews: [...] } — not a bare array. */
-  const reviews = data?.reviews || [];
-  const summary = data?.summary || { average: 0, count: 0 };
-
-  pickAll('.rating-count|.review-count|[data-review-count]').forEach((el) => setText(el, summary.count + ' Reviews'));
-  pickAll('.rating-average|[data-review-average]').forEach((el) => setText(el, (summary.average || 0).toFixed(1)));
-
-  const spec = { container: '.review-list|.product-reviews|.comment-list|.tab-reviews', card: '.review-item|.single-review|li' };
-  const t = takeTemplate(spec);
-  if (!t) return;
-  if (!reviews.length) return renderEmpty(t.container, 'No reviews yet.', spec);
-  repeat(t, reviews, (node, r) => {
-    setText(pick('.review-author|.author|h5|h6', node), r.author || r.name || 'Verified buyer');
-    setText(pick('.review-body|.comment-text|p', node), r.body || r.comment || '');
-    setText(pick('.review-date|.date', node), r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '');
-  });
-}
-
-/* The review form every product template ships. Without this it looks like a
-   shopper can leave a review and nothing happens when they press send. */
-function wireReviewForm(product) {
-  for (const form of $$('form')) {
-    const body = pick('textarea', form);
-    if (!body) continue;
-    if (!/review|comment|rating/i.test(form.className + ' ' + (form.id || '') + ' ' + (body.placeholder || '') + ' ' + (form.closest('[class*="review"], [id*="review"]') ? 'review' : ''))) continue;
-    if (form.dataset.merchReview) continue;
-    form.dataset.merchReview = '1';
-
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const name = pick('input[type="text"]', form)?.value.trim();
-      const email = pick('input[type="email"]', form)?.value.trim();
-      /* Themes draw the stars as radios, or as a row of links with an index. */
-      const checked = pickAll('input[type="radio"]', form).find((r) => r.checked);
-      const rating = Number(checked?.value) || Number(form.dataset.merchRating) || 5;
-      if (!body.value.trim()) return notify('Please write your review first.', 'error');
-      try {
-        await api.postReview(product.id, { rating, title: '', body: body.value.trim(), author: name || '', email: email || '' });
-        notify('Thank you — your review has been sent.', 'success');
-        form.reset();
-      } catch (err) { showError(err); }
-    });
-
-    /* Star widgets that are not radios: remember which one was pressed. */
-    pickAll('.rating a, .rating-stars a, .stars a, .rate a', form).forEach((a, i) => {
-      a.addEventListener('click', (e) => { e.preventDefault(); form.dataset.merchRating = String(i + 1); });
-    });
-  }
-}
-
-async function paintRelated(p) {
-  /* "Related products" is the last strip on a product page. */
-  const rail = productContainers().pop();
-  if (!rail) return;
-  try {
-    const size = Math.min(16, Math.max(4, templateCount({ ...THEME.listing, el: rail }) || 8));
-    const res = await api.catalog({ category: p.category, pageSize: size + 1 });
-    const items = (Array.isArray(res) ? res : res.products || []).filter((x) => x.id !== p.id).slice(0, size);
-    if (items.length) renderProducts(items, THEME.listing, rail);
-  } catch { /* related is a nicety; never let it fail a product page */ }
-}
-
-/* --- CART ----------------------------------------------------------------
-   What the shopper has, priced by the store rather than by us. The coupon and
-   gift card they enter here are carried to checkout in sessionStorage — the
-   only figures that count are the ones the store returns at checkout. */
-
-const PENDING_KEY = 'merch.pending';
-const pending = {
-  get: () => { try { return JSON.parse(sessionStorage.getItem(PENDING_KEY) || '{}'); } catch { return {}; } },
-  set: (patch) => {
-    const next = { ...pending.get(), ...patch };
-    try { sessionStorage.setItem(PENDING_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-    return next;
-  },
-  clear: () => { try { sessionStorage.removeItem(PENDING_KEY); } catch { /* ignore */ } },
-};
-
-pages.cart = async () => {
-  window.__merchHandledCart = true;
-  const spec = THEME.cart;
-  const lines = await cart.refresh();
-
-  const draw = () => {
-    const t = takeTemplate(spec);
-    const current = cart.lines();
-    if (!t) return;
-    if (!current.length) {
-      renderEmpty(t.container, 'Your cart is empty.');
-      paintCartTotals(spec, current);
-      try { paintFreeShippingBar(current); } catch (e) { warn('free-shipping bar', e); }
-      return;
-    }
-    repeat(t, current, (node, l) => {
-      node.dataset.merchId = l.itemId;
-      fillFields(node, spec.fields, l, { node, rerender: draw });
-      if (THEME?.name === 'fashion') {
-        const variantRows = pickAll('.prd_select', node);
-        if (l.variantLabel && variantRows[0]) setText(variantRows[0], l.variantLabel);
-        else if (!l.variantLabel) variantRows.forEach(remove);
-        variantRows.slice(1).forEach(remove);
-      }
-    });
-    wireQuantityWidgets(t.container, draw);
-    paintCartTotals(spec, current);
-    try { paintFreeShippingBar(current); } catch (e) { warn('free-shipping bar', e); }
-    paintHeader();
-    THEME.reinit?.();
-  };
-
-  draw();
-  wireCoupon(spec, draw);
-  wireGiftCard(spec, draw);
-
-  /* "Proceed to checkout" is a link on some themes and a plain <button> on
-     others — a <button> outside a form goes NOWHERE on its own, so the button
-     the designer drew has to be given the navigation as well as the guard. */
-  pickAll(spec.checkoutBtn).forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      if (!cart.count()) { e.preventDefault(); notify('Your cart is empty.', 'error'); return; }
-      const agree = pick('#checkOutAgree');
-      if (agree && !agree.checked) {
-        e.preventDefault();
-        notify('Please agree to the Terms and Conditions before continuing.', 'error');
-        return;
-      }
-      const href = btn.tagName === 'A' ? (btn.getAttribute('href') || '') : '';
-      if (/checkout/i.test(href)) return;        // already points at the right page
-      e.preventDefault();
-      location.href = pageUrl('checkout');
-    });
-  });
-
-  cart.onChange(() => paintHeader());
-};
-
-/* --- COLOUR SWATCHES ------------------------------------------------------
-   An item carries BOTH a colour name and, optionally, a `color_code` hex. They
-   are two columns on purpose: the name is also the `?color=` filter value, the
-   facet label here, the option on a variant pill and a line on the merchant's
-   invoice and POS screen, so a hex in that one field would show "#1A1A1A" to a
-   shopper in all of them — and a literal '#' in a query string is a fragment
-   delimiter, so the filter would quietly stop round-tripping.
-
-   So: the code paints, the name reads. When a catalogue supplies no code (most
-   do not), these fall back to resolving the NAME, and a name we cannot resolve
-   gets no swatch at all — painting "Sea Foam" grey is worse than painting
-   nothing. */
-const COLOUR_HEX = {
-  black: '#1a1a1a', white: '#ffffff', ivory: '#fffff0', cream: '#fdf5e0',
-  grey: '#808080', gray: '#808080', charcoal: '#36454f', silver: '#c0c0c0',
-  navy: '#1a2a52', 'royal blue': '#2b4fa2', blue: '#2563eb', denim: '#3b5b86',
-  teal: '#117a7a', mint: '#8fd9b6', green: '#2e7d32', olive: '#6b7030',
-  sage: '#9caf88', khaki: '#b6a66f', beige: '#e3d5b8', sand: '#dcc9a6',
-  stone: '#d2cabb', brown: '#6b4a2f', coffee: '#4b352a', rust: '#9c4a1a',
-  orange: '#e3721f', mustard: '#d4a017', yellow: '#f2c200', peach: '#ffb997',
-  pink: '#e8a0b8', red: '#c62828', maroon: '#6d1f2b', wine: '#722f37',
-  purple: '#6b3fa0', lavender: '#c3b1e1', turquoise: '#30bfc4', neon: '#ccff00',
-  'red wine': '#6b2230',
-};
-
-/* Modifiers shade the base word they qualify — "Dark Green" is green pushed
-   toward black — rather than being colours themselves. Without this most real
-   catalogue values miss: 17 of Juxar's 41 are compound or carry two colours. */
-const COLOUR_MODIFIERS = {
-  dark: -0.30, deep: -0.30, bright: -0.05, light: 0.32, pale: 0.40,
-  pastel: 0.42, melange: 0.18, heather: 0.18, washed: 0.22,
-};
-
-/* #RGB, #RRGGBB or #RRGGBBAA — the only shapes a browser reads as a literal.
-   ⭐ This guard is not cosmetic: the value goes into a style attribute, so any
-   other string is a CSS injection carried by catalogue data. */
-const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-
-function shade(hex, amount) {
-  if (!amount) return hex;
-  const n = parseInt(hex.slice(1), 16);
-  const target = amount > 0 ? 255 : 0;
-  const a = Math.min(Math.abs(amount), 1);
-  const ch = (shift) => {
-    const v = (n >> shift) & 255;
-    return Math.round(v + (target - v) * a).toString(16).padStart(2, '0');
-  };
-  return '#' + ch(16) + ch(8) + ch(0);
-}
-
-/* One colour phrase -> a hex, or null. Two-word names win over single words, so
-   "Navy Blue" resolves as navy rather than as the blue that follows it. */
-function colourHex(name) {
-  const key = String(name || '').trim().toLowerCase();
-  if (!key) return null;
-  if (COLOUR_HEX[key]) return COLOUR_HEX[key];
-  const words = key.split(/[^a-z]+/).filter(Boolean);
-  for (let i = 0; i < words.length - 1; i++) {
-    const pair = COLOUR_HEX[words[i] + ' ' + words[i + 1]];
-    if (pair) return pair;
-  }
-  let base = null, shift = 0;
-  for (const w of words) {
-    if (base === null && COLOUR_HEX[w]) base = COLOUR_HEX[w];
-    else if (w in COLOUR_MODIFIERS) shift += COLOUR_MODIFIERS[w];
-  }
-  return base ? shade(base, shift) : null;
-}
-
-/* The CSS background for a swatch. An explicit, VALIDATED code wins; otherwise
-   the name is resolved, and a name carrying two colours ("Blue & Yellow") gets
-   both on the diagonal, because showing only the first says something false. */
-function colourBackground(name, code) {
-  const explicit = String(code || '').trim();
-  if (HEX_RE.test(explicit)) return explicit;
-  const parts = String(name || '')
-    .split(/\s*(?:&|\/|\+|\band\b)\s*/i)
-    .map((s) => colourHex(s))
-    .filter(Boolean);
-  if (parts.length > 1) return `linear-gradient(135deg, ${parts[0]} 0 50%, ${parts[1]} 50% 100%)`;
-  return parts[0] || colourHex(name);
-}
-
-/* A dot for one colour, or null when we cannot resolve it. Built with DOM calls
-   rather than innerHTML because the name is catalogue data. */
-function colourDot(name, px, code) {
-  const bg = colourBackground(name, code);
-  if (!bg) return null;
-  const dot = document.createElement('span');
-  dot.className = 'merch-swatch';
-  dot.setAttribute('aria-hidden', 'true');   /* the name is already in the text */
-  dot.title = String(name || '');
-  /* The ring is unconditional: White and Ivory are invisible on a white
-     sidebar without one, and a border on every swatch keeps them a set. */
-  dot.style.cssText = 'display:inline-block;flex:0 0 auto;border-radius:50%;'
-    + `width:${px}px;height:${px}px;background:${bg};`
-    + 'border:1px solid rgba(0,0,0,.28);margin-right:7px;vertical-align:-2px;';
-  return dot;
-}
-
-/* The colour of a variant label: "Black / XL" -> "Black". The catalogue puts
-   colour first precisely so this is the first segment. */
-function labelColour(label) {
-  const first = String(label || '').split('/')[0].trim();
-  return colourHex(first) ? first : null;
-}
-
-/* --- THE FILTER SIDEBAR ---------------------------------------------------
-   Every template ships one, listing brands and categories its designer made
-   up — "Bags (112)", "Clothing (42)" — and clicking them did nothing at all.
-   `/api/catalog/facets` has the real ones with real counts; it was already
-   being called for the result count and otherwise thrown away.
-
-   The themes structure these sidebars completely differently, so the group is
-   found by its HEADING — the one thing they agree on, because the words are
-   the designer's statement of intent — and each option row is cloned from the
-   theme's own. */
-/* ⭐ A SIZE LADDER IS NOT ALPHABETICAL AND NOT BY POPULARITY. The facet arrives
-   ordered by count, so the sidebar read "S, L, XL, M, 2XL, 3XL, 4XL, 5XL, XS" —
-   every size present, in an order that makes the filter look broken. Sorted on
-   the client rather than server-side because `size` is the merchant's own
-   vocabulary: a shoe shop sends numbers, a pharmacy sends strengths, and
-   neither belongs in this ladder. A value the ladder does not know keeps its
-   incoming position, behind the ones it does. */
-const SIZE_ORDER = ['XXS', 'XS', 'S', 'S/M', 'M', 'L', 'L/XL', 'XL', 'XXL',
-                    '2XL', '3XL', '4XL', '5XL', '6XL', '7XL'];
-
-function sizeFacetRank(v) {
-  const i = SIZE_ORDER.indexOf(String(v || '').trim().toUpperCase());
-  return i === -1 ? Number.MAX_SAFE_INTEGER : i;
-}
-
-function orderSizes(values) {
-  return values
-    .map((v, i) => ({ v, i }))
-    .sort((a, b) => sizeFacetRank(a.v.value) - sizeFacetRank(b.v.value) || a.i - b.i)
-    .map((x) => x.v);
-}
-
-const FILTER_GROUPS = [
-  { key: 'category', rx: /categor/i,            values: (f) => (f.categories || []).map((c) => ({ value: c.name, label: c.name, count: c.count })) },
-  { key: 'brand',    rx: /brand|manufacturer/i, values: (f) => (f.brands || []).map((b) => ({ value: b.slug || b.name, label: b.name, count: b.count })) },
-  { key: 'size',     rx: /size|weight/i,        values: (f) => orderSizes(attrValues(f, 'size')) },
-  { key: 'color',    rx: /colou?r/i,            values: (f) => attrValues(f, 'color') },
-];
-
-function attrValues(facets, key) {
-  const group = (facets.attributes || []).find((a) => (a.key || '').toLowerCase() === key);
-  return (group?.values || []).map((v) => ({ value: v.value, label: v.value, count: v.count }));
-}
-
-async function paintFilters(state, run) {
-  let facets = null;
-  try { facets = await api.facets({ search: state.q || undefined, category: state.category || undefined }); }
-  catch { return; }
-  if (!facets) return;
-
-  for (const group of FILTER_GROUPS) {
-    const values = group.values(facets);
-    if (!values.length) continue;
-    const scope = filterGroupScope(group.rx);
-    if (!scope) continue;
-    paintFilterGroup(scope, group, values, state, run);
-  }
-
-  /* The price slider's ends should be the shop's real range, not $10-$90. */
-  const price = facets.price;
-  if (price && Number.isFinite(price.min) && Number.isFinite(price.max)) {
-    pickAll('.filter-value-min-max span|.price-range|.widget-price .title-price').forEach((el) => {
-      if (/\d/.test(el.textContent || '')) setText(el, 'Price: ' + money(price.min) + ' — ' + money(price.max));
-    });
-    $$('input[type="range"]').forEach((r) => { r.min = String(Math.floor(price.min)); r.max = String(Math.ceil(price.max)); });
-  }
-}
-
-/* The block that holds one group's options, found from its heading. */
-function filterGroupScope(rx) {
-  const heads = $$('h1,h2,h3,h4,h5,h6,.facet-title,.sidebar-title,.widget-title,legend,button')
-    .filter((el) => el.children.length <= 2 && rx.test((el.textContent || '').trim()));
-  for (const head of heads) {
-    if (head.closest('header, footer, nav')) continue;
-    const box = head.closest('.single-filter-box, .facet, .sidebar-single, .widget, .filter-group, .collapse-item, .tf-filter-group')
-      || head.parentElement;
-    if (!box) continue;
-    /* The list is whichever descendant holds more than one option row. */
-    const list = [...box.querySelectorAll('*')].find(
-      (el) => el.children.length > 1
-        && [...el.children].filter((c) => c.querySelector('input[type="checkbox"], input[type="radio"], a, label')).length > 1,
-    );
-    if (list) return list;
-  }
-  return null;
-}
-
-function paintFilterGroup(list, group, values, state, run) {
-  if (list.dataset.merchFilter === group.key) return;
-  list.dataset.merchFilter = group.key;
-
-  const sample = [...list.children].find((c) => c.querySelector('input, a, label')) || list.firstElementChild;
-  if (!sample) return;
-  const template = sample.cloneNode(true);
-
-  /* Never more rows than the designer laid out room for — these sidebars are
-     a fixed column, and 100 brands is a scroll, not a filter. */
-  const room = Math.max(6, [...list.children].length);
-  const shown = values.slice(0, Math.min(values.length, Math.max(room, 12)));
-
-  list.replaceChildren();
-  for (const v of shown) {
-    const node = template.cloneNode(true);
-    const input = node.querySelector('input[type="checkbox"], input[type="radio"]');
-    const label = node.querySelector('label') || node.querySelector('a') || node;
-
-    if (input) {
-      const id = 'merch-' + group.key + '-' + v.value.replace(/[^\w-]+/g, '-').toLowerCase();
-      input.id = id;
-      input.checked = String(state[group.key] || '') === String(v.value);
-      if (label.tagName === 'LABEL') label.setAttribute('for', id);
-    }
-    setText(label, v.count ? `${v.label} (${v.count})` : v.label);
-    if (group.key === 'color') {
-      const dot = colourDot(v.value, 12);
-      if (dot) label.insertBefore(dot, label.firstChild);
-    }
-    if (label.tagName === 'A') label.setAttribute('href', pageUrl('listing', { [group.key]: v.value }));
-
-    const choose = (e) => {
-      e.preventDefault();
-      /* The store takes ONE value per filter, so picking another replaces it
-         and picking the current one clears it. */
-      const already = String(state[group.key] || '') === String(v.value);
-      state[group.key] = already ? '' : v.value;
-      state.page = 1;
-      pushState(state);
-      run();
-      pickAll('input', list).forEach((i) => { i.checked = false; });
-      if (input && !already) input.checked = true;
-    };
-    (input || label).addEventListener('click', choose);
-    if (input) input.addEventListener('change', choose);
-    list.appendChild(node);
-  }
-}
-
-/* "In stock only" — a checkbox every theme has somewhere near the filters. */
-function wireStockFilter(state, run) {
-  const boxes = $$('input[type="checkbox"]').filter((el) => {
-    const row = el.closest('li, .single-category, .facet, label, div');
-    return /in stock|availability|stock only/i.test(row?.textContent || '');
-  });
-  for (const box of boxes) {
-    box.checked = state.inStock;
-    box.addEventListener('change', () => {
-      state.inStock = box.checked;
-      state.page = 1;
-      pushState(state);
-      run();
-    });
-  }
-}
-
-/* Every theme builds its quantity stepper differently, and every one of them
-   already updates its own <input>. Rather than re-implement four steppers, we
-   listen to the input and let the theme do the pressing. The click handler
-   reads the value AFTER the theme's own handler has run. */
-function wireQuantityWidgets(container, rerender) {
-  const idOf = (el) => el.closest('[data-merch-id]')?.dataset.merchId;
-
-  container.addEventListener('change', (e) => {
-    const input = e.target.closest('input');
-    if (!input) return;
-    const id = idOf(input);
-    if (!id) return;
-    cart.setQty(id, input.value);
-    rerender();
-  });
-
-  container.addEventListener('click', (e) => {
-    const btn = e.target.closest('button, .btn-quantity, .qtybtn, .button, .quantity-button');
-    if (!btn) return;
-    const box = btn.closest('.quantity-edit, .wg-quantity, .pro-qty, .quantity, .cart-counter-action');
-    const input = box?.querySelector('input');
-    if (!input) return;
-    const id = idOf(input);
-    if (!id) return;
-
-    /* Which way this button goes. Themes say it with a class, a data attribute
-       or just the character on the face of the button. */
-    const label = (btn.className + ' ' + (btn.dataset.action || '') + ' ' + btn.textContent).toLowerCase();
-    const delta = /plus|increase|increment|\bup\b|\+/.test(label) ? 1
-      : /minus|decrease|decrement|\bdown\b|-/.test(label) ? -1
-      : 0;
-
-    const before = Number(input.value) || 1;
-
-    /* The theme's own stepper handler was bound to the nodes that were on the
-       page when its main.js ran — which we have since replaced. So the button
-       it drew is now inert, and reading the input after the click reads the
-       same number back. Give the theme a tick to prove it still works, and
-       step the value ourselves only when it did not.
-
-       Doing it unconditionally would double every press on a theme whose
-       handler IS still live (anything loaded with type="text/merch-deferred",
-       or delegated from document). */
-    setTimeout(() => {
-      let next = Number(input.value) || before;
-      if (next === before && delta) {
-        next = Math.max(1, Math.min(99, before + delta));
-        input.value = next;
-      }
-      if (next !== before) { cart.setQty(id, next); rerender(); }
-    }, 0);
-  });
-}
-
-/* "Add $59.69 to cart and get free shipping" — every one of these templates
-   ships a line like it, with a progress bar, quoting a figure the template's
-   designer made up. The store knows the real threshold. */
-function paintFreeShippingBar(lines) {
-  const free = Number(STORE?.shipping?.freeAbove) || 0;
-  const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
-
-  const notes = $$('p, span, div').filter(
-    (el) => el.children.length === 0 && /free (shipping|delivery)/i.test(el.textContent || ''),
-  );
-  const bars = $$('.progress-bar, .progress .bar, .tf-progress-bar > div');
-
-  /* The merchant has not set a threshold: the promise is not theirs to make. */
-  if (!free) {
-    notes.forEach((el) => show(el.closest('.cart-top-area-note, .free-shipping, .tf-progress-msg') || el, false));
-    bars.forEach((el) => show(el.closest('.progress, .tf-progress-bar') || el, false));
-    return;
-  }
-
-  const left = Math.max(0, free - subtotal);
-  notes.forEach((el) => {
-    setText(el, left > 0
-      ? 'Add ' + money(left) + ' more to your cart and get free delivery'
-      : 'Your order qualifies for free delivery');
-  });
-  bars.forEach((el) => { el.style.width = Math.min(100, Math.round((subtotal / free) * 100)) + '%'; });
 }
 
 function paintFashionCartTotals(subtotal, discount, shipping, total) {
@@ -4347,6 +8082,501 @@ function paintFashionCartTotals(subtotal, discount, shipping, total) {
   }
 }
 
+function paintFashionCheckoutTotals(subtotal, discount, shipping, total) {
+  const box = pick('.box-your-order');
+  if (!box) return;
+
+  const listTotal = pick('.list-total', box);
+  if (listTotal) {
+    let subtotalItem = pick('.total-item-subtotal', listTotal);
+    if (!subtotalItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/subtotal/i.test(pick('span:first-child', li)?.textContent || '')) {
+          subtotalItem = li;
+          subtotalItem.classList.add('total-item-subtotal');
+          break;
+        }
+      }
+    }
+    if (!subtotalItem) {
+      subtotalItem = document.createElement('li');
+      subtotalItem.className = 'total-item lh-24 fw-medium total-item-subtotal';
+      subtotalItem.innerHTML = `<span>Subtotal</span><span>${money(subtotal)}</span>`;
+      listTotal.insertBefore(subtotalItem, listTotal.firstChild);
+    } else {
+      const valSpan = pick('span:last-child', subtotalItem);
+      if (valSpan) setText(valSpan, money(subtotal));
+    }
+
+    let shippingItem = pick('.total-item-shipping', listTotal);
+    if (!shippingItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/shipping/i.test(pick('span:first-child', li)?.textContent || '')) {
+          shippingItem = li;
+          shippingItem.classList.add('total-item-shipping');
+          break;
+        }
+      }
+    }
+    if (shippingItem) {
+      const valSpan = pick('span:last-child', shippingItem);
+      if (valSpan) setText(valSpan, shipping == null ? 'Free' : (shipping > 0 ? money(shipping) : 'Free'));
+    }
+
+    let discountItem = pick('.total-item-discount', listTotal);
+    if (!discountItem) {
+      for (const li of pickAll('.total-item', listTotal)) {
+        if (/discount/i.test(pick('span:first-child', li)?.textContent || '')) {
+          discountItem = li;
+          discountItem.classList.add('total-item-discount');
+          break;
+        }
+      }
+    }
+    if (discountItem) {
+      const valSpan = pick('span:last-child', discountItem);
+      if (valSpan) setText(valSpan, discount > 0 ? '-' + money(discount) : money(0));
+    }
+  }
+
+  const lastTotal = pick('.last-total', box);
+  if (lastTotal) {
+    const valSpan = pick('span:last-child', lastTotal);
+    if (valSpan) setText(valSpan, money(total));
+  }
+}
+
+async function paintVariantsFashion(spec, p) {
+  if (!spec.variants) return;
+  PDP_VARIANT_REQUIRED = false;
+  PDP_SELECTED_VARIANT = null;
+  remove(pick('.tf-sticky-atc-variant-price'));
+
+  let group = null;
+  try { group = await api.variants(p.id); } catch { group = null; }
+  const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
+  const container = pick(spec.variants.container);
+  if (!container) return;
+
+  pickAll(spec.variants.group, container).forEach(remove);
+  if (!options.length) { remove(container); return; }
+
+  const parsedList = options.map((o) => parseVariantOption(o, p));
+  const hasSizes = parsedList.some((x) => x.size);
+  PDP_VARIANT_REQUIRED = hasSizes;
+
+  renderVariantPickers({
+    host: container,
+    p,
+    options,
+    isQuick: false,
+    onSelect: (variant, label) => {
+      PDP_SELECTED_VARIANT = { product: variant, label };
+      $$('.btn-action-price, .btn-add-to-cart').forEach((btn) => setText(btn, 'Add to cart'));
+      const detailPrice = pick('.product-infor-price .price-on-sale');
+      if (detailPrice) setText(detailPrice, money(variant.price));
+      const stickyVariant = pick('.tf-sticky-atc-product .distribute__prd');
+      if (stickyVariant) setText(stickyVariant, label);
+      const stickyPrice = pick('.tf-sticky-atc-product .price__prd');
+      if (stickyPrice) setText(stickyPrice, money(variant.price));
+    },
+    onClear: () => {
+      PDP_SELECTED_VARIANT = null;
+    },
+  });
+}
+
+function wireQuickViewFashion() {
+  /* A theme can ship more than one of these — fashion has a Quick View
+     offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
+     the shopper opens has to be the product they clicked. */
+  const panels = [];
+  for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper', '.modal-quick-view']) {
+    $$(sel).forEach((el) => { if (!panels.includes(el)) panels.push(el); });
+  }
+  if (!panels.length || panels[0].dataset.merchQuickView) return;
+  panels.forEach((el) => { el.dataset.merchQuickView = '1'; });
+
+  /* The text fields only. Anything carrying an `action` is wired once, below,
+     against whichever product is currently showing — re-running wireAction per
+     open would either be ignored (it guards against double-wiring) or stack a
+     handler per open. */
+  const fields = Object.fromEntries(
+    Object.entries(THEME.product?.fields || {}).filter(([, f]) => f && !f.action),
+  );
+
+  document.addEventListener('click', async (e) => {
+    const trigger = e.target.closest(
+      '.quickview, .cta-quickview, .product-details-popup-btn, [data-quickview], ' +
+      'a[href="#quickView"], a[href="#quick_view"], a[href="#quickAdd"], ' +
+      '[data-bs-target="#quick_view"], [data-bs-target="#quickAdd"]',
+    );
+    if (!trigger) return;
+    const id = trigger.closest('[data-merch-id]')?.dataset.merchId;
+    if (!id) return;                       // a trigger on markup we never filled
+
+    try {
+      const p = await api.product(id);
+      quickViewProduct = p;
+      for (const panel of panels) {
+        fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
+        paintGalleryIn(panel, THEME.product?.gallery, p);
+        paintQuickViewExtras(panel, p);
+        await paintQuickVariants(panel, p);
+      }
+    } catch (err) { showError(err); }
+  }, true);                                 // capture, so we fill BEFORE the theme opens it
+
+  /* One handler for the panels' own buttons, reading whatever is showing. */
+  for (const modal of panels) modal.addEventListener('click', (e) => {
+    const add = e.target.closest(THEME?.name === 'fashion'
+      ? '.btn-add-to-cart, .btn-action-price'
+      : '.btn-add-to-cart, .btn-action-price, .btn-cart2, .btn-cart, .rts-btn.btn-primary, .tf-btn');
+    if (!add || !quickViewProduct) return;
+    if (/wish/i.test(add.className)) return;
+    e.preventDefault();
+    const selected = modal._merchSelectedVariant;
+    if (modal.dataset.merchSizeRequired === 'true' && !selected) return notify('Please select a size first.', 'error');
+    const item = selected?.product || quickViewProduct;
+    if (item.availability === 'out') return notify('That option is sold out.', 'error');
+    const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
+    cart.add(item, qty, selected?.label || '');
+    notify(item.name + ' added to your cart.', 'success');
+    track('add_to_cart', { itemId: item.id, qty, via: 'quickview' });
+    if (THEME?.name === 'fashion') {
+      try {
+        if (window.bootstrap?.Modal) {
+          window.bootstrap.Modal.getInstance(modal)?.hide();
+        }
+        if (window.bootstrap?.Offcanvas) {
+          window.bootstrap.Offcanvas.getInstance(modal)?.hide();
+        }
+        const cartEl = document.getElementById('shoppingCart');
+        if (cartEl && window.bootstrap?.Offcanvas) {
+          const bsOffcanvas = window.bootstrap.Offcanvas.getInstance(cartEl) || new window.bootstrap.Offcanvas(cartEl);
+          bsOffcanvas.show();
+        }
+      } catch { /* ignore */ }
+    }
+  });
+}
+
+/* --- THE FILTER SIDEBAR ---------------------------------------------------
+   Every template ships one, listing brands and categories its designer made
+   up — "Bags (112)", "Clothing (42)" — and clicking them did nothing at all.
+   `/api/catalog/facets` has the real ones with real counts; it was already
+   being called for the result count and otherwise thrown away.
+
+   The themes structure these sidebars completely differently, so the group is
+   found by its HEADING — the one thing they agree on, because the words are
+   the designer's statement of intent — and each option row is cloned from the
+   theme's own. */
+/* ⭐ A SIZE LADDER IS NOT ALPHABETICAL AND NOT BY POPULARITY. The facet arrives
+   ordered by count, so the sidebar read "S, L, XL, M, 2XL, 3XL, 4XL, 5XL, XS" —
+   every size present, in an order that makes the filter look broken. Sorted on
+   the client rather than server-side because `size` is the merchant's own
+   vocabulary: a shoe shop sends numbers, a pharmacy sends strengths, and
+   neither belongs in this ladder. A value the ladder does not know keeps its
+   incoming position, behind the ones it does. */
+const SIZE_ORDER = ['XXS', 'XS', 'S', 'S/M', 'M', 'L', 'L/XL', 'XL', 'XXL',
+                    '2XL', '3XL', '4XL', '5XL', '6XL', '7XL'];
+
+function sizeFacetRank(v) {
+  const i = SIZE_ORDER.indexOf(String(v || '').trim().toUpperCase());
+  return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+}
+
+function orderSizes(values) {
+  return values
+    .map((v, i) => ({ v, i }))
+    .sort((a, b) => sizeFacetRank(a.v.value) - sizeFacetRank(b.v.value) || a.i - b.i)
+    .map((x) => x.v);
+}
+
+const FILTER_GROUPS = [
+  { key: 'category', rx: /categor/i,            values: (f) => (f.categories || []).map((c) => ({ value: c.name, label: c.name, count: c.count })) },
+  { key: 'brand',    rx: /brand|manufacturer/i, values: (f) => (f.brands || []).map((b) => ({ value: b.slug || b.name, label: b.name, count: b.count })) },
+  { key: 'size',     rx: /size|weight/i,        values: (f) => orderSizes(attrValues(f, 'size')) },
+  { key: 'color',    rx: /colou?r/i,            values: (f) => attrValues(f, 'color') },
+];
+
+function attrValues(facets, key) {
+  const group = (facets.attributes || []).find((a) => (a.key || '').toLowerCase() === key);
+  return (group?.values || []).map((v) => ({ value: v.value, label: v.value, count: v.count }));
+}
+
+async function paintFilters(state, run) {
+  let facets = null;
+  try { facets = await api.facets({ search: state.q || undefined, category: state.category || undefined }); }
+  catch { return; }
+  if (!facets) return;
+
+  wireHorizontalFilterBar(state, run, facets);
+
+  for (const group of FILTER_GROUPS) {
+    const values = group.values(facets);
+    if (!values.length) continue;
+    const scope = filterGroupScope(group.rx);
+    if (!scope) continue;
+    paintFilterGroup(scope, group, values, state, run);
+  }
+
+  /* The price slider's ends should be the shop's real range, not $10-$90. */
+  const price = facets.price;
+  if (price && Number.isFinite(price.min) && Number.isFinite(price.max)) {
+    pickAll('.filter-value-min-max span|.price-range|.widget-price .title-price').forEach((el) => {
+      if (/\d/.test(el.textContent || '')) setText(el, 'Price: ' + money(price.min) + ' — ' + money(price.max));
+    });
+    $$('input[type="range"]').forEach((r) => { r.min = String(Math.floor(price.min)); r.max = String(Math.ceil(price.max)); });
+
+    /* ⭐ A jQuery UI price slider keeps its range in the WIDGET and prints it
+       into a read-only <input>, so neither the span rule above nor the
+       input[type=range] rule reached it: the jewellery sidebar advertised
+       "Price: $1 - $1000" — in DOLLARS, on a rupee shop whose real range is
+       ₹2,506 to ₹6,53,007 — under a catalogue that had painted correctly.
+       A filter that names a range the shop does not sell in is worse than no
+       filter: every bound a shopper picks is meaningless.
+
+       We rebind `slide` AFTER the theme did, so our handler writes the readout
+       last and the figure stays in the shop's own currency while dragging. */
+    const lo = Math.floor(price.min);
+    const hi = Math.ceil(price.max);
+    /* ⭐⭐ RE-APPLY AFTER THE THEME. Setting the slider once did nothing visible:
+       this theme builds its jQuery UI price slider from a `window.load`
+       handler, which fires AFTER our facets request resolves, so the theme's
+       own hardcoded 1-1000 overwrote ours and the sidebar kept advertising
+       "$1 - $1000" on a rupee shop. Whoever writes LAST wins, and an async
+       painter never wins that race by running earlier. Idempotent, so applying
+       it more than once costs nothing. */
+    const applyPriceRange = () => {
+      const jq = window.jQuery || window.$;
+      if (!jq || !jq.fn || !jq.fn.slider) return;
+      $$('.ui-slider').forEach((el) => {
+        try {
+          const $s = jq(el);
+          if (!$s.data('uiSlider') && !$s.data('ui-slider')) return;   // not an initialised slider
+          const box = el.closest('.widget, .sidebar-single, .price-filter, .single-filter-box') || el.parentElement;
+          const readout = box ? box.querySelector('#amount, input[readonly], input[type="text"]') : null;
+          /* ⭐ The readout is a FIXED-WIDTH input the designer sized for "$1 -
+             $1000". A real jewellery range written in full — "₹2,506 -
+             ₹653,007" — is clipped by the box to "₹2,506 - ₹65", which reads
+             as sixty-five rupees: a worse lie than the dollars were, because
+             it looks like a number the shop chose. So abbreviate on the Indian
+             scale (thousand / lakh / crore) and keep the symbol money() picks,
+             rather than widen a control the theme owns. */
+          const compact = (n) => {
+            const sym = money(0).replace(/[\d.,\s]/g, '') || '';
+            const abs = Math.abs(n);
+            if (abs >= 1e7) return sym + trimZero(n / 1e7) + 'Cr';
+            if (abs >= 1e5) return sym + trimZero(n / 1e5) + 'L';
+            if (abs >= 1e3) return sym + trimZero(n / 1e3) + 'K';
+            return money(n);
+          };
+          const write = (vals) => {
+            if (!readout || !vals) return;
+            readout.value = compact(vals[0]) + '-' + compact(vals[1]);
+            /* Even abbreviated this can overflow a box sized for "$1 - $1000"
+               (it clipped the L off "₹6.5L", reading as ₹6.5). Grow it only
+               when it would actually clip, so a theme whose box already fits
+               keeps the width its designer chose. */
+            if (readout.scrollWidth > readout.clientWidth) {
+              readout.style.width = (readout.scrollWidth + 6) + 'px';
+              readout.style.maxWidth = '100%';
+            }
+          };
+          $s.slider('option', 'min', lo);
+          $s.slider('option', 'max', hi);
+          $s.slider('option', 'values', [lo, hi]);
+          write([lo, hi]);
+          if (!el.dataset.merchPriceBound) {
+            el.dataset.merchPriceBound = '1';
+            $s.on('slide slidechange', (_e, ui) => write(ui && ui.values));
+          }
+        } catch (e) { warn('price slider', e); }
+      });
+    };
+    /* The theme builds its slider from its OWN load handler, which can land
+       after ours — and exactly when depends on how long the images take. So
+       re-apply on a short schedule rather than guessing one delay: whoever
+       writes last wins, and a single retry loses that race on a slow page. */
+    applyPriceRange();
+    window.addEventListener('load', applyPriceRange);
+    [150, 400, 900, 1800].forEach((ms) => setTimeout(applyPriceRange, ms));
+  }
+}
+
+/* The block that holds one group's options, found from its heading. */
+function filterGroupScope(rx) {
+  const heads = $$('h1,h2,h3,h4,h5,h6,.facet-title,.sidebar-title,.widget-title,legend,button')
+    .filter((el) => el.children.length <= 2 && rx.test((el.textContent || '').trim()));
+  for (const head of heads) {
+    if (head.closest('header, footer, nav')) continue;
+    const box = head.closest('.widget-facet, .single-filter-box, .facet, .sidebar-single, .widget, .filter-group, .collapse-item, .tf-filter-group')
+      || head.parentElement;
+    if (!box) continue;
+    /* The list is whichever descendant holds more than one option row. */
+    const list = [...box.querySelectorAll('*')].find(
+      (el) => el.children.length > 1
+        && [...el.children].filter((c) => c.querySelector('input[type="checkbox"], input[type="radio"], a, label')).length > 1,
+    );
+    if (list) return list;
+  }
+  return null;
+}
+
+function paintFilterGroup(list, group, values, state, run) {
+  if (list.dataset.merchFilter === group.key) return;
+  list.dataset.merchFilter = group.key;
+
+  const sample = [...list.children].find((c) => c.querySelector('input, a, label')) || list.firstElementChild;
+  if (!sample) return;
+  const template = sample.cloneNode(true);
+
+  /* Never more rows than the designer laid out room for — these sidebars are
+     a fixed column, and 100 brands is a scroll, not a filter. */
+  const room = Math.max(6, [...list.children].length);
+  const shown = values.slice(0, Math.min(values.length, Math.max(room, 12)));
+
+  list.replaceChildren();
+  for (const v of shown) {
+    const node = template.cloneNode(true);
+    const input = node.querySelector('input[type="checkbox"], input[type="radio"]');
+    const label = node.querySelector('label') || node.querySelector('a') || node;
+
+    if (input) {
+      const id = 'merch-' + group.key + '-' + v.value.replace(/[^\w-]+/g, '-').toLowerCase();
+      input.id = id;
+      input.checked = String(state[group.key] || '') === String(v.value);
+      if (label.tagName === 'LABEL') label.setAttribute('for', id);
+    }
+    setText(label, v.count ? `${v.label} (${v.count})` : v.label);
+    if (group.key === 'color') {
+      const dot = colourDot(v.value, 12);
+      if (dot) label.insertBefore(dot, label.firstChild);
+    }
+    if (label.tagName === 'A') label.setAttribute('href', pageUrl('listing', { [group.key]: v.value }));
+
+    const choose = (e) => {
+      e.preventDefault();
+      /* The store takes ONE value per filter, so picking another replaces it
+         and picking the current one clears it. */
+      const already = String(state[group.key] || '') === String(v.value);
+      state[group.key] = already ? '' : v.value;
+      state.page = 1;
+      pushState(state);
+      run();
+      pickAll('input', list).forEach((i) => { i.checked = false; });
+      if (input && !already) input.checked = true;
+      syncHorizontalDropdownFromState(state);
+    };
+    (input || label).addEventListener('click', choose);
+    if (input) input.addEventListener('change', choose);
+    list.appendChild(node);
+  }
+}
+
+/* "In stock only" — a checkbox every theme has somewhere near the filters. */
+function wireStockFilter(state, run) {
+  const boxes = $$('input[type="checkbox"]').filter((el) => {
+    const row = el.closest('li, .single-category, .facet, label, div');
+    return /in stock|availability|stock only/i.test(row?.textContent || '');
+  });
+  for (const box of boxes) {
+    box.checked = state.inStock;
+    box.addEventListener('change', () => {
+      state.inStock = box.checked;
+      state.page = 1;
+      pushState(state);
+      run();
+    });
+  }
+}
+
+/* Every theme builds its quantity stepper differently, and every one of them
+   already updates its own <input>. Rather than re-implement four steppers, we
+   listen to the input and let the theme do the pressing. The click handler
+   reads the value AFTER the theme's own handler has run. */
+function wireQuantityWidgets(container, rerender) {
+  if (!container || container._merchQtyWired) return;
+  container._merchQtyWired = true;
+
+  const idOf = (el) => el.closest('[data-merch-id]')?.dataset.merchId;
+
+  container.addEventListener('change', (e) => {
+    const input = e.target.closest('input');
+    if (!input) return;
+    const id = idOf(input);
+    if (!id) return;
+    const val = Math.max(1, Math.min(99, parseInt(input.value, 10) || 1));
+    cart.setQty(id, val);
+    rerender?.();
+  });
+
+  container.addEventListener('click', (e) => {
+    if (e.defaultPrevented) return;
+    const btn = e.target.closest('button, .btn-quantity, .qtybtn, .button, .quantity-button');
+    if (!btn) return;
+    const box = btn.closest('.quantity-edit, .wg-quantity, .pro-qty, .quantity, .cart-counter-action');
+    const input = box?.querySelector('input');
+    if (!input) return;
+    const id = idOf(input);
+    if (!id) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    /* Which way this button goes. Themes say it with a class, a data attribute
+       or just the character on the face of the button. */
+    const label = (btn.className + ' ' + (btn.dataset.action || '') + ' ' + btn.textContent).toLowerCase();
+    const delta = /plus|increase|increment|\bup\b|\+/.test(label) ? 1
+      : /minus|decrease|decrement|\bdown\b|-/.test(label) ? -1
+      : 0;
+
+    if (!delta) return;
+
+    const line = cart.lines().find((l) => String(l.itemId) === String(id));
+    const cur = line ? line.qty : (parseInt(input.value, 10) || 1);
+    const next = Math.max(1, Math.min(99, cur + delta));
+    input.value = next;
+    cart.setQty(id, next);
+    rerender?.();
+  });
+}
+
+/* "Add $59.69 to cart and get free shipping" — every one of these templates
+   ships a line like it, with a progress bar, quoting a figure the template's
+   designer made up. The store knows the real threshold. */
+function paintFreeShippingBar(lines) {
+  const noteArea = pick('.cart-top-area-note, .cart-area-main-wrapper, .free-shipping, .tf-progress-msg, .notification-progress');
+  if (!noteArea) return;
+  if (!lines || !lines.length) {
+    show(noteArea, false);
+    return;
+  }
+
+  const free = Number(STORE?.shipping?.freeAbove) || 125;
+  const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
+  const left = Math.max(0, free - subtotal);
+  const pct = Math.min(100, Math.round((subtotal / free) * 100));
+
+  show(noteArea, true);
+
+  const noteP = pick('.notification-progress .text, .cart-top-area-note p, .tf-progress-msg, .free-shipping p', noteArea) || pick('p, span', noteArea);
+  if (noteP) {
+    if (left > 0) {
+      noteP.innerHTML = `Buy <span class="fw-semibold text-primary">${money(left)}</span> more to get <span class="fw-semibold">Freeship</span>`;
+    } else {
+      noteP.innerHTML = `Your order qualifies for <span class="fw-semibold text-success">Free Shipping</span>!`;
+    }
+  }
+
+  const bars = pickAll('.progress-cart .value, .cart-top-area-note .progress-bar, .progress .bar, .tf-progress-bar > div, .progress-bar', noteArea);
+  bars.forEach((bar) => {
+    bar.style.width = pct + '%';
+    bar.setAttribute('aria-valuenow', pct);
+  });
+}
+
 async function paintCartTotals(spec, lines) {
   const t = spec.totals || {};
   const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
@@ -4384,14 +8614,14 @@ async function paintCartTotals(spec, lines) {
     discount += Number(bxgy?.discountAmount ?? bxgy?.discount ?? 0) || 0;
   }
 
+  pickAll(t.discount).forEach((el) => setText(el, discount ? '-' + money(discount) : money(0)));
+  pickAll(t.shipping).forEach((el) => setText(el, p.shipping == null ? 'Calculated at checkout' : (p.shipping ? money(p.shipping) : 'Free')));
   const finalTotal = Math.max(0, subtotal - discount + (p.shipping || 0));
 
   if (THEME?.name === 'fashion') {
     paintFashionCartTotals(subtotal, discount, p.shipping, finalTotal);
   }
 
-  pickAll(t.discount).forEach((el) => setText(el, discount ? '-' + money(discount) : money(0)));
-  pickAll(t.shipping).forEach((el) => setText(el, p.shipping == null ? 'Calculated at checkout' : (p.shipping ? money(p.shipping) : 'Free')));
   pickAll(t.total).forEach((el) => setText(el, money(finalTotal)));
 }
 
@@ -4472,7 +8702,6 @@ pages.checkout = async () => {
 
   ensureCustomerFields(spec);
   paintCheckoutSummary(spec, lines);
-  wireCoupon(spec, () => paintCheckoutSummary(spec, cart.lines()));
   await prefillCustomer(spec);
   const paymentCfg = await paintPaymentOptions(spec);
   wireShippingQuote(spec, lines);
@@ -4503,70 +8732,6 @@ pages.checkout = async () => {
   });
 };
 
-function paintFashionCheckoutTotals(subtotal, discount, shipping, total) {
-  const box = pick('.box-your-order');
-  if (!box) return;
-
-  const listTotal = pick('.list-total', box);
-  if (listTotal) {
-    let subtotalItem = pick('.total-item-subtotal', listTotal);
-    if (!subtotalItem) {
-      for (const li of pickAll('.total-item', listTotal)) {
-        if (/subtotal/i.test(pick('span:first-child', li)?.textContent || '')) {
-          subtotalItem = li;
-          subtotalItem.classList.add('total-item-subtotal');
-          break;
-        }
-      }
-    }
-    if (!subtotalItem) {
-      subtotalItem = document.createElement('li');
-      subtotalItem.className = 'total-item lh-24 fw-medium total-item-subtotal';
-      subtotalItem.innerHTML = `<span>Subtotal</span><span>${money(subtotal)}</span>`;
-      listTotal.insertBefore(subtotalItem, listTotal.firstChild);
-    } else {
-      const valSpan = pick('span:last-child', subtotalItem);
-      if (valSpan) setText(valSpan, money(subtotal));
-    }
-
-    let shippingItem = pick('.total-item-shipping', listTotal);
-    if (!shippingItem) {
-      for (const li of pickAll('.total-item', listTotal)) {
-        if (/shipping/i.test(pick('span:first-child', li)?.textContent || '')) {
-          shippingItem = li;
-          shippingItem.classList.add('total-item-shipping');
-          break;
-        }
-      }
-    }
-    if (shippingItem) {
-      const valSpan = pick('span:last-child', shippingItem);
-      if (valSpan) setText(valSpan, shipping == null ? 'Free' : (shipping > 0 ? money(shipping) : 'Free'));
-    }
-
-    let discountItem = pick('.total-item-discount', listTotal);
-    if (!discountItem) {
-      for (const li of pickAll('.total-item', listTotal)) {
-        if (/discount/i.test(pick('span:first-child', li)?.textContent || '')) {
-          discountItem = li;
-          discountItem.classList.add('total-item-discount');
-          break;
-        }
-      }
-    }
-    if (discountItem) {
-      const valSpan = pick('span:last-child', discountItem);
-      if (valSpan) setText(valSpan, discount > 0 ? '-' + money(discount) : money(0));
-    }
-  }
-
-  const lastTotal = pick('.last-total', box);
-  if (lastTotal) {
-    const valSpan = pick('span:last-child', lastTotal);
-    if (valSpan) setText(valSpan, money(total));
-  }
-}
-
 function paintCheckoutSummary(spec, lines) {
   const s = spec.summary;
   const t = takeTemplate(s);
@@ -4583,14 +8748,9 @@ function paintCheckoutSummary(spec, lines) {
   const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
   const p = pending.get();
   const total = Math.max(0, subtotal - (p.discount || 0) + (p.shipping || 0));
-
-  if (THEME?.name === 'fashion') {
-    paintFashionCheckoutTotals(subtotal, p.discount || 0, p.shipping, total);
-  }
-
   const tt = spec.totals || {};
   pickAll(tt.subtotal).forEach((el) => setText(el, money(subtotal)));
-  pickAll(tt.shipping).forEach((el) => setText(el, p.shipping == null ? 'Free' : (p.shipping ? money(p.shipping) : 'Free')));
+  pickAll(tt.shipping).forEach((el) => setText(el, p.shipping == null ? 'Calculated' : (p.shipping ? money(p.shipping) : 'Free')));
   pickAll(tt.discount).forEach((el) => setText(el, p.discount ? '-' + money(p.discount) : money(0)));
   pickAll(tt.total).forEach((el) => setText(el, money(total)));
 
@@ -4611,20 +8771,96 @@ function paintCheckoutSummary(spec, lines) {
 /* Fill the address form from the account, so a signed-in shopper types nothing. */
 async function prefillCustomer(spec) {
   const f = spec.form || {};
-  const set = (key, value) => { const el = pick(f[key]); if (el && value) el.value = value; };
+  const set = (key, value) => { const el = pick(f[key]); if (el && value != null) el.value = value; };
+
+  const savedFirst = localStorage.getItem('merch.shopper_first_name');
+  const savedLast = localStorage.getItem('merch.shopper_last_name');
+  const savedPhone = localStorage.getItem('merch.shopper_phone');
+  const savedEmail = localStorage.getItem('merch.shopper_email');
+  const savedName = localStorage.getItem('merch.shopper_name');
+  const savedState = localStorage.getItem('merch.shopper_state');
+  if (savedFirst) set('firstName', savedFirst);
+  if (savedLast) set('lastName', savedLast);
+  if (savedName) set('name', savedName);
+  if (savedEmail) set('email', savedEmail);
+  if (savedPhone) set('phone', savedPhone);
+  if (savedState && savedState !== 'Choose State') set('state', savedState);
+
   if (!token.get()) return;
   try {
     const [me, addresses] = await Promise.all([api.me(), api.addresses().catch(() => [])]);
-    const a = (addresses || []).find((x) => x.isDefault) || (addresses || [])[0];
-    set('email', me?.email);
-    const [first, ...rest] = String(me?.name || '').split(' ');
-    set('firstName', first); set('lastName', rest.join(' ')); set('name', me?.name);
-    set('phone', me?.phone || a?.phone);
-    if (a) {
-      /* A saved address is { name, phone, line, city, state, pincode } — one
-         `line`, matching what checkout sends back. */
-      set('address1', a.line);
-      set('city', a.city); set('state', a.state); set('pincode', a.pincode);
+    if (me?.email) set('email', me.email);
+
+    const applyAddress = (a) => {
+      if (!a) return;
+      const [first, ...rest] = String(a.name || me?.name || '').trim().split(/\s+/);
+      set('firstName', first || '');
+      set('lastName', rest.join(' ') || '');
+      set('name', a.name || me?.name || '');
+      set('phone', a.phone || me?.phone || '');
+      set('address1', a.line || a.line1 || '');
+      set('city', a.city || '');
+      set('state', a.state || '');
+      set('pincode', a.pincode || '');
+    };
+
+    const addrSection = pick('#checkout-saved-addresses-area');
+    const cardsContainer = pick('.checkout-address-cards', addrSection);
+
+    if (addresses && addresses.length > 0 && addrSection && cardsContainer) {
+      show(addrSection, true);
+      let selectedId = (addresses.find((x) => x.isDefault) || addresses[0]).id;
+
+      cardsContainer.innerHTML = addresses.map((addr) => {
+        const isSelected = String(addr.id) === String(selectedId);
+        const formattedLine = [addr.line, addr.line1, addr.line2, addr.city, addr.state, addr.pincode, addr.country].filter(Boolean).join(', ');
+        return `
+          <div class="col-md-6 col-12">
+            <div class="checkout-addr-card ${isSelected ? 'is-selected' : ''}" data-addr-id="${escapeHtml(String(addr.id))}">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="d-flex align-items-center gap-2">
+                  <input type="radio" name="checkout_selected_address" class="addr-radio-custom" ${isSelected ? 'checked' : ''} value="${escapeHtml(String(addr.id))}">
+                  <strong class="addr-recipient-name" style="font-size: 15px; color: #1e293b;">${escapeHtml(addr.name || 'Saved Address')}</strong>
+                </div>
+                ${addr.isDefault ? '<span class="badge-default"><i class="fa-solid fa-circle-check"></i> Default</span>' : ''}
+              </div>
+              <p class="text-muted mb-1" style="font-size: 13px; line-height: 1.5; margin-left: 26px;">${escapeHtml(formattedLine)}</p>
+              ${addr.phone ? `<p class="text-muted mb-0" style="font-size: 12px; margin-left: 26px;"><i class="fa-light fa-phone me-1"></i> ${escapeHtml(addr.phone)}</p>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      pickAll('.checkout-addr-card', cardsContainer).forEach((card) => {
+        card.addEventListener('click', () => {
+          const addrId = card.dataset.addrId;
+          const chosen = addresses.find((x) => String(x.id) === String(addrId));
+          if (!chosen) return;
+          selectedId = chosen.id;
+          pickAll('.checkout-addr-card', cardsContainer).forEach((c) => {
+            const match = c === card;
+            c.classList.toggle('is-selected', match);
+            const radio = c.querySelector('input[type="radio"]');
+            if (radio) radio.checked = match;
+          });
+          applyAddress(chosen);
+          notify(`Delivery address selected: ${chosen.name || 'Address'}`, 'success');
+        });
+      });
+
+      const initialAddr = addresses.find((x) => String(x.id) === String(selectedId)) || addresses[0];
+      applyAddress(initialAddr);
+    } else {
+      const a = (addresses || []).find((x) => x.isDefault) || (addresses || [])[0];
+      const savedFirst = localStorage.getItem('merch.shopper_first_name');
+      const savedLast = localStorage.getItem('merch.shopper_last_name');
+      const savedPhone = localStorage.getItem('merch.shopper_phone');
+      const [first, ...rest] = String(me?.name || localStorage.getItem('merch.shopper_name') || '').trim().split(/\s+/);
+      const fName = savedFirst || first || '';
+      const lName = savedLast || rest.join(' ') || '';
+      set('firstName', fName); set('lastName', lName); set('name', [fName, lName].filter(Boolean).join(' ') || me?.name);
+      set('phone', savedPhone || me?.phone || a?.phone);
+      if (a) applyAddress(a);
     }
   } catch (e) { if (!(e instanceof ApiError && e.isUnauthenticated)) warn(e); }
 }
@@ -4646,7 +8882,7 @@ async function prefillCustomer(spec) {
    spacing, so the design is untouched and the field belongs to the theme. */
 function cloneFieldAfter(source, { id, name, placeholder, label }) {
   if (!source) return null;
-  const wrapper = source.closest('[class*="col-"], .form-group, .field, .tf-field, p') || source;
+  const wrapper = source.closest('.form-group, .field, .tf-field, .single-input-item, p') || source;
   const clone = wrapper.cloneNode(true);
   const input = clone.matches('input') ? clone : clone.querySelector('input');
   if (!input || !wrapper.parentElement) return null;
@@ -5834,16 +10070,25 @@ function wireFashionAccountSetting() {
 pages.account = async () => {
   wireAuthForms();
   wirePasswordChange();
+  wireAccountDetailsForm();
+  if (!token.get()) { showSignedOut(); return; }
+
+  const cachedName = localStorage.getItem('merch.shopper_name');
+  if (cachedName) pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, cachedName));
+
   let me = user.get() || STORE_ME;
-  if (!me && token.get()) {
-    try { me = await api.me(); } catch {}
+  if (!me) {
+    try { me = await api.me(); }
+    catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { showSignedOut(); return; } showError(e); return; }
   }
-  if (me) {
-    showSignedIn(me);
-    STORE_ME = me;
-    user.set(me);
-  }
+
+  showSignedIn(me);
+  STORE_ME = me;
+  if (me) user.set(me);
+
+  api.addresses().then((list) => { STORE_ADDRESS = (list || []).find((a) => a.isDefault) || (list || [])[0] || null; }).catch(() => {});
   initSampleOrders();
+
   if (THEME?.name === 'fashion') {
     await Promise.all([paintFashionAccountDashboard(), paintAddresses(), wishlist.sync()]);
     wireFashionAccountSetting();
@@ -5872,6 +10117,11 @@ pages.addresses = async () => {
     if (!token.get()) return showSignedOut();
     wireAddressForm();
     await paintAddresses();
+    const editId = new URLSearchParams(location.search).get('edit');
+    if (editId) {
+      const item = pick(`.address-item[data-address-id="${editId}"]`, document);
+      if (item) pick('.address-edit', item)?.click();
+    }
   }
   wireSignOut();
 };
@@ -5884,25 +10134,37 @@ function showSignedOut() {
 function showSignedIn(me) {
   pickAll('.signed-out-only|[data-signed-out]').forEach((el) => show(el, false));
   pickAll('.signed-in-only|[data-signed-in]').forEach((el) => show(el, true));
-  pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, me.name || me.email));
-  pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, me.email));
+
+  const savedFirst = localStorage.getItem('merch.shopper_first_name');
+  const savedLast = localStorage.getItem('merch.shopper_last_name');
+  const savedEmail = localStorage.getItem('merch.shopper_email') || me?.email || '';
+  const fullName = me?.name || localStorage.getItem('merch.shopper_name') || [savedFirst, savedLast].filter(Boolean).join(' ') || savedEmail.split('@')[0];
+
+  pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, fullName));
+  pickAll('.account-email|[data-account-email]').forEach((el) => setText(el, savedEmail));
   fillAccountDetails(me);
+  updateAvatarInitials(savedFirst, savedLast, fullName, savedEmail);
+  try {
+    if (fullName) localStorage.setItem('merch.shopper_name', fullName);
+    if (savedEmail) localStorage.setItem('merch.shopper_email', savedEmail);
+  } catch {}
+  paintAccountHeader().catch(() => {});
 }
 
-/* None of these themes ships a "you are signed in" element, so the classes
-   above match nothing and the account page said nothing about who was on it.
-   Every theme does ship an account-details form, and one of them ships it
-   filled in with the demo person — a signed-in shopper was shown "Tony
-   Nguyen / themesflat@gmail.com" as their own details. Put the real account
-   into the theme's own boxes; nothing is added and nothing moves. */
 function fillAccountDetails(me) {
-  const parts = String(me.name || '').trim().split(/\s+/).filter(Boolean);
-  const first = parts[0] || '';
-  const last = parts.slice(1).join(' ');
+  const savedFirst = localStorage.getItem('merch.shopper_first_name');
+  const savedLast = localStorage.getItem('merch.shopper_last_name');
+  const savedPhone = localStorage.getItem('merch.shopper_phone');
+  const savedEmail = localStorage.getItem('merch.shopper_email');
+  const savedState = localStorage.getItem('merch.shopper_state');
+
+  const parts = String(me?.name || localStorage.getItem('merch.shopper_name') || '').trim().split(/\s+/).filter(Boolean);
+  const first = savedFirst || parts[0] || '';
+  const last = savedLast || parts.slice(1).join(' ');
+  const email = me?.email || savedEmail || '';
+  const phone = me?.phone || savedPhone || '';
+
   for (const form of $$('form')) {
-    /* Never the sign-in, search, newsletter or contact forms — they ask for
-       an email too, and filling them would put the shopper's address into a
-       box they did not choose to complete. */
     if (form.closest('footer, .offcanvas, .modal, .tf-topbar')) continue;
     if (/newsletter|search|log|contact|subscribe/i.test(form.className || '')) continue;
     if (pick('input[name="remember"]|input[type="checkbox"][name*="remember" i]', form)) continue;
@@ -5915,12 +10177,14 @@ function fillAccountDetails(me) {
 
     if (fn && fn.type === 'text') fn.value = first;
     if (ln && ln.type === 'text') ln.value = last;
-    if (dn && dn.type === 'text') dn.value = me.name || me.email;
-    em.value = me.email;
-    /* The demo phone is presented as the shopper's own and would be SAVED as
-       theirs. An empty box is honest; a stranger's number is not. */
-    const ph = pick('input[type="tel"]|input[placeholder*="phone" i]|input[name*="phone" i]', form);
-    if (ph) ph.value = me.phone || '';
+    if (dn && dn.type === 'text') dn.value = [first, last].filter(Boolean).join(' ') || email;
+    if (em) em.value = email;
+
+    const ph = pick('input[type="tel"]|input[placeholder*="phone" i]|input[name*="phone" i]|input[placeholder*="mobile" i]', form);
+    if (ph) ph.value = phone;
+
+    const stateSelect = pick('#account-state, select[name*="state"]', form);
+    if (stateSelect && savedState) stateSelect.value = savedState;
   }
 }
 
@@ -5930,7 +10194,11 @@ async function paintOrders() {
   const spec = { container: '.order-list|.account-orders tbody|table tbody|.tf-table-page-cart tbody', card: 'tr|.order-item' };
   const t = takeTemplate(spec);
   if (!t) return;
+  const emptyState = pick('.empty-state', t.container?.closest?.('.order-table-account, .tab-pane') || t.container?.parentElement);
   if (!orders.length) return renderEmpty(t.container, 'You have not placed an order yet.', spec);
+  if (emptyState) show(emptyState, false);
+  const tableWrapper = t.container?.closest?.('.table-responsive, table');
+  if (tableWrapper) show(tableWrapper, true);
   repeat(t, orders, (node, o) => {
     const cells = pickAll('td', node);
     const texts = [o.reference || o.id, new Date(o.createdAt).toLocaleDateString(), o.orderStatus || o.status, money(o.total ?? o.totalAmount)];
@@ -5947,23 +10215,59 @@ async function paintAddresses() {
   const spec = { container: '.address-list|.account-addresses|.list-address', card: '.address-item|.single-address|.account-address-item' };
   const t = takeTemplate(spec);
   if (!t) return;
+  const emptyState = pick('.empty-state', t.container?.closest?.('.shipping-address-billing-address-account, .saved-addresses-col, .tab-pane, .col-lg-7, .col-lg-6') || t.container?.parentElement);
   if (!list.length) return renderEmpty(t.container, 'No saved addresses yet.', spec);
+  if (emptyState) show(emptyState, false);
+  show(t.container, true);
   repeat(t, list, (node, a) => {
+    node.dataset.addressId = a.id;
     setText(pick('.address-name|h5|h6', node), a.name || '');
     /* A saved address uses `line`, SINGULAR — the edit handler below already
        knew that; this line did not, so every saved address was shown without
        its street: "Noida, Uttar Pradesh, 201301" and nothing to deliver to. */
     setText(pick('.address-body|p|address', node),
       [a.line, a.line1, a.line2, a.city, a.state, a.pincode, a.country].filter(Boolean).join(', '));
+
+    // Handle Phone
+    const phoneEl = pick('.phone-val|.address-phone-number', node);
+    const phoneContainer = pick('.address-phone-line|.address-phone', node);
+    if (a.phone) {
+      if (phoneEl) setText(phoneEl, a.phone);
+      if (phoneContainer) show(phoneContainer, true);
+    } else if (phoneContainer) {
+      show(phoneContainer, false);
+    }
+
+    // Handle Default badge & button
+    const defaultBadge = pick('.badge-default-addr|.address-default-badge', node);
+    const defaultBtn = pick('.address-default|[data-default]', node);
+    const cardWrap = pick('.address-card-wrap', node);
+    if (a.isDefault) {
+      if (defaultBadge) show(defaultBadge, true);
+      if (defaultBtn) show(defaultBtn, false);
+      if (cardWrap) cardWrap.classList.add('is-default');
+    } else {
+      if (defaultBadge) show(defaultBadge, false);
+      if (defaultBtn) show(defaultBtn, true);
+      if (cardWrap) cardWrap.classList.remove('is-default');
+    }
+
     pick('.address-default|[data-default]', node)?.addEventListener('click', async (e) => {
       e.preventDefault();
-      try { await api.makeAddressDefault(a.id); notify('Default address updated.', 'success'); }
-      catch (err) { showError(err); }
+      try {
+        await api.makeAddressDefault(a.id);
+        notify('Default address updated.', 'success');
+        await paintAddresses();
+      } catch (err) { showError(err); }
     });
+
     pick('.address-edit|[data-edit]', node)?.addEventListener('click', (e) => {
       e.preventDefault();
       const form = $$('form').find((f) => f.dataset.merchAddress);
-      if (!form) return;
+      if (!form) {
+        location.href = `addresses.html?edit=${encodeURIComponent(a.id)}`;
+        return;
+      }
       form.dataset.merchEditing = a.id;
       const set = (sel, v) => { const el = pick(sel, form); if (el) el.value = v || ''; };
       set('input[placeholder*="name" i]:not([placeholder*="user" i])', a.name);
@@ -5972,12 +10276,29 @@ async function paintAddresses() {
       set('input[placeholder*="city" i]|input[placeholder*="town" i]', a.city);
       set('input[placeholder*="state" i]', a.state);
       set('input[placeholder*="zip" i]|input[placeholder*="post" i]|input[placeholder*="pin" i]', a.pincode);
+
+      const titleEl = pick('.address-form-title', form.parentElement?.parentElement || form.parentElement || document);
+      if (titleEl) setText(titleEl, 'Edit address');
+      const submitBtn = pick('button[type="submit"]', form);
+      if (submitBtn) setText(submitBtn, 'Update address');
+      const cancelBtn = pick('.cancel-edit-btn', form.parentElement?.parentElement || form.parentElement || document);
+      if (cancelBtn) show(cancelBtn, true);
+
       form.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
+
     pick('.address-delete|[data-delete]', node)?.addEventListener('click', async (e) => {
       e.preventDefault();
-      try { await api.deleteAddress(a.id); node.remove(); }
-      catch (err) { showError(err); }
+      if (!confirm('Are you sure you want to delete this address?')) return;
+      try {
+        await api.deleteAddress(a.id);
+        node.remove();
+        notify('Address deleted successfully.', 'success');
+        const remaining = pickAll(spec.card, t.container);
+        if (!remaining.length) {
+          renderEmpty(t.container, 'No saved addresses yet.', spec);
+        }
+      } catch (err) { showError(err); }
     });
   });
 }
@@ -6001,6 +10322,20 @@ function wireAddressForm() {
        Save submitted it natively. */
     if (!fields.line || !(fields.city || fields.pincode)) continue;
     form.dataset.merchAddress = '1';
+
+    const cancelBtn = pick('.cancel-edit-btn', form.parentElement?.parentElement || form.parentElement || document);
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        delete form.dataset.merchEditing;
+        form.reset();
+        const titleEl = pick('.address-form-title', form.parentElement?.parentElement || form.parentElement || document);
+        if (titleEl) setText(titleEl, 'Add an address');
+        const submitBtn = pick('button[type="submit"]', form);
+        if (submitBtn) setText(submitBtn, 'Save address');
+        show(cancelBtn, false);
+      });
+    }
 
     /* The store will not save an address without a postcode, and one of these
        templates asks only for Address and City. Give the form the boxes the
@@ -6045,6 +10380,11 @@ function wireAddressForm() {
         notify(editing ? 'Address updated.' : 'Address saved.', 'success');
         delete form.dataset.merchEditing;
         form.reset();
+        const titleEl = pick('.address-form-title', form.parentElement?.parentElement || form.parentElement || document);
+        if (titleEl) setText(titleEl, 'Add an address');
+        const submitBtn = pick('button[type="submit"]', form);
+        if (submitBtn) setText(submitBtn, 'Save address');
+        if (cancelBtn) show(cancelBtn, false);
         await paintAddresses();
       } catch (err) { showError(err); }
     });
@@ -6055,16 +10395,25 @@ function wireSignOut() {
   /* Matched on href before, but these themes point Logout at `login.html` and
      only the WORDS say what it does. */
   const links = new Set([
-    ...$$('a[href*="logout"], a[href*="sign-out"], .sign-out, [data-signout]'),
+    ...$$('a[href*="logout"], a[href*="sign-out"], .sign-out, [data-signout], .account-logout-btn'),
     ...$$('a, button').filter((el) => /^(log ?out|sign ?out)$/i.test((el.textContent || '').trim())),
   ]);
   links.forEach((a) => {
+    if (a.__wiredSignOut) return;
+    a.__wiredSignOut = true;
     a.addEventListener('click', async (e) => {
       e.preventDefault();
       try { await api.signOutEverywhere(); } catch { /* the local token goes either way */ }
       token.clear();
       user.clear();
       STORE_ME = null;
+      try {
+        localStorage.removeItem('merch.shopper_name');
+        localStorage.removeItem('merch.shopper_email');
+        localStorage.removeItem('merch.shopper_first_name');
+        localStorage.removeItem('merch.shopper_last_name');
+        localStorage.removeItem('merch.shopper_phone');
+      } catch {}
       notify('Signed out successfully.', 'success');
       paintUserHeader();
       location.href = pageUrl('home');
@@ -6097,6 +10446,7 @@ function wirePasswordChange() {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (!current.value && !next.value && !confirmEl?.value) return;
     if (!current.value || !next.value) return notify('Please fill in your current and new password.', 'error');
     if (confirmEl && confirmEl.value !== next.value) return notify('The two new passwords do not match.', 'error');
     try {
@@ -6123,7 +10473,7 @@ function wireAuthForms() {
 
     if (pw.length === 0) { if (looksLikeForgot(form)) wireForgotForm(form, email); continue; }
     /* Two password boxes (or a name field) means registration. */
-    const nameEl = pick('input[placeholder*="name" i]:not([placeholder*="user" i])', form);
+    const nameEl = pick('input[placeholder*="name" i]:not([placeholder*="user" i])|input[name*="first" i]', form);
     if (pw.length >= 2 || nameEl) wireRegisterForm(form, email, pw[0], nameEl);
     else wireLoginForm(form, email, pw[0]);
   }
@@ -6154,6 +10504,22 @@ function wireLoginForm(form, email, password) {
       } catch {}
       user.set(userData);
       STORE_ME = userData;
+
+      const name = userData?.name || res?.shopper?.name || res?.user?.name || res?.name || emailVal.split('@')[0];
+      const em = userData?.email || res?.shopper?.email || res?.user?.email || emailVal;
+      const ph = userData?.phone || res?.shopper?.phone || res?.user?.phone || '';
+      try {
+        localStorage.setItem('merch.shopper_name', name);
+        if (em) localStorage.setItem('merch.shopper_email', em);
+        if (ph) localStorage.setItem('merch.shopper_phone', ph);
+        const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+        if (parts.length > 0 && !localStorage.getItem('merch.shopper_first_name')) {
+          localStorage.setItem('merch.shopper_first_name', parts[0]);
+          if (parts.length > 1) {
+            localStorage.setItem('merch.shopper_last_name', parts.slice(1).join(' '));
+          }
+        }
+      } catch {}
       await wishlist.sync();
       notify('Signed in successfully.', 'success');
       paintUserHeader();
@@ -6169,20 +10535,32 @@ function wireRegisterForm(form, email, password, nameEl) {
     if (boxes.length >= 2 && boxes[0].value !== boxes[1].value) {
       return notify('The two passwords do not match.', 'error');
     }
-    const phoneEl = pick('input[type="tel"]|input[placeholder*="phone" i]', form);
-    const emailVal = email.value.trim();
-    const nameVal = nameEl?.value.trim() || emailVal.split('@')[0];
-    const phoneVal = phoneEl?.value.trim() || '';
+    const phoneEl = pick('input[type="tel"]|input[placeholder*="phone" i]|input[name*="phone" i]|input[placeholder*="mobile" i]', form);
+    const firstNameEl = pick('input[name*="first" i]|input[placeholder*="first" i]', form);
+    const lastNameEl = pick('input[name*="last" i]|input[placeholder*="last" i]', form);
+    const fn = firstNameEl?.value.trim() || '';
+    const ln = lastNameEl?.value.trim() || '';
+    const ph = phoneEl?.value.trim() || '';
+    const em = email.value.trim();
+    const fullName = [fn, ln].filter(Boolean).join(' ') || nameEl?.value.trim() || em.split('@')[0];
+
     try {
-      const res = await api.register(emailVal, password.value, nameVal, phoneVal);
+      const res = await api.register(em, password.value, fullName, ph);
       if (res?.token) token.set(res.token);
-      let userData = res?.shopper || res?.user || { name: nameVal, email: emailVal, phone: phoneVal };
+      let userData = res?.shopper || res?.user || { name: fullName, email: em, phone: ph, firstName: fn, lastName: ln };
       try {
         const me = await api.me();
         if (me) userData = me;
       } catch {}
       user.set(userData);
       STORE_ME = userData;
+      try {
+        if (fn) localStorage.setItem('merch.shopper_first_name', fn);
+        if (ln) localStorage.setItem('merch.shopper_last_name', ln);
+        if (fullName) localStorage.setItem('merch.shopper_name', fullName);
+        if (em) localStorage.setItem('merch.shopper_email', em);
+        if (ph) localStorage.setItem('merch.shopper_phone', ph);
+      } catch {}
       notify('Welcome. Your account is ready.', 'success');
       paintUserHeader();
       location.href = pageUrl('account');
@@ -6295,9 +10673,140 @@ pages.wishlist = async () => {
     const spec = THEME.cart;
     const t = takeTemplate(spec);
     if (!t) return;
-    if (!items.length) return renderEmpty(t.container, 'Your wishlist is empty.');
-    repeat(t, items, (node, p) => fillFields(node, spec.fields,
-      { itemId: p.id, name: p.name, price: p.price, qty: 1, image: (p.imageUrls || [])[0] }, { node }));
+
+    const renderWishlistEmpty = () => {
+      const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+      if (head) show(head, false);
+      const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
+      rows.forEach((r) => r.remove());
+      if (!pick('.merch-empty', t.container)) {
+        const emptyDiv = document.createElement('div');
+        emptyDiv.className = 'merch-empty text-center';
+        emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
+        emptyDiv.innerHTML = `
+          <i class="fa-regular fa-heart" style="font-size:48px;color:#94a3b8;margin-bottom:16px;display:block;"></i>
+          <h4 style="margin-bottom:8px;font-weight:600;">Your wishlist is empty</h4>
+          <p style="color:#64748b;margin-bottom:20px;">Explore more products and add your favorites to wishlist!</p>
+          <a href="shop.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
+        `;
+        t.container.appendChild(emptyDiv);
+      }
+    };
+
+    if (!items.length) {
+      renderWishlistEmpty();
+      return;
+    }
+
+    const head = pick('.single-cart-area-list.head, thead', t.container.parentElement || t.container) || pick('.single-cart-area-list.head', t.container);
+    if (head) show(head, true);
+    pickAll('.merch-empty', t.container).forEach(remove);
+
+    const wishFields = { ...(spec.fields || {}) };
+    delete wishFields.remove;
+
+    repeat(t, items, (node, p) => {
+      node.dataset.merchId = p.id;
+      fillFields(node, wishFields,
+        { itemId: p.id, name: p.name, price: p.price, qty: 1, image: (p.imageUrls || [])[0] }, { node });
+
+      // Image & thumbnail
+      const imageUrl = (p.imageUrls && p.imageUrls[0]) || '';
+      const imgEl = pick('.thumbnail img, .pro-thumbnail img', node);
+      if (imgEl) {
+        imgEl.src = imageUrl ? mediaUrl(imageUrl) : 'assets/images/shop/01.png';
+        imgEl.alt = p.name || 'product';
+        imgEl.style.cssText = 'width:65px;height:65px;object-fit:contain;border-radius:4px;';
+      }
+      const thumbLink = pick('.thumbnail a, .pro-thumbnail a', node);
+      if (thumbLink) {
+        thumbLink.href = productHref(p);
+      } else if (imgEl && imgEl.parentElement) {
+        const a = document.createElement('a');
+        a.href = productHref(p);
+        imgEl.parentElement.insertBefore(a, imgEl);
+        a.appendChild(imgEl);
+      }
+
+      // Title link
+      const titleEl = pick('.information .title, .pro-title', node);
+      if (titleEl) {
+        titleEl.innerHTML = `<a href="${escapeHtml(productHref(p))}" style="color:inherit;">${escapeHtml(p.name)}</a>`;
+      }
+
+      // SKU / unit
+      const skuEl = pick('.information span', node);
+      if (skuEl) {
+        skuEl.textContent = p.unit ? ('Unit: ' + p.unit) : (p.sku ? ('SKU: ' + p.sku) : '');
+      }
+
+      // Price & Subtotal
+      const priceEl = pick('.price p, .pro-price span, .pro-price', node);
+      if (priceEl) priceEl.textContent = money(p.price);
+
+      const qtyInput = pick('.quantity .input, .pro-quantity input', node);
+      const subtotalEl = pick('.subtotal p, .pro-subtotal span', node);
+      const updateSubtotal = () => {
+        const qty = Math.max(1, parseInt(qtyInput?.value) || 1);
+        if (subtotalEl) subtotalEl.textContent = money(p.price * qty);
+      };
+      if (qtyInput) {
+        qtyInput.value = '1';
+        qtyInput.oninput = updateSubtotal;
+      }
+      updateSubtotal();
+
+      // Quantity buttons
+      const minusBtn = pick('.quantity-edit .button:not(.plus), .dec.qtybtn', node);
+      const plusBtn = pick('.quantity-edit .button.plus, .inc.qtybtn', node);
+      if (minusBtn && qtyInput) {
+        minusBtn.onclick = (e) => {
+          e.preventDefault();
+          const cur = Math.max(1, parseInt(qtyInput.value) || 1);
+          if (cur > 1) { qtyInput.value = cur - 1; updateSubtotal(); }
+        };
+      }
+      if (plusBtn && qtyInput) {
+        plusBtn.onclick = (e) => {
+          e.preventDefault();
+          const cur = Math.max(1, parseInt(qtyInput.value) || 1);
+          qtyInput.value = cur + 1;
+          updateSubtotal();
+        };
+      }
+
+      // Close / Remove Cross button
+      const removeBtn = pick('.close, .pro-remove a, .remove', node);
+      if (removeBtn) {
+        if (!removeBtn.querySelector('i') && !removeBtn.textContent.trim()) {
+          removeBtn.innerHTML = '<i class="fa-regular fa-x"></i>';
+        }
+        removeBtn.title = 'Remove from wishlist';
+        removeBtn.style.cursor = 'pointer';
+        removeBtn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          await wishlist.toggle(p.id);
+          node.remove();
+          notify(p.name + ' removed from wishlist.', 'success');
+          const remaining = pickAll('.single-cart-area-list.main, tbody tr', t.container);
+          if (!remaining.length) {
+            renderWishlistEmpty();
+          }
+        };
+      }
+
+      // Add to Cart
+      const addCartBtn = pick('.button-area a, .pro-cart a, .add-to-cart', node);
+      if (addCartBtn) {
+        addCartBtn.onclick = (e) => {
+          e.preventDefault();
+          const qty = Math.max(1, parseInt(qtyInput?.value) || 1);
+          cart.add(p, qty);
+          notify(p.name + ' added to your cart.', 'success');
+        };
+      }
+    });
   }
 };
 
@@ -6356,7 +10865,7 @@ pages.post = async () => {
   const spec = THEME.post || {};
   setText(pick(spec.title || '.blog-title|.entry-title|.post-title|article h1|h1.title'), post.title);
   setText(pick(spec.date || '.blog-date|.date|.entry-date'), postDate(post));
-  document.title = post.title + document.title.replace(/^[^|\u2013-]*/, '');
+  setDocumentTitle(post.title);
 
   const cover = pick(spec.cover || 'article img|.blog-details img');
   if (cover && post.coverUrl) {
@@ -6633,8 +11142,6 @@ function readSubscriber() {
     pincode: a.pincode || '',
   };
 }
-let STORE_ME = null;
-let STORE_ADDRESS = null;
 
 /* --- COLLECTIONS ---------------------------------------------------------- */
 pages.collections = async () => {
@@ -6764,14 +11271,17 @@ async function boot() {
 
   THEME = detectTheme();
   if (!THEME) {
-    warn('no theme recognised for ' + location.pathname + ' — set data-theme on the script tag');
+    /* Not `warn`: that is debug-gated, so four stores served pages with no
+       hydration at all and a completely clean console. A page that cannot
+       identify its theme shows the TEMPLATE to a customer — say so out loud. */
+    console.error(
+      '[merch] No theme recognised for ' + location.pathname +
+      ' — this page is showing the template, not the shop. Add data-theme to its merch.js script tag.',
+    );
     await runDeferredThemeScripts();
     return;
   }
   PAGE = detectRole();
-  if (THEME.name === 'fashion') {
-    $$('.tf-minicart-recommendations, .tf-cart-notification').forEach(remove);
-  }
   log('theme=' + THEME.name, 'page=' + PAGE);
 
   /* The currency has to be right before anything is priced, so this one call
@@ -6807,18 +11317,34 @@ async function boot() {
   }
 
   paintHeader();
+  /* paintFashionMiniCart self-gates on THEME.name, so this is a no-op on the other
+     three themes — it is wired here, unconditionally, because that is where the
+     fashion copy wired it and the guard already lives inside the function. */
   cart.onChange(() => { paintHeader(); paintFashionMiniCart(); });
+  wishlist.onChange(paintHeader);
   paintFashionMiniCart();
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
   try { paintUsps(STORE); } catch (e) { warn('usps', e); }
+  /* Compare is reachable from EVERY page — its trigger sits on the product
+     card — so this belongs with the chrome, not on the home page alone. */
+  try { wireCompare(); } catch (e) { warn('compare', e); }
   try { paintSocialLinks(STORE); } catch (e) { warn('social links', e); }
   paintCurrencySwitcher().catch((e) => warn('currency switcher', e));
   /* Two of these themes BUILD their currency control from their own script,
      so at this point there is nothing on the page to find and the header went
      on claiming USD over rupee prices. Run it again once they have. */
   onThemeReady(() => { paintCurrencySwitcher().catch((e) => warn('currency switcher', e)); });
-  if (PAGE !== 'listing') { wireSearchInputs(null); wireCategoryLinks(); }
+  if (PAGE !== 'listing') { wireSearchInputs(null); }
+  /* ⭐ NOT AWAITED. This rewrites the theme's hard-coded category hrefs, which
+     is a nicety; painting the page is the point. Awaiting it put a catalogue
+     call on the critical path, so one slow answer held back every product,
+     price and picture on the page. It finishes when it finishes. */
+  wireCategoryLinks().catch((e) => warn('category links', e));
+  try { remapDeadLinks(); } catch (e) { warn('remap dead links', e); }
+  /* Not awaited: a named picture is never worth holding the page for. */
+  paintNamedMedia().catch((e) => warn('named media', e));
+  try { sweepUnbacked(); } catch (e) { warn('unbacked sweep', e); }
 
   const run = PAGE.startsWith('policy:') ? () => pages.policy(PAGE.slice(7)) : (pages[PAGE] || pages.unknown);
   try { await run(); }
@@ -6830,6 +11356,11 @@ async function boot() {
 
   /* Whatever the role did not reach. */
   try { await fillStrayStrips(); } catch (e) { warn('stray strips', e); }
+  /* Now that the page has painted, remove the blocks that assert people or
+     brands and that nothing reached. */
+  try { sweepUnbackedUnlessPainted(); } catch (e) { warn('unbacked-unless-painted', e); }
+  try { replaceTemplateArt(); } catch (e) { warn('template art', e); }
+  if (PAGE !== 'blog') { try { await paintBlogStrip(4); } catch (e) { warn('blog strip', e); } }
   try { wireQuickView(); } catch (e) { warn('quick view', e); }
 
   await runDeferredThemeScripts();
