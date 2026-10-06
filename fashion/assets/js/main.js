@@ -1402,11 +1402,7 @@
     -------------------------------------------------------------------------*/
     var checkOut = function () {
         $("#checkout-btn").on("click", function () {
-            if ($("#checkOutAgree").is(":checked")) {
-                window.location.href = "checkout.html";
-            } else {
-                alert("Please agree to the Terms and Conditions before continuing.");
-            }
+            window.location.href = "checkout.html";
         });
     };
 

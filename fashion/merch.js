@@ -598,17 +598,29 @@ export const cart = {
   localSubtotal: () => readCart().reduce((n, l) => n + (Number(l.price) || 0) * l.qty, 0),
   onChange: (fn) => { cartListeners.add(fn); return () => cartListeners.delete(fn); },
 
-  add(product, qty = 1) {
+  add(product, qty = 1, variantLabel = '') {
     const lines = readCart();
-    const found = lines.find((l) => l.itemId === product.id);
-    if (found) found.qty = Math.min(99, found.qty + qty);
-    else lines.push({
-      itemId: product.id,
-      qty: Math.min(99, Math.max(1, qty)),
-      name: product.name,
-      price: product.price,
-      image: (product.imageUrls && product.imageUrls[0]) || '',
-    });
+    const id = String(product.id || product.itemId || product._id || '');
+    const img = (Array.isArray(product.imageUrls) ? product.imageUrls[0] : null) ||
+                product.image ||
+                product.imageUrl ||
+                (Array.isArray(product.images) ? product.images[0] : null) ||
+                product.thumbnail ||
+                '';
+    const found = lines.find((l) => l.itemId === id);
+    if (found) {
+      found.qty = Math.min(99, found.qty + qty);
+      if (!found.image && img) found.image = img;
+    } else {
+      lines.push({
+        itemId: id,
+        qty: Math.min(99, Math.max(1, qty)),
+        name: product.name,
+        price: product.price,
+        image: img,
+        variantLabel: variantLabel || product.variantLabel || '',
+      });
+    }
     writeCart(lines);
   },
   setQty(itemId, qty) {
@@ -636,9 +648,10 @@ export const cart = {
       .filter((l) => byId.has(l.itemId))
       .map((l) => {
         const p = byId.get(l.itemId);
-        return { ...l, name: p.name, price: p.price, image: (p.imageUrls && p.imageUrls[0]) || l.image, product: p };
+        const img = (Array.isArray(p.imageUrls) ? p.imageUrls[0] : null) || p.image || p.imageUrl || l.image || '';
+        return { ...l, name: p.name, price: p.price, image: img, product: p };
       });
-    if (kept.length !== lines.length) writeCart(kept.map(({ product, ...l }) => l));
+    writeCart(kept.map(({ product, ...l }) => l));
     return kept;
   },
 };
@@ -2296,7 +2309,7 @@ THEMES.fashion = {
       notes:     'textarea[placeholder*="note" i]',
     },
     paymentRadios: 'input[name="payment-method"]',
-    terms: '#agree-term',
+    terms: null,
     placeBtn: '.btn-place-order, .tf-checkout-cart-main a.tf-btn, .tf-checkout-cart-main button, a[href*="thank-you.html"].tf-btn',
   },
 };
@@ -9515,8 +9528,10 @@ pages.checkout = async () => {
     if (moneyCaptured) return;
     const problem = validateCustomer(spec);
     if (problem) return notify(problem, 'error');
-    const terms = pick(spec.terms);
-    if (terms && !terms.checked) return notify('Please accept the terms and conditions.', 'error');
+    if (spec.terms && THEME?.name !== 'fashion') {
+      const terms = pick(spec.terms);
+      if (terms && !terms.checked) return notify('Please accept the terms and conditions.', 'error');
+    }
 
     busy(placeBtn, true);
     try {
@@ -10079,8 +10094,19 @@ function loadRazorpay() {
 function done(order) {
   try {
     sessionStorage.setItem('merch.justPaid', JSON.stringify({ id: order.id, at: Date.now(), paymentMethod: order.paymentMethod }));
-    const localOrders = readJson('merch.orders', []);
-    const items = cart.lines();
+    const rawLines = (order.items && order.items.length) ? order.items : ((order.lines && order.lines.length) ? order.lines : cart.lines());
+    const items = rawLines.map((l) => {
+      const img = l.image || l.imageUrl || (Array.isArray(l.imageUrls) ? l.imageUrls[0] : null) || (Array.isArray(l.product?.imageUrls) ? l.product.imageUrls[0] : null) || l.product?.image || l.product?.imageUrl || '';
+      return {
+        ...l,
+        name: l.name || l.title || 'Product',
+        price: Number(l.price) || 0,
+        qty: Number(l.qty || l.quantity) || 1,
+        image: img,
+        imageUrl: img,
+      };
+    });
+    const cust = (THEME?.checkout) ? readCustomer(THEME.checkout) : {};
     localOrders.unshift({
       id: order.id || ('ORD-' + Date.now().toString().slice(-6)),
       orderRef: order.orderRef || order.reference || ('#S' + Date.now().toString().slice(-8)),
@@ -10090,7 +10116,16 @@ function done(order) {
       lines: items,
       items: items,
       paymentMethod: order.paymentMethod || 'Cash Delivery',
-      shippingAddress: readJson('merch.address', null),
+      shippingAddress: (cust.name || cust.email) ? {
+        name: cust.name,
+        email: cust.email,
+        phone: cust.phone,
+        line: cust.address,
+        city: cust.city,
+        state: cust.state,
+        pincode: cust.pincode,
+        country: 'India',
+      } : readJson('merch.address', null),
     });
     writeJson('merch.orders', localOrders);
   } catch { /* ignore */ }
@@ -10321,142 +10356,136 @@ function normalizeOrderStatus(status) {
   return 'pending';
 }
 
-function initSampleOrders() {
-  if (localStorage.getItem('merch.orders') !== null) return;
-  const initial = [
-    {
-      id: '54312453',
-      orderRef: 'S184989823',
-      orderStatus: 'delivery',
-      createdAt: new Date(Date.now() - 86400000).toISOString(),
-      total: 120.00,
-      paymentMethod: 'Cash Delivery',
-      items: [
-        {
-          name: 'Contrasting sheepskin sweatshirt',
-          variantLabel: 'Color: Blue / Size: XL',
-          qty: 2,
-          price: 60.00,
-          image: 'assets/images/product/square/product-1.jpg',
-        },
-      ],
-      shippingAddress: {
-        name: 'Tony Nguyen',
-        email: 'hi.avitex@gmail.com',
-        phone: '315-666-6688',
-        line: '2163 Phillips Gap Rd',
-        city: 'West Jefferson',
-        state: 'North Carolina',
-        pincode: '28694',
-        country: 'US',
-      },
-    },
-    {
-      id: '54312452',
-      orderRef: 'S184989822',
-      orderStatus: 'pending',
-      createdAt: new Date(Date.now() - 172800000).toISOString(),
-      total: 60.00,
-      paymentMethod: 'Cash Delivery',
-      items: [
-        {
-          name: 'Faux-leather trousers',
-          variantLabel: 'Color: Brown / Size: L',
-          qty: 1,
-          price: 60.00,
-          image: 'assets/images/product/square/product-4.jpg',
-        },
-      ],
-      shippingAddress: {
-        name: 'Tony Nguyen',
-        email: 'hi.avitex@gmail.com',
-        phone: '315-666-6688',
-        line: '2163 Phillips Gap Rd',
-        city: 'West Jefferson',
-        state: 'North Carolina',
-        pincode: '28694',
-        country: 'US',
-      },
-    },
-    {
-      id: '54312451',
-      orderRef: 'S184989821',
-      orderStatus: 'completed',
-      createdAt: new Date(Date.now() - 432000000).toISOString(),
-      total: 45.00,
-      paymentMethod: 'Online Payment',
-      items: [
-        {
-          name: 'V-neck knitted top',
-          variantLabel: 'Color: Olive / Size: M',
-          qty: 1,
-          price: 45.00,
-          image: 'assets/images/product/square/product-6.jpg',
-        },
-      ],
-      shippingAddress: {
-        name: 'Tony Nguyen',
-        email: 'hi.avitex@gmail.com',
-        phone: '315-666-6688',
-        line: '2163 Phillips Gap Rd',
-        city: 'West Jefferson',
-        state: 'North Carolina',
-        pincode: '28694',
-        country: 'US',
-      },
-    },
-    {
-      id: '54312450',
-      orderRef: 'S184989820',
-      orderStatus: 'canceled',
-      createdAt: new Date(Date.now() - 604800000).toISOString(),
-      total: 60.00,
-      paymentMethod: 'Cash Delivery',
-      items: [
-        {
-          name: 'Contrasting sweatshirt',
-          variantLabel: 'Color: Black / Size: S',
-          qty: 1,
-          price: 60.00,
-          image: 'assets/images/product/square/product-8.jpg',
-        },
-      ],
-      shippingAddress: {
-        name: 'Tony Nguyen',
-        email: 'hi.avitex@gmail.com',
-        phone: '315-666-6688',
-        line: '2163 Phillips Gap Rd',
-        city: 'West Jefferson',
-        state: 'North Carolina',
-        pincode: '28694',
-        country: 'US',
-      },
-    },
-  ];
-  writeJson('merch.orders', initial);
+const DUMMY_ORDER_IDS = new Set(['54312453', '54312452', '54312451', '54312450', 'S184989823', 'S184989822', 'S184989821', 'S184989820']);
+function isDummyOrder(o) {
+  if (!o) return true;
+  const id = String(o.id || '');
+  const ref = String(o.orderRef || o.reference || '');
+  if (DUMMY_ORDER_IDS.has(id) || DUMMY_ORDER_IDS.has(ref)) return true;
+  if (o.shippingAddress?.email === 'hi.avitex@gmail.com') return true;
+  return false;
+}
+
+let catalogImageCache = new Map();
+
+async function ensureCatalogImageCache(orders = []) {
+  const itemIds = [];
+  orders.forEach((o) => {
+    const list = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
+    list.forEach((item) => {
+      const id = item.itemId || item.id || item.productId || item.product?.id;
+      if (id) itemIds.push(String(id));
+    });
+  });
+
+  try {
+    const promises = [];
+    if (itemIds.length) {
+      promises.push(api.products(itemIds).catch(() => []));
+    }
+    if (catalogImageCache.size === 0) {
+      promises.push(api.catalog({ pageSize: 50 }).catch(() => []));
+    }
+    const results = await Promise.all(promises);
+    results.forEach((res) => {
+      const list = Array.isArray(res) ? res : (res?.products || res?.items || []);
+      list.forEach((p) => {
+        if (!p) return;
+        const img = (Array.isArray(p.imageUrls) ? p.imageUrls[0] : null) || p.image || p.imageUrl || (Array.isArray(p.images) ? p.images[0] : null) || '';
+        if (p.id && img) catalogImageCache.set(String(p.id), img);
+        if (p.name && img) catalogImageCache.set(p.name.toLowerCase().trim(), img);
+      });
+    });
+  } catch {}
+
+  return catalogImageCache;
+}
+
+function resolveOrderItemImage(item, cache = catalogImageCache) {
+  if (!item) return '';
+
+  let candidate =
+    item.image ||
+    item.imageUrl ||
+    item.image_url ||
+    item.productImage ||
+    item.thumbnail ||
+    (Array.isArray(item.imageUrls) ? item.imageUrls[0] : null) ||
+    (Array.isArray(item.images) ? item.images[0] : null) ||
+    item.product?.image ||
+    item.product?.imageUrl ||
+    (Array.isArray(item.product?.imageUrls) ? item.product.imageUrls[0] : null);
+
+  if (typeof candidate === 'object' && candidate !== null) {
+    candidate = candidate.url || candidate.src || candidate.path || '';
+  }
+
+  // Check if candidate is already a dynamic URL or path (not a template demo placeholder)
+  if (candidate && !String(candidate).includes('square/product-1.jpg') && !String(candidate).includes('product-3.jpg')) {
+    return mediaUrl(candidate);
+  }
+
+  // Look up in catalog image cache
+  const id = String(item.itemId || item.id || item.productId || item.product?.id || '');
+  const nameKey = (item.name || '').toLowerCase().trim();
+
+  if (cache) {
+    const cached = (id ? cache.get(id) : null) || (nameKey ? cache.get(nameKey) : null);
+    if (cached) return mediaUrl(cached);
+  }
+
+  return candidate ? mediaUrl(candidate) : '';
 }
 
 async function getAccountOrders() {
-  initSampleOrders();
   let remoteOrders = [];
   try {
     const res = await api.myOrders();
     remoteOrders = Array.isArray(res) ? res : (res?.orders || res?.items || []);
   } catch {}
 
-  const localOrders = readJson('merch.orders', []);
+  let localOrders = readJson('merch.orders', []);
+  if (Array.isArray(localOrders) && localOrders.some(isDummyOrder)) {
+    localOrders = localOrders.filter((o) => !isDummyOrder(o));
+    writeJson('merch.orders', localOrders);
+  }
+
   const map = new Map();
   for (const o of remoteOrders) {
+    if (isDummyOrder(o)) continue;
     const key = String(o.id || o.orderRef || o.reference);
     map.set(key, o);
   }
   for (const o of localOrders) {
+    if (isDummyOrder(o)) continue;
     const key = String(o.id || o.orderRef || o.reference);
     if (!map.has(key)) map.set(key, o);
   }
 
   const combined = Array.from(map.values());
   combined.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+  // Pre-load dynamic catalog images
+  const cache = await ensureCatalogImageCache(combined);
+
+  // Backfill dynamic images into order items if missing
+  let localModified = false;
+  combined.forEach((o) => {
+    const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
+    items.forEach((item) => {
+      const dynamicImg = resolveOrderItemImage(item, cache);
+      if (dynamicImg && (!item.image || item.image.includes('square/product-1.jpg') || item.image.includes('product-3.jpg'))) {
+        item.image = dynamicImg;
+        item.imageUrl = dynamicImg;
+        localModified = true;
+      }
+    });
+  });
+
+  if (localModified && localOrders.length) {
+    writeJson('merch.orders', localOrders);
+  }
+
   return combined;
 }
 
@@ -10524,7 +10553,7 @@ async function paintFashionAccountDashboard() {
       const statusLabel = norm.charAt(0).toUpperCase() + norm.slice(1);
       const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
       const firstItem = items[0] || {};
-      const itemImg = firstItem.image ? mediaUrl(firstItem.image) : 'assets/images/product/square/product-1.jpg';
+      const itemImg = resolveOrderItemImage(firstItem, catalogImageCache);
       const itemName = firstItem.name || 'Order Item';
       const itemType = firstItem.variantLabel || firstItem.color || firstItem.size || (items.length > 1 ? `${items.length} items` : 'Clothing');
       const orderCode = o.orderRef || o.reference || ('#' + String(o.id).slice(-8));
@@ -10538,7 +10567,7 @@ async function paintFashionAccountDashboard() {
         <td>
           <div class="tb-order_product">
             <a href="account-orders.html" class="img-prd">
-              <img loading="lazy" width="48" height="48" src="${itemImg}" alt="${escapeHtml(itemName)}" style="border-radius: 4px; object-fit: cover;">
+              <img loading="lazy" width="48" height="48" src="${itemImg}" alt="${escapeHtml(itemName)}" style="border-radius: 4px; object-fit: cover;" onerror="this.src='assets/images/product/square/product-1.jpg'">
             </a>
             <div class="infor-prd">
               <a href="account-orders.html" class="prd_name link fw-medium lh-24">${escapeHtml(itemName)}</a>
@@ -10601,11 +10630,11 @@ async function paintFashionOrdersPage() {
       ]);
 
       const itemsHtml = items.map((item) => {
-        const imgUrl = item.image ? mediaUrl(item.image) : 'assets/images/product/square/product-1.jpg';
+        const imgUrl = resolveOrderItemImage(item, catalogImageCache);
         return `
           <div class="order_prd_item">
             <div class="prd__image">
-              <img loading="lazy" width="80" height="80" src="${imgUrl}" alt="${escapeHtml(item.name || '')}">
+              <img loading="lazy" width="80" height="80" src="${imgUrl}" alt="${escapeHtml(item.name || '')}" style="border-radius: 8px; object-fit: cover;" onerror="this.src='assets/images/product/square/product-1.jpg'">
             </div>
             <div class="prd__info">
               <p class="name fw-medium">${escapeHtml(item.name || 'Product')}</p>
@@ -10685,20 +10714,12 @@ function showFashionOrderDetailModal(o) {
   const modal = document.getElementById('orderDetail');
   if (!modal) return;
 
-  const addr = o.shippingAddress || readJson('merch.address', {
-    name: 'Tony Nguyen',
-    email: 'hi.avitex@gmail.com',
-    line: '2163 Phillips Gap Rd',
-    city: 'West Jefferson',
-    state: 'North Carolina',
-    pincode: '28694',
-    country: 'US',
-  });
+  const addr = o.shippingAddress || readJson('merch.address', {});
 
-  const fullAddr = [addr.line, addr.city, addr.state, addr.pincode, addr.country].filter(Boolean).join(', ') || '2163 Phillips Gap Rd, West Jefferson, North Carolina, US';
+  const fullAddr = [addr.line || addr.address1 || addr.address, addr.city, addr.state, addr.pincode, addr.country].filter(Boolean).join(', ') || 'N/A';
   const u = user.get() || STORE_ME || {};
-  const custName = addr.name || u.name || 'Tony Nguyen';
-  const custEmail = addr.email || u.email || 'hi.avitex@gmail.com';
+  const custName = addr.name || [addr.firstName, addr.lastName].filter(Boolean).join(' ') || u.name || (u.firstName ? (u.firstName + ' ' + (u.lastName || '')).trim() : '') || 'Customer';
+  const custEmail = addr.email || u.email || 'N/A';
 
   const boxes = pickAll('.box-info', modal);
   boxes.forEach((box) => {
@@ -10719,12 +10740,12 @@ function showFashionOrderDetailModal(o) {
   if (listProd && items.length) {
     listProd.replaceChildren();
     items.forEach((item) => {
-      const imgUrl = item.image ? mediaUrl(item.image) : 'assets/images/product/product-3.jpg';
+      const imgUrl = resolveOrderItemImage(item, catalogImageCache);
       const li = document.createElement('li');
       li.className = 'order-item fw-medium';
       li.innerHTML = `
         <div class="img-prd">
-          <img loading="lazy" width="80" height="100" src="${imgUrl}" alt="${escapeHtml(item.name || '')}" style="border-radius: 4px; object-fit: cover;">
+          <img loading="lazy" width="80" height="100" src="${imgUrl}" alt="${escapeHtml(item.name || '')}" style="border-radius: 4px; object-fit: cover;" onerror="this.src='assets/images/product/product-3.jpg'">
         </div>
         <div class="infor-prd">
           <span class="prd_name fw-medium lh-24">${escapeHtml(item.name || 'Product')}</span>
@@ -10873,37 +10894,44 @@ pages.account = async () => {
   wireAuthForms();
   wirePasswordChange();
   wireAccountDetailsForm();
-  if (!token.get()) { showSignedOut(); return; }
+
+  let me = user.get() || STORE_ME;
+  if (!me && token.get()) {
+    try { me = await api.me(); }
+    catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { token.clear(); } }
+  }
+
+  if (me) {
+    showSignedIn(me);
+    STORE_ME = me;
+    user.set(me);
+  } else if (!token.get()) {
+    showSignedOut();
+  }
 
   const cachedName = localStorage.getItem('merch.shopper_name');
   if (cachedName) pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, cachedName));
 
-  let me = user.get() || STORE_ME;
-  if (!me) {
-    try { me = await api.me(); }
-    catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { showSignedOut(); return; } showError(e); return; }
+  if (token.get()) {
+    api.addresses().then((list) => { STORE_ADDRESS = (list || []).find((a) => a.isDefault) || (list || [])[0] || null; }).catch(() => {});
   }
-
-  showSignedIn(me);
-  STORE_ME = me;
-  if (me) user.set(me);
-
-  api.addresses().then((list) => { STORE_ADDRESS = (list || []).find((a) => a.isDefault) || (list || [])[0] || null; }).catch(() => {});
-  initSampleOrders();
 
   if (THEME?.name === 'fashion') {
     await Promise.all([paintFashionAccountDashboard(), paintAddresses(), wishlist.sync()]);
     wireFashionAccountSetting();
     wireFashionAddressesPage();
-  } else {
-    await Promise.all([paintOrders(), paintAddresses(), wishlist.sync()]);
-    wireAddressForm();
+    wireSignOut();
+    return;
   }
+
+  if (!token.get()) { showSignedOut(); return; }
+
+  await Promise.all([paintOrders(), paintAddresses(), wishlist.sync()]);
+  wireAddressForm();
   wireSignOut();
 };
 
 pages.orders = async () => {
-  initSampleOrders();
   if (THEME?.name === 'fashion') {
     await paintFashionOrdersPage();
   } else {
