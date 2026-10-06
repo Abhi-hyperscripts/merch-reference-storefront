@@ -562,9 +562,9 @@ export const api = {
   deleteAddress: (id) => request('/api/shopper/addresses/' + encodeURIComponent(id), { method: 'DELETE', auth: true }),
   makeAddressDefault: (id) => request('/api/shopper/addresses/' + encodeURIComponent(id) + '/default', { method: 'POST', auth: true }),
 
-  wishlist: () => request('/api/shopper/wishlist', { auth: true }),
-  addToWishlist: (itemId) => request('/api/shopper/wishlist', { method: 'POST', body: { itemId }, auth: true }),
-  removeFromWishlist: (itemId) => request('/api/shopper/wishlist/' + encodeURIComponent(itemId), { method: 'DELETE', auth: true }),
+  wishlist: () => request('/api/shopper/wishlist', { auth: 'optional' }),
+  addToWishlist: (itemId) => request('/api/shopper/wishlist', { method: 'POST', body: { itemId }, auth: 'optional' }),
+  removeFromWishlist: (itemId) => request('/api/shopper/wishlist/' + encodeURIComponent(itemId), { method: 'DELETE', auth: 'optional' }),
 };
 
 /* ---------------------------------------------------------------------------
@@ -643,6 +643,52 @@ export const cart = {
   },
 };
 
+function extractWishlistIds(res) {
+  if (!res) return [];
+  const list = Array.isArray(res) ? res : (res.items || res.wishlist || res.data || []);
+  return list.map((item) => {
+    if (typeof item === 'string') return item;
+    return item?.itemId || item?.id || item?._id || item?.productId || item?.product?.id || '';
+  }).filter(Boolean);
+}
+
+function syncWishlistCardStates(container = document) {
+  const wishIds = new Set(wishlist.ids());
+  container.querySelectorAll('.card-product[data-merch-id]').forEach((card) => {
+    const id = card.dataset.merchId;
+    if (!id) return;
+    const isWished = wishIds.has(id);
+    const wishBtn = card.querySelector('.product-action_list .wishlist a, .box-icon.wishlist, .tf-product-btn-wishlist, [data-action="wishlist"]');
+    if (!wishBtn) return;
+    wishBtn.classList.toggle('active', isWished);
+    const li = wishBtn.closest('li.wishlist') || wishBtn.parentElement;
+    if (li && li.classList.contains('wishlist')) li.classList.toggle('active', isWished);
+
+    const icon = wishBtn.querySelector('.icon, i');
+    const tip = wishBtn.querySelector('.tooltip');
+
+    if (isWished) {
+      wishBtn.style.setProperty('background-color', '#000', 'important');
+      wishBtn.style.setProperty('color', '#fff', 'important');
+      wishBtn.setAttribute('data-wishlisted', 'true');
+      if (icon) {
+        icon.className = 'icon icon-trash';
+        icon.style.setProperty('color', '#fff', 'important');
+      }
+      if (tip) tip.textContent = 'Remove from Wishlist';
+    } else {
+      wishBtn.style.removeProperty('background-color');
+      wishBtn.style.removeProperty('color');
+      wishBtn.removeAttribute('data-wishlisted');
+      if (icon) {
+        icon.className = 'icon icon-heart';
+        icon.style.removeProperty('color');
+      }
+      if (tip) tip.textContent = 'Add to Wishlist';
+    }
+  });
+}
+
 /* A local wishlist for guests, merged into the account's on sign-in. The store
    owns the real one; this is what makes the heart icon work signed out. */
 const WISH_KEY = 'merch.wishlist';
@@ -657,24 +703,36 @@ export const wishlist = {
   has: (id) => wishlist.ids().includes(id),
   onChange: (fn) => { wishListeners.add(fn); return () => wishListeners.delete(fn); },
   async toggle(itemId) {
+    if (!itemId) return false;
     const on = !wishlist.has(itemId);
     const ids = wishlist.ids().filter((x) => x !== itemId);
     if (on) ids.push(itemId);
     writeWish(ids);
-    if (token.get()) {
-      try { on ? await api.addToWishlist(itemId) : await api.removeFromWishlist(itemId); }
-      catch (e) { if (!(e instanceof ApiError && e.isUnauthenticated)) warn(e); }
+    try {
+      if (on) {
+        await api.addToWishlist(itemId);
+      } else {
+        await api.removeFromWishlist(itemId);
+      }
+    } catch (e) {
+      if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist api error', e);
     }
+    syncWishlistCardStates();
     return on;
   },
-  /* After sign-in: push anything collected as a guest, then adopt the store's. */
+  /* After sign-in or on boot: sync local with remote store wishlist */
   async sync() {
-    if (!token.get()) return;
-    const local = wishlist.ids();
     try {
-      for (const id of local) await api.addToWishlist(id).catch(() => {});
-      writeWish((await api.wishlist()) || []);
-    } catch (e) { warn(e); }
+      const remote = await api.wishlist();
+      const remoteIds = extractWishlistIds(remote);
+      if (remoteIds.length) {
+        const combined = [...new Set([...wishlist.ids(), ...remoteIds])];
+        writeWish(combined);
+        syncWishlistCardStates();
+      }
+    } catch (e) {
+      /* guest mode fallback */
+    }
   },
 };
 
@@ -1017,8 +1075,8 @@ function wireAction(el, action, data, ctx) {
       el.addEventListener('click', async (e) => {
         stop(e);
         const on = await wishlist.toggle(data.id);
-        el.classList.toggle('active', on);
-        notify(on ? 'Saved to your wishlist.' : 'Removed from your wishlist.', 'success');
+        syncWishlistCardStates();
+        notify(on ? 'Added to wishlist.' : 'Removed from wishlist.', 'success');
       });
       break;
     case 'compare':
@@ -3900,6 +3958,7 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
       fillProductSizes(node, p);
     });
   }
+  syncWishlistCardStates();
   return containers[0];
 }
 
@@ -3918,7 +3977,79 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
    swatch reading "Beige" and a size run of S/M/L/XL. The pictures come from
    the product; the pickers are the template's clothing demo and come off. */
 function paintQuickViewExtras(panel, p) {
-  const imgs = (p.imageUrls || []).filter(Boolean);
+  if (!panel || !p) return;
+  const imgs = (p.imageUrls && p.imageUrls.length ? p.imageUrls : (p.imageUrl ? [p.imageUrl] : [])).filter(Boolean);
+  if (!imgs.length && quickViewProduct?.imageUrls?.length) {
+    imgs.push(...quickViewProduct.imageUrls);
+  }
+
+  // 1. Fashion Quick Add modal image & basic details
+  const qaImg = panel.querySelector('.product-mini-view .prd-image img, .product-mini-view img, .img-product');
+  if (qaImg && imgs.length) {
+    const url = mediaUrl(imgs[0]);
+    qaImg.src = url;
+    qaImg.alt = p.name || 'Product';
+    qaImg.removeAttribute('srcset');
+    qaImg.classList.remove('lazyload', 'lazyloading');
+    qaImg.classList.add('lazyloaded');
+  }
+  const qaLinks = panel.querySelectorAll('.product-mini-view .prd-image, .product-mini-view .prd-name');
+  qaLinks.forEach((a) => { a.href = productHref(p); });
+  const priceDisplay = p.priceText || (p.price != null ? money(p.price) : '');
+  const qaName = panel.querySelector('.product-mini-view .prd-name');
+  if (qaName && p.name) setText(qaName, p.name);
+  const qaPrice = panel.querySelector('.product-mini-view .price-new, .product-mini-view .price-on-sale, .price-new');
+  if (qaPrice && priceDisplay) setText(qaPrice, priceDisplay);
+  const qaOld = panel.querySelector('.product-mini-view .price-old');
+  if (qaOld) {
+    if (p.mrp && p.mrp > p.price) {
+      qaOld.style.display = '';
+      setText(qaOld, money(p.mrp));
+    } else {
+      qaOld.style.display = 'none';
+    }
+  }
+
+  // 2. Fashion Quick View offcanvas scroll gallery & details
+  const scrollWrap = panel.querySelector('.wrapper-scroll-quickview, .wrap-quick');
+  if (scrollWrap && imgs.length) {
+    scrollWrap.innerHTML = '';
+    imgs.forEach((imgUrl) => {
+      const div = document.createElement('div');
+      div.className = 'image item-scroll-quickview';
+      div.innerHTML = `<img width="340" height="444" src="${escapeHtml(mediaUrl(imgUrl))}" alt="${escapeHtml(p.name || '')}" class="lazyloaded" style="width:100%;height:auto;object-fit:cover;">`;
+      scrollWrap.appendChild(div);
+    });
+    scrollWrap.scrollTop = 0;
+  }
+  const qvName = panel.querySelector('.product-infor-name');
+  if (qvName && p.name) setText(qvName, p.name);
+  const qvCate = panel.querySelector('.product-infor-cate');
+  if (qvCate && p.category) setText(qvCate, p.category);
+  const qvPrice = panel.querySelector('.price-on-sale, .price-new');
+  if (qvPrice && p.price != null) setText(qvPrice, money(p.price));
+  const qvOld = panel.querySelector('.product-infor-price p');
+  if (qvOld) {
+    if (p.mrp && p.mrp > p.price) {
+      qvOld.style.display = '';
+      setText(qvOld, money(p.mrp));
+    } else {
+      qvOld.style.display = 'none';
+    }
+  }
+  const qvBadge = panel.querySelector('.badge-sale');
+  if (qvBadge) {
+    if (p.mrp && p.mrp > p.price) {
+      qvBadge.style.display = '';
+      setText(qvBadge, discountText(p));
+    } else {
+      qvBadge.style.display = 'none';
+    }
+  }
+  const qvDesc = panel.querySelector('.product-infor-desc');
+  if (qvDesc && p.description) setText(qvDesc, p.description);
+
+  // 3. General theme gallery
   const items = pickAll('.quickView-item|.tf-quick-view-image .item|.tf-quick-view-image .swiper-slide', panel);
   if (items.length && imgs.length) {
     items.forEach((item, i) => {
@@ -4930,7 +5061,7 @@ pages.listing = async () => {
   /* Measured before the first fetch only to size the request; the containers
      themselves are looked up again after every answer, because the theme's own
      scripts may rebuild them in between (see pages.home). */
-  const pageSize = Math.min(60, Math.max(8, Math.max(
+  const pageSize = THEME?.name === 'fashion' ? 12 : Math.min(60, Math.max(8, Math.max(
     0, ...pickAll(THEME.listing.container).map((el) => templateCount({ ...THEME.listing, el })),
   ) || 24));
 
@@ -4993,6 +5124,66 @@ pages.listing = async () => {
 
 /* Render responsive dynamic pagination controls */
 function renderPagination(total, state, run, pageSize) {
+  const tfPagers = pickAll('.tf-page-pagination');
+  if (tfPagers.length) {
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const curPage = Math.min(Math.max(1, state.page || 1), totalPages);
+
+    let startPage = Math.max(1, curPage - 2);
+    let endPage = Math.min(totalPages, startPage + 4);
+    if (endPage - startPage < 4) {
+      startPage = Math.max(1, endPage - 4);
+    }
+
+    tfPagers.forEach((pager) => {
+      const wrap = pager.closest('.wd-full') || pager;
+      if (totalPages <= 1) {
+        wrap.style.display = 'none';
+        return;
+      }
+      wrap.style.display = 'flex';
+
+      let html = '';
+      if (curPage > 1) {
+        html += `<a href="#" class="pag-item prev-page" data-page="${curPage - 1}" title="Previous"><i class="icon icon-CaretLeft"></i></a>`;
+      }
+      if (startPage > 1) {
+        html += `<a href="#" class="pag-item" data-page="1">1</a>`;
+        if (startPage > 2) html += `<span class="pag-item" style="border:none;cursor:default;">...</span>`;
+      }
+      for (let p = startPage; p <= endPage; p++) {
+        if (p === curPage) {
+          html += `<p class="pag-item active">${p}</p>`;
+        } else {
+          html += `<a href="#" class="pag-item" data-page="${p}">${p}</a>`;
+        }
+      }
+      if (endPage < totalPages) {
+        if (endPage < totalPages - 1) html += `<span class="pag-item" style="border:none;cursor:default;">...</span>`;
+        html += `<a href="#" class="pag-item" data-page="${totalPages}">${totalPages}</a>`;
+      }
+      if (curPage < totalPages) {
+        html += `<a href="#" class="pag-item next-page" data-page="${curPage + 1}" title="Next"><i class="icon icon-CaretRightThin"></i></a>`;
+      }
+
+      pager.innerHTML = html;
+
+      pager.querySelectorAll('[data-page]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const p = Number(btn.dataset.page);
+          if (p && p !== curPage) {
+            state.page = p;
+            pushState(state);
+            run();
+            const topEl = document.querySelector('.wrapper-control-shop') || document.getElementById('gridLayout') || document.body;
+            topEl.scrollIntoView({ behavior: 'smooth' });
+          }
+        });
+      });
+    });
+    return;
+  }
   const pager = pick('.pagination-area-main-wrappper, .pagination-area, .pagination, ul.wg-pagination');
   if (!pager) return;
   const ul = pager.tagName === 'UL' ? pager : pager.querySelector('ul');
@@ -8305,11 +8496,21 @@ function wireQuickViewFashion() {
     const trigger = e.target.closest(
       '.quickview, .cta-quickview, .product-details-popup-btn, [data-quickview], ' +
       'a[href="#quickView"], a[href="#quick_view"], a[href="#quickAdd"], ' +
-      '[data-bs-target="#quick_view"], [data-bs-target="#quickAdd"]',
+      '[data-bs-target="#quick_view"], [data-bs-target="#quickAdd"], [data-bs-target="#quickView"]',
     );
     if (!trigger) return;
-    const id = trigger.closest('[data-merch-id]')?.dataset.merchId;
+    const card = trigger.closest('[data-merch-id]');
+    const id = card?.dataset.merchId;
     if (!id) return;                       // a trigger on markup we never filled
+
+    const cardImg = card?.querySelector('img.img-product, img')?.src;
+    const cardName = card?.querySelector('.name-product, .prd-name')?.textContent?.trim();
+    const cardPrice = card?.querySelector('.price-new')?.textContent?.trim();
+    if (cardImg || cardName) {
+      for (const panel of panels) {
+        paintQuickViewExtras(panel, { imageUrls: cardImg ? [cardImg] : [], name: cardName, priceText: cardPrice, id });
+      }
+    }
 
     try {
       const p = await api.product(id);
@@ -11018,10 +11219,10 @@ async function mountGoogleButton() {
 pages.wishlist = async () => {
   let ids = wishlist.ids();
   if (token.get()) {
-    /* An array of item-id STRINGS, not objects. `.map(x => x.itemId)` on it
-       yields a list of undefineds, and `api.products` on those returns the
-       whole catalogue as "your wishlist". */
-    try { ids = (await api.wishlist()) || []; } catch { /* fall back to the local list */ }
+    try {
+      const remote = extractWishlistIds(await api.wishlist());
+      if (remote && remote.length) ids = remote;
+    } catch { /* fall back to the local list */ }
   }
   let items = [];
   try { items = await api.products(ids); } catch (e) { return showError(e); }
@@ -11681,7 +11882,8 @@ async function boot() {
      three themes — it is wired here, unconditionally, because that is where the
      fashion copy wired it and the guard already lives inside the function. */
   cart.onChange(() => { paintHeader(); paintFashionMiniCart(); });
-  wishlist.onChange(paintHeader);
+  wishlist.onChange(() => { paintHeader(); syncWishlistCardStates(); });
+  wishlist.sync().catch(() => {});
   paintFashionMiniCart();
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
