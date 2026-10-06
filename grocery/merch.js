@@ -1222,7 +1222,7 @@ const THEMES = {
       blog: 'blog.html', post: 'blog-details.html',
       about: 'about.html', contact: 'contact.html', faq: 'faq.html',
       privacy: 'privacy-policy.html', terms: 'terms-conditions.html',
-      shipping: 'shipping.html', orders: 'order-received.html',
+      shipping: 'shipping.html', orders: 'account.html#orders',
     },
     footerContact: { phone: '.call-area a.number|a[href^="tel:"]', email: 'a[href^="mailto:"]', address: 'address|[data-store-address]' },
     /* The promo strip this theme runs across the very top, and the row of
@@ -9368,7 +9368,15 @@ function loadRazorpay() {
 }
 
 function done(order) {
-  try { sessionStorage.setItem('merch.justPaid', JSON.stringify({ id: order.id, at: Date.now(), paymentMethod: order.paymentMethod })); } catch { /* ignore */ }
+  try {
+    sessionStorage.setItem('merch.justPaid', JSON.stringify({
+      id: order.id,
+      at: Date.now(),
+      paymentMethod: order.paymentMethod,
+      customer: order.customer,
+      shippingAddress: order.shippingAddress || order.deliveryAddress,
+    }));
+  } catch { /* ignore */ }
   cart.clear();
   pending.clear();
   currentKey = null;
@@ -9395,11 +9403,12 @@ pages.order = async () => {
      role it listed first. With no `?id=` there is no order to show. */
   if (!id) {
     if (PAGE === 'track') return pages.track();
+    const returnTarget = (pageUrl('account') || 'account.html') + '#orders';
     if (!token.get()) {
-      location.href = pageUrl('login') + '?next=' + encodeURIComponent(location.pathname.split('/').pop() || 'account.html');
+      location.href = pageUrl('login') + '?next=' + encodeURIComponent(returnTarget);
       return;
     }
-    location.href = pageUrl('account');
+    location.href = returnTarget;
     return;
   }
   let order;
@@ -9444,6 +9453,59 @@ function paintOrder(order) {
     if (o.trackingUrl) { a.setAttribute('href', o.trackingUrl); a.setAttribute('target', '_blank'); show(a, true); }
     else show(a, false);
   });
+
+  /* Delivery address on order details */
+  const jp = readJustPaid();
+  const jpMatches = jp && String(jp.id) === String(o.id);
+  const cust = o.customer || (jpMatches ? jp.customer : null) || {};
+  const ship = o.shippingAddress || o.deliveryAddress || o.shipping || cust.shippingAddress || cust.deliveryAddress || cust.address || (jpMatches ? (jp.shippingAddress || jp.deliveryAddress) : null) || {};
+
+  const recipientName = (typeof ship === 'object' && (ship.name || ship.fullName))
+    || cust.name || o.customerName || o.name || [o.firstName, o.lastName].filter(Boolean).join(' ') || '';
+
+  const recipientPhone = (typeof ship === 'object' && ship.phone)
+    || cust.phone || o.customerPhone || o.phone || '';
+
+  let addressText = '';
+  if (typeof ship === 'string' && ship.trim()) {
+    addressText = ship.trim();
+  } else if (typeof ship === 'object' && ship) {
+    const street = [ship.line, ship.line1, ship.line2, ship.street, ship.address].filter(Boolean).join(', ')
+      || (typeof cust.address === 'string' ? cust.address : '');
+    const city = ship.city || cust.city || o.city || '';
+    const state = ship.state || cust.state || o.state || '';
+    const pin = ship.pincode || ship.zip || ship.postalCode || cust.pincode || cust.zip || o.pincode || '';
+    const country = ship.country || cust.country || o.country || '';
+    addressText = [street, city, state, pin, country].filter(Boolean).join(', ');
+  }
+
+  if (!addressText) {
+    const street = typeof o.address === 'string' ? o.address : '';
+    addressText = [street, o.city, o.state, o.pincode, o.country].filter(Boolean).join(', ');
+  }
+
+  if (recipientName) {
+    put('.order-recipient-name|.order-customer-name|[data-order-recipient-name]', recipientName);
+  }
+  if (recipientPhone) {
+    const phoneDisplay = recipientPhone.startsWith('+') || recipientPhone.toLowerCase().startsWith('phone') ? recipientPhone : ('Phone: ' + recipientPhone);
+    put('.order-recipient-phone|.order-customer-phone|[data-order-recipient-phone]', phoneDisplay);
+  }
+  if (addressText) {
+    put('.order-delivery-address|.delivery-address|.order-address-text|[data-order-address]', addressText);
+    pickAll('.order-shipping-section|.order-delivery-card|.order-delivery-address-area').forEach((el) => show(el, true));
+  } else if (token.get()) {
+    api.addresses().then((list) => {
+      const def = (list || []).find((a) => a.isDefault) || (list || [])[0];
+      if (def) {
+        const addrStr = [def.line, def.line1, def.line2, def.city, def.state, def.pincode, def.country].filter(Boolean).join(', ');
+        if (addrStr) put('.order-delivery-address|.delivery-address|.order-address-text|[data-order-address]', addrStr);
+        if (def.name && !recipientName) put('.order-recipient-name|.order-customer-name|[data-order-recipient-name]', def.name);
+        if (def.phone && !recipientPhone) put('.order-recipient-phone|.order-customer-phone|[data-order-recipient-phone]', 'Phone: ' + def.phone);
+        pickAll('.order-shipping-section|.order-delivery-card|.order-delivery-address-area').forEach((el) => show(el, true));
+      }
+    }).catch(() => {});
+  }
 
   /* The order's own lines, drawn into whatever list the theme shows here. */
   /* `.item-parent` is one theme's order ROW. Leaving it out meant the lines
@@ -9592,8 +9654,9 @@ pages.track = async () => {
    Sign-in, the order history, addresses and the password form — whichever of
    them this particular theme puts on this particular page. */
 pages.account = async () => {
+  const getReturnPath = () => (location.pathname.split('/').pop() || 'account.html') + (location.search || '') + (location.hash || '');
   if (!token.get()) {
-    location.href = pageUrl('login') + '?next=' + encodeURIComponent(location.pathname.split('/').pop() || 'account.html');
+    location.href = pageUrl('login') + '?next=' + encodeURIComponent(getReturnPath());
     return;
   }
   wireAuthForms();
@@ -9607,7 +9670,7 @@ pages.account = async () => {
   try { me = await api.me(); }
   catch (e) {
     if (e instanceof ApiError && e.isUnauthenticated) {
-      location.href = pageUrl('login') + '?next=' + encodeURIComponent(location.pathname.split('/').pop() || 'account.html');
+      location.href = pageUrl('login') + '?next=' + encodeURIComponent(getReturnPath());
       return;
     }
     showError(e);
@@ -9620,13 +9683,61 @@ pages.account = async () => {
   await Promise.all([paintOrders(), paintAddresses(), wishlist.sync()]);
   wireAddressForm();
   wireSignOut();
+
+  function switchAccountTab(targetPaneId) {
+    const paneId = targetPaneId.replace(/^#/, '');
+    const tabBtn = document.querySelector(
+      `#${paneId}-tab, button[data-bs-target="#${paneId}"], button[aria-controls="${paneId}"]`
+    );
+    if (tabBtn) {
+      tabBtn.click();
+      if (window.bootstrap?.Tab) {
+        try {
+          const tab = window.bootstrap.Tab.getInstance(tabBtn) || new window.bootstrap.Tab(tabBtn);
+          tab.show();
+        } catch {}
+      }
+    }
+    const pane = document.getElementById(paneId);
+    if (pane) {
+      pane.closest('.tab-content')?.querySelectorAll('.tab-pane').forEach((p) => {
+        p.classList.remove('show', 'active');
+      });
+      pane.classList.add('show', 'active');
+      tabBtn?.closest('.nav')?.querySelectorAll('.nav-link').forEach((b) => {
+        b.classList.remove('active');
+        b.setAttribute('aria-selected', 'false');
+      });
+      tabBtn?.classList.add('active');
+      tabBtn?.setAttribute('aria-selected', 'true');
+    }
+  }
+
+  function applyAccountHashTab() {
+    const hash = (location.hash || '').toLowerCase();
+    const tabParam = (param('tab') || '').toLowerCase();
+    if (hash === '#orders' || hash === '#order' || hash === '#v-pills-profile' || tabParam === 'orders' || tabParam === 'order') {
+      switchAccountTab('v-pills-profile');
+    } else if (hash === '#addresses' || hash === '#address' || hash === '#v-pills-settings' || tabParam === 'addresses') {
+      switchAccountTab('v-pills-settings');
+    } else if (hash === '#track' || hash === '#tracking' || hash === '#v-pills-messages' || tabParam === 'track') {
+      switchAccountTab('v-pills-messages');
+    } else if (hash === '#details' || hash === '#account-details' || hash === '#v-pills-settingsa' || tabParam === 'details') {
+      switchAccountTab('v-pills-settingsa');
+    }
+  }
+
+  applyAccountHashTab();
+  setTimeout(applyAccountHashTab, 100);
+  window.addEventListener('hashchange', applyAccountHashTab);
 };
 pages.orders = async () => {
+  const returnTarget = (pageUrl('account') || 'account.html') + '#orders';
   if (!token.get()) {
-    location.href = pageUrl('login') + '?next=' + encodeURIComponent(location.pathname.split('/').pop() || 'account.html');
+    location.href = pageUrl('login') + '?next=' + encodeURIComponent(returnTarget);
     return;
   }
-  await paintOrders();
+  location.href = returnTarget;
 };
 pages.addresses = async () => {
   if (!token.get()) {
