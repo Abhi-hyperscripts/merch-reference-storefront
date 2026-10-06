@@ -29522,4 +29522,19 @@ header.header-three .sub-dropdown .submenu.third-lvl.base {
   border-top: 1px solid #f1f5f9;
 }
 
+/* Quick View: remove quantity controls */
+.product-details-popup-wrapper:not(.in-shopdetails) .cart-edit {
+  display: none !important;
+}
+
+/* Wishlist: fill active heart icon with red color */
+.single-action.active i,
+.single-action.active i.fa-heart,
+.product-bottom-action a.ml--20.active i,
+.btn-wishlist.active i,
+.action-share-option .single-action.active i {
+  color: #e53e3e !important;
+  font-weight: 900 !important;
+}
+
 /*# sourceMappingURL=../maps/style.css.map */

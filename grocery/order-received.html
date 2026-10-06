@@ -232,7 +232,7 @@
                                                 <span class="account-user-name">User</span>
                                             </div>
                                             <a href="account.html" class="menu-item"><i class="fa-light fa-user"></i> <span>My Account</span></a>
-                                            <a href="order-received.html" class="menu-item"><i class="fa-light fa-box"></i> <span>My Orders</span></a>
+                                            <a href="account.html#orders" class="menu-item"><i class="fa-light fa-box"></i> <span>My Orders</span></a>
                                             <a href="addresses.html" class="menu-item"><i class="fa-light fa-location-dot"></i> <span>Addresses</span></a>
                                             <a href="#" class="menu-item account-logout-btn" data-signout><i class="fa-light fa-arrow-right-from-bracket"></i> <span>Logout</span></a>
                                         </div>
@@ -418,7 +418,7 @@
                                                 <span class="account-user-name">User</span>
                                             </div>
                                             <a href="account.html" class="menu-item"><i class="fa-light fa-user"></i> <span>My Account</span></a>
-                                            <a href="order-received.html" class="menu-item"><i class="fa-light fa-box"></i> <span>My Orders</span></a>
+                                            <a href="account.html#orders" class="menu-item"><i class="fa-light fa-box"></i> <span>My Orders</span></a>
                                             <a href="addresses.html" class="menu-item"><i class="fa-light fa-location-dot"></i> <span>Addresses</span></a>
                                             <a href="#" class="menu-item account-logout-btn" data-signout><i class="fa-light fa-arrow-right-from-bracket"></i> <span>Logout</span></a>
                                         </div>
@@ -664,6 +664,16 @@
                             <div class="subtotal"><p>&mdash;</p></div>
                         </div>
                     </div>
+                    <div class="order-delivery-card mt--30 p-4" style="background: #fff; border: 1px solid #E2E2E2; border-radius: 6px;">
+                        <h5 class="mb-3" style="font-size: 18px; font-weight: 600; color: #2C3C28; display: flex; align-items: center; gap: 8px;">
+                            <i class="fa-light fa-location-dot" style="color: #629D23;"></i> Delivery Address
+                        </h5>
+                        <div class="order-address-details" style="font-size: 14px; line-height: 1.6; color: #555;">
+                            <p class="order-recipient-name mb-1" style="font-weight: 600; font-size: 15px; color: #2C3C28;">&mdash;</p>
+                            <p class="order-recipient-phone mb-1" style="color: #64748b; font-size: 13px;"></p>
+                            <p class="order-delivery-address delivery-address order-address-text mb-0" style="color: #475569;">&mdash;</p>
+                        </div>
+                    </div>
                 </div>
                 <div class="col-xl-4 col-lg-12">
                     <div class="cart-total-area-start-right">
@@ -674,6 +684,14 @@
                         <div class="subtotal"><span>Payment</span><h6 class="price order-payment">&mdash;</h6></div>
                         <div class="subtotal"><span>Courier</span><h6 class="price order-carrier">&mdash;</h6></div>
                         <div class="subtotal"><span>Tracking</span><h6 class="price order-tracking">&mdash;</h6></div>
+                        <div class="subtotal order-shipping-section" style="align-items: flex-start; gap: 20px;">
+                            <span>Delivery Address</span>
+                            <div class="order-delivery-address-box text-end" style="flex: 1;">
+                                <h6 class="price order-recipient-name" style="margin-bottom: 4px; font-weight: 600; font-size: 14px; color: #1e293b;">&mdash;</h6>
+                                <p class="order-recipient-phone" style="margin-top: 0; margin-bottom: 4px; font-size: 13px; color: #64748b;"></p>
+                                <p class="order-delivery-address delivery-address order-address-text" style="margin-top: 0; margin-bottom: 0; font-size: 13px; color: #64748b; line-height: 1.5; word-break: break-word;">&mdash;</p>
+                            </div>
+                        </div>
                         <div class="bottom">
                             <div class="wrapper"><span>Total</span><h6 class="price order-total total-amount">&mdash;</h6></div>
                             <div class="button-area">
@@ -752,7 +770,7 @@
                             <div class="footer-nav">
                                 <ul>
                                     <li><a href="account.html">My Dashboard</a></li>
-                                    <li><a href="order-received.html">My Orders</a></li>
+                                    <li><a href="account.html#orders">My Orders</a></li>
                                     <li><a href="wishlist.html">Wishlist</a></li>
                                     <li><a href="cart.html">Shopping Cart</a></li>
                                     <li><a href="checkout.html">Checkout</a></li>
