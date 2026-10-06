@@ -28,6 +28,25 @@
     <!-- Favicon and Touch Icons  -->
     <link rel="shortcut icon" href="assets/images/logo/favicon.svg">
     <link rel="apple-touch-icon-precomposed" href="assets/images/logo/favicon.svg">
+    <style>
+        .product-action_list .wishlist a.active,
+        .product-action_list .wishlist.active a,
+        .product-action_list .box-icon.active,
+        .product-action_list a.box-icon[data-wishlisted="true"] {
+            background-color: #111 !important;
+            color: #fff !important;
+        }
+        .product-action_list .wishlist a.active .icon,
+        .product-action_list .wishlist.active a .icon,
+        .product-action_list .box-icon.active .icon,
+        .product-action_list a.box-icon[data-wishlisted="true"] .icon {
+            color: #fff !important;
+        }
+        .tf-page-pagination .pag-item.active {
+            background-color: var(--primary, #000);
+            color: #fff;
+        }
+    </style>
 </head>
 
 <body>
