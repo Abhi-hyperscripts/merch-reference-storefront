@@ -15061,12 +15061,22 @@ body.sal-disabled [data-sal|=flip] {
   transform: none;
 }
 
-/* elements */
 .about-banner-area-bg {
-  background-image: url(../images/about/01.html);
-  height: 582px;
-  display: flex;
-  align-items: center;
+  background: none !important;
+  height: auto !important;
+  min-height: unset !important;
+  display: block !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden;
+  width: 100% !important;
+}
+.about-banner-area-bg .about-banner-full-img {
+  width: 100% !important;
+  height: auto !important;
+  max-width: 100% !important;
+  display: block !important;
+  object-fit: cover !important;
 }
 
 .inner-content-about-area {
