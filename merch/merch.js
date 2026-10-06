@@ -10107,6 +10107,11 @@ function done(order) {
       };
     });
     const cust = (THEME?.checkout) ? readCustomer(THEME.checkout) : {};
+    const u = user.get() || STORE_ME || {};
+    const orderEmail = (cust.email || u.email || localStorage.getItem('merch.shopper_email') || '').toLowerCase().trim();
+
+    let localOrders = readJson('merch.orders', []);
+    if (!Array.isArray(localOrders)) localOrders = [];
     localOrders.unshift({
       id: order.id || ('ORD-' + Date.now().toString().slice(-6)),
       orderRef: order.orderRef || order.reference || ('#S' + Date.now().toString().slice(-8)),
@@ -10115,10 +10120,11 @@ function done(order) {
       total: order.total || order.totalAmount || cart.localSubtotal(),
       lines: items,
       items: items,
+      userEmail: orderEmail,
       paymentMethod: order.paymentMethod || 'Cash Delivery',
       shippingAddress: (cust.name || cust.email) ? {
         name: cust.name,
-        email: cust.email,
+        email: cust.email || orderEmail,
         phone: cust.phone,
         line: cust.address,
         city: cust.city,
@@ -10128,7 +10134,9 @@ function done(order) {
       } : readJson('merch.address', null),
     });
     writeJson('merch.orders', localOrders);
-  } catch { /* ignore */ }
+  } catch (e) {
+    console.warn('Could not save local order:', e);
+  }
   cart.clear();
   pending.clear();
   currentKey = null;
@@ -10437,7 +10445,44 @@ function resolveOrderItemImage(item, cache = catalogImageCache) {
   return candidate ? mediaUrl(candidate) : '';
 }
 
+function getOrderEmail(o) {
+  if (!o) return '';
+  const shipEmail = o.shippingAddress?.email || o.customer?.email || o.email || o.userEmail;
+  if (shipEmail && typeof shipEmail === 'string' && shipEmail.includes('@')) {
+    return shipEmail.toLowerCase().trim();
+  }
+  const ref = String(o.orderRef || o.reference || o.id || '');
+  const match = ref.match(/^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}):/);
+  if (match) return match[1].toLowerCase().trim();
+  if (ref.includes('@')) {
+    const parts = ref.split(':');
+    for (const p of parts) {
+      if (p.includes('@')) return p.toLowerCase().trim();
+    }
+  }
+  return '';
+}
+
+async function getActiveShopperEmail() {
+  let u = user.get() || STORE_ME;
+  if (!u?.email && token.get()) {
+    try {
+      u = await api.me();
+      if (u) {
+        STORE_ME = u;
+        user.set(u);
+        if (u.email) {
+          try { localStorage.setItem('merch.shopper_email', u.email); } catch {}
+        }
+      }
+    } catch {}
+  }
+  return (u?.email || localStorage.getItem('merch.shopper_email') || '').toLowerCase().trim();
+}
+
 async function getAccountOrders() {
+  const activeEmail = await getActiveShopperEmail();
+
   let remoteOrders = [];
   try {
     const res = await api.myOrders();
@@ -10459,17 +10504,97 @@ async function getAccountOrders() {
   for (const o of localOrders) {
     if (isDummyOrder(o)) continue;
     const key = String(o.id || o.orderRef || o.reference);
-    if (!map.has(key)) map.set(key, o);
+    if (!map.has(key)) {
+      map.set(key, o);
+    } else {
+      const existing = map.get(key);
+      const localItems = o.items || o.lines;
+      const existingItems = existing.items || existing.lines;
+      if (localItems && localItems.length && (!existingItems || !existingItems.length || existingItems[0].name === 'Fashion Product')) {
+        existing.items = localItems;
+        existing.lines = localItems;
+      }
+      if (o.shippingAddress && !existing.shippingAddress) {
+        existing.shippingAddress = o.shippingAddress;
+      }
+    }
   }
 
-  const combined = Array.from(map.values());
+  let combined = Array.from(map.values());
+
+  // Strictly filter orders by currently logged-in user email
+  if (activeEmail) {
+    combined = combined.filter((o) => {
+      const orderEm = getOrderEmail(o);
+      if (orderEm) {
+        return orderEm === activeEmail;
+      }
+      const ref = String(o.orderRef || o.reference || o.id || '').toLowerCase();
+      if (ref.includes(activeEmail)) return true;
+      if (ref.includes('@')) return false; // Contains a different account's email
+      return true;
+    });
+  } else {
+    // If not logged in at all, do not show any account orders
+    return [];
+  }
+
   combined.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+  let localModified = false;
+
+  // Fetch full order details for any order missing items or having dummy product
+  const ordersNeedingItems = combined.filter((o) => {
+    const it = o.items || o.lines;
+    return (!it || !it.length || !it[0].name || it[0].name === 'Fashion Product' || (it[0].image && it[0].image.includes('square/product-1.jpg')));
+  });
+
+  if (ordersNeedingItems.length > 0) {
+    await Promise.all(ordersNeedingItems.map(async (o) => {
+      if (!o.id) return;
+      try {
+        const full = await api.order(o.id);
+        const fetchedItems = full?.items || full?.order?.items || full?.order?.lines || [];
+        if (fetchedItems.length > 0) {
+          o.items = fetchedItems.map((item) => ({
+            ...item,
+            name: item.name || item.title || 'Product',
+            price: Number(item.price) || 0,
+            qty: Number(item.qty || item.quantity) || 1,
+            image: item.imageUrl || item.image || '',
+            imageUrl: item.imageUrl || item.image || '',
+          }));
+          o.lines = o.items;
+          localModified = true;
+        }
+      } catch (err) {
+        try {
+          const em = getOrderEmail(o) || activeEmail;
+          if (em && o.orderRef) {
+            const lk = await api.lookupOrder(em, o.orderRef);
+            const lkItems = lk?.items || lk?.order?.items || lk?.lines || [];
+            if (lkItems.length > 0) {
+              o.items = lkItems.map((item) => ({
+                ...item,
+                name: item.name || item.title || 'Product',
+                price: Number(item.price) || 0,
+                qty: Number(item.qty || item.quantity) || 1,
+                image: item.imageUrl || item.image || '',
+                imageUrl: item.imageUrl || item.image || '',
+              }));
+              o.lines = o.items;
+              localModified = true;
+            }
+          }
+        } catch {}
+      }
+    }));
+  }
 
   // Pre-load dynamic catalog images
   const cache = await ensureCatalogImageCache(combined);
 
   // Backfill dynamic images into order items if missing
-  let localModified = false;
   combined.forEach((o) => {
     const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
     items.forEach((item) => {
@@ -10482,8 +10607,17 @@ async function getAccountOrders() {
     });
   });
 
-  if (localModified && localOrders.length) {
-    writeJson('merch.orders', localOrders);
+  if (localModified) {
+    const existingLocal = readJson('merch.orders', []);
+    combined.forEach((co) => {
+      const idx = existingLocal.findIndex((x) => String(x.id) === String(co.id) || String(x.orderRef) === String(co.orderRef));
+      if (idx !== -1) {
+        existingLocal[idx] = { ...existingLocal[idx], ...co };
+      } else {
+        existingLocal.unshift(co);
+      }
+    });
+    writeJson('merch.orders', existingLocal);
   }
 
   return combined;
@@ -10625,12 +10759,12 @@ async function paintFashionOrdersPage() {
       const norm = normalizeOrderStatus(o.orderStatus || o.status);
       const statusLabel = norm.charAt(0).toUpperCase() + norm.slice(1);
       const orderDate = o.createdAt ? new Date(o.createdAt).toLocaleDateString() : '';
-      const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : [
-        { name: 'Fashion Product', price: o.total || 60, qty: 1, image: 'assets/images/product/square/product-1.jpg' }
-      ]);
+      const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
 
-      const itemsHtml = items.map((item) => {
+      const itemsHtml = items.length ? items.map((item) => {
         const imgUrl = resolveOrderItemImage(item, catalogImageCache);
+        const variantText = item.variantLabel || item.color || item.size ||
+          (item.name && item.name.includes('—') ? item.name.split('—')[1].trim() : '');
         return `
           <div class="order_prd_item">
             <div class="prd__image">
@@ -10638,14 +10772,24 @@ async function paintFashionOrdersPage() {
             </div>
             <div class="prd__info">
               <p class="name fw-medium">${escapeHtml(item.name || 'Product')}</p>
-              <p class="type cl-text-2 text-caption-01">${escapeHtml(item.variantLabel || item.color || item.size || '')}</p>
+              <p class="type cl-text-2 text-caption-01">${escapeHtml(variantText)}</p>
             </div>
             <div class="prd__price fw-medium">
               <span class="quantity">${item.qty || 1}</span> x <span class="price">${money(item.price)}</span>
             </div>
           </div>
         `;
-      }).join('');
+      }).join('') : `
+        <div class="order_prd_item">
+          <div class="prd__info">
+            <p class="name fw-medium">${escapeHtml(o.orderRef || o.reference || o.id)}</p>
+            <p class="type cl-text-2 text-caption-01">Order Placed</p>
+          </div>
+          <div class="prd__price fw-medium">
+            <span class="price">${money(o.total || o.totalAmount)}</span>
+          </div>
+        </div>
+      `;
 
       const card = document.createElement('div');
       card.className = 'wg-my-order';
@@ -10718,8 +10862,9 @@ function showFashionOrderDetailModal(o) {
 
   const fullAddr = [addr.line || addr.address1 || addr.address, addr.city, addr.state, addr.pincode, addr.country].filter(Boolean).join(', ') || 'N/A';
   const u = user.get() || STORE_ME || {};
-  const custName = addr.name || [addr.firstName, addr.lastName].filter(Boolean).join(' ') || u.name || (u.firstName ? (u.firstName + ' ' + (u.lastName || '')).trim() : '') || 'Customer';
-  const custEmail = addr.email || u.email || 'N/A';
+  const orderEmail = getOrderEmail(o);
+  const custEmail = addr.email || orderEmail || u.email || 'N/A';
+  const custName = addr.name || [addr.firstName, addr.lastName].filter(Boolean).join(' ') || u.name || (u.firstName ? (u.firstName + ' ' + (u.lastName || '')).trim() : '') || (custEmail !== 'N/A' ? custEmail.split('@')[0] : 'Customer');
 
   const boxes = pickAll('.box-info', modal);
   boxes.forEach((box) => {
@@ -10932,6 +11077,19 @@ pages.account = async () => {
 };
 
 pages.orders = async () => {
+  let me = user.get() || STORE_ME;
+  if (!me && token.get()) {
+    try { me = await api.me(); }
+    catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { token.clear(); } }
+    if (me) {
+      STORE_ME = me;
+      user.set(me);
+      if (me.email) {
+        try { localStorage.setItem('merch.shopper_email', me.email); } catch {}
+      }
+    }
+  }
+
   if (THEME?.name === 'fashion') {
     await paintFashionOrdersPage();
   } else {
