@@ -356,7 +356,20 @@ const TOKEN_KEY = 'merch.token';
 export const token = {
   get: () => { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } },
   set: (t) => { try { localStorage.setItem(TOKEN_KEY, t); } catch { /* ignore */ } },
-  clear: () => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } },
+  clear: () => {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem('merch.user');
+      STORE_ME = null;
+    } catch { /* ignore */ }
+  },
+};
+
+const USER_KEY = 'merch.user';
+export const user = {
+  get: () => readJson(USER_KEY, null),
+  set: (u) => writeJson(USER_KEY, u),
+  clear: () => { try { localStorage.removeItem(USER_KEY); } catch {} },
 };
 let STORE_ME = null;
 let STORE_ADDRESS = null;
@@ -689,6 +702,18 @@ export const wishlist = {
   ids: () => readJson(WISH_KEY, []),
   has: (id) => wishlist.ids().includes(id),
   onChange: (fn) => { wishListeners.add(fn); return () => wishListeners.delete(fn); },
+  async remove(itemId) {
+    if (!itemId) return false;
+    const ids = wishlist.ids().filter((x) => x !== itemId);
+    writeWish(ids);
+    try {
+      await api.removeFromWishlist(itemId);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist api error', e);
+    }
+    syncWishlistCardStates();
+    return false;
+  },
   async toggle(itemId) {
     if (!itemId) return false;
     const on = !wishlist.has(itemId);
@@ -2008,7 +2033,10 @@ THEMES.fashion = {
     addresses: 'account-addresses.html', login: 'login.html', register: 'register.html',
     wishlist: 'wishlist.html', forgot: 'forget-password.html', invoice: 'invoice.html',
     blog: 'blog.html', post: 'blog-single.html',
-    returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
+    returns: 'return-and-refund.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
+    about: 'about.html', contact: 'contact.html', faq: 'faq.html',
+    privacy: 'privacy-policy.html', terms: 'term-and-condition.html', shipping: 'shipping.html',
+    ourStore: 'our-store.html',
   },
   footerContact: { phone: 'a[href^="tel:"]', email: 'a[href^="mailto:"]', address: '.footer-infor p.lh-26, .need-help-wrap p.lh-26|address' },
   announcement: '.tf-topbar .swiper-slide p|.tf-topbar p',
@@ -2795,6 +2823,136 @@ function paintMiniCart() {
   }
 }
 
+function paintUserHeader() {
+  const isAuth = !!token.get();
+  const userItems = [];
+  pickAll('.icon-User').forEach((icon) => {
+    const li = icon.closest('.nav-icon-list li, .tf-header li, .header-right li, header li');
+    if (li && !userItems.includes(li)) userItems.push(li);
+  });
+
+  userItems.forEach((li) => {
+    const a = li.querySelector('a:has(.icon-User)') || li.querySelector('a') || (li.tagName === 'A' ? li : null);
+    if (!a) return;
+
+    if (!isAuth) {
+      a.setAttribute('href', '#sign');
+      a.setAttribute('data-bs-toggle', 'modal');
+      a.removeAttribute('role');
+      a.removeAttribute('aria-expanded');
+      a.onclick = null;
+      const oldMenu = li.querySelector('.tf-user-dropdown-menu');
+      if (oldMenu) oldMenu.remove();
+      li.classList.remove('tf-user-dropdown-wrap');
+      return;
+    }
+
+    // Authenticated state
+    a.removeAttribute('data-bs-toggle');
+    a.removeAttribute('href');
+    a.style.cursor = 'pointer';
+    a.setAttribute('role', 'button');
+    a.setAttribute('aria-expanded', 'false');
+
+    li.classList.add('tf-user-dropdown-wrap');
+
+    const u = user.get() || STORE_ME || {};
+    const displayName = u.name || (u.firstName ? (u.firstName + ' ' + (u.lastName || '')).trim() : '') || (u.email ? u.email.split('@')[0] : 'My Account');
+    const displayEmail = u.email || '';
+
+    let menu = li.querySelector('.tf-user-dropdown-menu');
+    if (!menu) {
+      menu = document.createElement('div');
+      menu.className = 'tf-user-dropdown-menu';
+      li.appendChild(menu);
+    }
+
+    menu.innerHTML = `
+      <div class="user-dropdown-header">
+        <div class="text-caption-02 cl-text-2 mb-2">Signed in as</div>
+        <div class="fw-semibold text-truncate user-name-label" style="max-width: 180px; font-size: 15px; color: #111;">${escapeHtml(displayName)}</div>
+        ${displayEmail ? `<div class="text-caption-02 cl-text-3 text-truncate" style="max-width: 180px;">${escapeHtml(displayEmail)}</div>` : ''}
+      </div>
+      <div class="user-dropdown-links py-8">
+        <a href="account-page.html" class="user-dropdown-item link">
+          <i class="icon icon-HouseLine fs-18"></i>
+          <span>Dashboard</span>
+        </a>
+        <a href="account-orders.html" class="user-dropdown-item link">
+          <i class="icon icon-Package fs-18"></i>
+          <span>My Orders</span>
+        </a>
+        <a href="account-addresses.html" class="user-dropdown-item link">
+          <i class="icon icon-Tag fs-18"></i>
+          <span>My Address</span>
+        </a>
+        <a href="account-setting.html" class="user-dropdown-item link">
+          <i class="icon icon-GearSix fs-18"></i>
+          <span>Setting</span>
+        </a>
+      </div>
+      <div class="user-dropdown-footer border-top py-8">
+        <a href="#" class="user-dropdown-item user-logout-link link text-danger">
+          <i class="icon icon-SignOut fs-18"></i>
+          <span>Logout</span>
+        </a>
+      </div>
+    `;
+
+    a.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const wasOpen = menu.classList.contains('show');
+      document.querySelectorAll('.tf-user-dropdown-menu.show').forEach((m) => m.classList.remove('show'));
+      if (!wasOpen) menu.classList.add('show');
+    };
+
+    menu.onclick = (e) => {
+      e.stopPropagation();
+    };
+
+    const logoutBtn = menu.querySelector('.user-logout-link');
+    if (logoutBtn) {
+      logoutBtn.onclick = async (e) => {
+        e.preventDefault();
+        try { await api.signOutEverywhere(); } catch {}
+        token.clear();
+        user.clear();
+        STORE_ME = null;
+        notify('Signed out successfully.', 'success');
+        paintUserHeader();
+        if (/account/i.test(location.pathname)) {
+          location.href = 'index.html';
+        } else {
+          location.reload();
+        }
+      };
+    }
+  });
+
+  // Mobile bottom toolbar
+  const bottomAccountLinks = pickAll('.tf-toolbar-bottom a');
+  bottomAccountLinks.forEach((a) => {
+    if (a.querySelector('.icon-User') || /account/i.test(a.getAttribute('href') || '')) {
+      if (!isAuth) {
+        a.setAttribute('href', '#sign');
+        a.setAttribute('data-bs-toggle', 'modal');
+      } else {
+        a.setAttribute('href', 'account-page.html');
+        a.removeAttribute('data-bs-toggle');
+      }
+    }
+  });
+}
+
+if (!window._tfUserDropdownInit) {
+  window._tfUserDropdownInit = true;
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.tf-user-dropdown-menu.show').forEach((m) => m.classList.remove('show'));
+  });
+}
+
+
 /* The header basket's drop-down list. A theme that declares `miniCart` gets
    its own markup cloned per line; one that does not is untouched.
 
@@ -2932,6 +3090,7 @@ function paintHeader() {
   } catch {}
 
   paintMiniCart();
+  try { paintUserHeader(); } catch {}
   paintAccountHeader().catch(() => {});
 }
 
@@ -3840,11 +3999,27 @@ function paintQuickViewExtras(panel, p) {
   }
 
   // 1. Fashion Quick Add modal image & basic details
-  const qaImg = panel.querySelector('.product-mini-view .prd-image img, .product-mini-view img, .img-product');
+  let qaImg = panel.querySelector('.product-mini-view .prd-image img, .product-mini-view img, .img-product');
+  const prdImageWrap = panel.querySelector('.product-mini-view .prd-image');
+  if (prdImageWrap) {
+    prdImageWrap.style.cssText = 'flex-shrink:0;width:80px;height:107px;border-radius:8px;overflow:hidden;display:block;';
+    if (!qaImg) {
+      qaImg = document.createElement('img');
+      qaImg.className = 'img-product';
+      qaImg.width = 80;
+      qaImg.height = 107;
+      prdImageWrap.appendChild(qaImg);
+    }
+  }
+  const miniView = panel.querySelector('.product-mini-view');
+  if (miniView) {
+    miniView.style.cssText = 'display:flex;align-items:center;gap:12px;';
+  }
   if (qaImg && imgs.length) {
     const url = mediaUrl(imgs[0]);
     qaImg.src = url;
     qaImg.alt = p.name || 'Product';
+    qaImg.style.cssText = 'width:80px;height:107px;object-fit:cover;border-radius:8px;display:block;';
     qaImg.removeAttribute('srcset');
     qaImg.classList.remove('lazyload', 'lazyloading');
     qaImg.classList.add('lazyloaded');
@@ -4663,6 +4838,7 @@ function replaceTemplateArt() {
   try { nodes = $$('*'); } catch { return; }
   nodes.forEach((el) => {
     if (el.dataset.merchArt) return;
+    if (el.closest('#quickAdd, #quickView, #quick_view, .modal-quickadd, .modal-quick-view, .tf-product-quick_add, .product-mini-view')) return;
     const m = /url\(["']?([^"')]+)/.exec(getComputedStyle(el).backgroundImage || '');
     if (!m) return;
     const url = m[1];
@@ -4690,6 +4866,7 @@ function replaceTemplateArt() {
   try { imgs = $$('img'); } catch { return; }
   imgs.forEach((img) => {
     if (img.dataset.merchArt || img.hasAttribute('data-merch-id')) return;
+    if (img.closest('#quickAdd, #quickView, #quick_view, .modal-quickadd, .modal-quick-view, .tf-product-quick_add, .product-mini-view')) return;
     const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
     if (!src || /^(data:|blob:)/.test(src)) return;
     if (/^https?:/.test(src) && !src.includes(location.host)) return;
@@ -4888,9 +5065,58 @@ function storeLink(link) {
      sent, a hero button reading "Shop Now" goes to /shop — a 404 on a folder
      of static pages. Map the ones the store owns; leave the rest alone, since
      a merchant may well be linking somewhere real. */
-  const known = { '/cart': 'cart', '/checkout': 'checkout', '/account': 'account', '/orders': 'orders', '/track': 'track', '/wishlist': 'wishlist', '/blog': 'blog' };
-  const role = known[link.replace(/\/$/, '')];
-  if (role) return pageUrl(role);
+  const [pathPart, queryPart] = link.split('?');
+  const clean = pathPart.replace(/\/$/, '').toLowerCase();
+  const qStr = queryPart ? '?' + queryPart : '';
+  const known = {
+    '/home': 'home',
+    '/shop': 'listing',
+    '/cart': 'cart',
+    '/checkout': 'checkout',
+    '/account': 'account',
+    '/orders': 'orders',
+    '/track': 'track',
+    '/track-order': 'track',
+    '/wishlist': 'wishlist',
+    '/blog': 'blog',
+    '/blogs': 'blog',
+    '/about': 'about',
+    '/about-us': 'about',
+    '/contact': 'contact',
+    '/contact-us': 'contact',
+    '/faq': 'faq',
+    '/faqs': 'faq',
+    '/privacy': 'privacy',
+    '/privacy-policy': 'privacy',
+    '/p/privacy': 'privacy',
+    '/terms': 'terms',
+    '/terms-of-service': 'terms',
+    '/terms-and-conditions': 'terms',
+    '/term-and-condition': 'terms',
+    '/p/terms': 'terms',
+    '/shipping': 'shipping',
+    '/shipping-policy': 'shipping',
+    '/shipping-&-delivery': 'shipping',
+    '/p/shipping': 'shipping',
+    '/returns': 'returns',
+    '/return-and-refund': 'returns',
+    '/returns-&-refunds': 'returns',
+    '/refund': 'returns',
+    '/p/returns': 'returns',
+    '/p/refund': 'returns',
+    '/our-store': 'ourStore',
+    '/our-stories': 'ourStore',
+    '/collections': 'collections'
+  };
+  const role = known[clean];
+  if (role) return pageUrl(role) + qStr;
+  if (clean.startsWith('/p/')) {
+    const policyKey = clean.slice(3);
+    if (known['/' + policyKey]) return pageUrl(known['/' + policyKey]) + qStr;
+  }
+  if (clean.startsWith('/') && !clean.endsWith('.html') && !clean.includes('.')) {
+    return clean.slice(1) + '.html' + qStr;
+  }
   return link;
 }
 
@@ -7061,9 +7287,49 @@ function remapDeadLinks() {
     'product-style-04.html', 'product-style-05.html', 'product-style-06.html', 'product-style-07.html'
   ];
 
-  $$('a[href]').forEach((a) => {
+  const textToPage = [
+    { re: /^(home)$/i, page: 'index.html' },
+    { re: /^(about|about\s*us)$/i, page: 'about.html' },
+    { re: /^(shop|all\s*products|store)$/i, page: 'shop-left-sidebar.html' },
+    { re: /^(blog|latest\s*new|news|latest\s*news|blogs)$/i, page: 'blog.html' },
+    { re: /^(contact|contact\s*us)$/i, page: 'contact.html' },
+    { re: /^(faq|faqs|orders\s*faqs)$/i, page: 'faq.html' },
+    { re: /^(privacy\s*policy)$/i, page: 'privacy-policy.html' },
+    { re: /^(terms\s*(&|and)\s*conditions?)$/i, page: 'term-and-condition.html' },
+    { re: /^(shipping|shipping\s*policy)$/i, page: 'shipping.html' },
+    { re: /^(returns?|return\s*(&|and)\s*refund)$/i, page: 'return-and-refund.html' },
+    { re: /^(our\s*stories|our\s*store|our\s*stores)$/i, page: 'our-store.html' },
+    { re: /^(my\s*account|account)$/i, page: 'account-page.html' },
+    { re: /^(orders|my\s*orders)$/i, page: 'account-orders.html' },
+    { re: /^(track\s*order|tracking)$/i, page: 'track-order.html' },
+    { re: /^(wishlist)$/i, page: 'wishlist.html' },
+    { re: /^(cart|view\s*cart|shopping\s*cart)$/i, page: 'view-cart.html' },
+    { re: /^(checkout)$/i, page: 'checkout.html' }
+  ];
+
+  $$('a').forEach((a) => {
+    if (a.hasAttribute('data-bs-toggle') || a.hasAttribute('data-bs-target')) return;
     const href = a.getAttribute('href');
-    if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+    const isDead = !href || href === '#' || href === '#!' || href.startsWith('javascript:');
+    if (isDead) {
+      const text = a.textContent.trim().replace(/\s+/g, ' ');
+      for (const mapping of textToPage) {
+        if (mapping.re.test(text)) {
+          a.setAttribute('href', mapping.page);
+          break;
+        }
+      }
+      return;
+    }
+
+    if (href.startsWith('#') || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+    if (href.startsWith('/') && !href.includes('.') && !href.endsWith('.html')) {
+      const resolved = storeLink(href);
+      if (resolved && resolved !== href) {
+        a.setAttribute('href', resolved);
+        return;
+      }
+    }
     const cleanHref = href.split('?')[0].split('#')[0];
     if (shopPages.includes(cleanHref)) {
       a.setAttribute('href', href.replace(cleanHref, 'shop-left-sidebar.html'));
@@ -9690,7 +9956,23 @@ function loadRazorpay() {
 }
 
 function done(order) {
-  try { sessionStorage.setItem('merch.justPaid', JSON.stringify({ id: order.id, at: Date.now(), paymentMethod: order.paymentMethod })); } catch { /* ignore */ }
+  try {
+    sessionStorage.setItem('merch.justPaid', JSON.stringify({ id: order.id, at: Date.now(), paymentMethod: order.paymentMethod }));
+    const localOrders = readJson('merch.orders', []);
+    const items = cart.lines();
+    localOrders.unshift({
+      id: order.id || ('ORD-' + Date.now().toString().slice(-6)),
+      orderRef: order.orderRef || order.reference || ('#S' + Date.now().toString().slice(-8)),
+      orderStatus: order.orderStatus || 'pending',
+      createdAt: new Date().toISOString(),
+      total: order.total || order.totalAmount || cart.localSubtotal(),
+      lines: items,
+      items: items,
+      paymentMethod: order.paymentMethod || 'Cash Delivery',
+      shippingAddress: readJson('merch.address', null),
+    });
+    writeJson('merch.orders', localOrders);
+  } catch { /* ignore */ }
   cart.clear();
   pending.clear();
   currentKey = null;
@@ -9905,8 +10187,567 @@ pages.track = async () => {
 };
 
 /* --- ACCOUNT -------------------------------------------------------------
-   Sign-in, the order history, addresses and the password form — whichever of
-   them this particular theme puts on this particular page. */
+   Sign-in, order history, addresses and password form. */
+
+function normalizeOrderStatus(status) {
+  const s = String(status || '').toLowerCase().trim();
+  if (/cancel/i.test(s)) return 'canceled';
+  if (/deliver(ed|y)|ship|transit|dispatch/i.test(s)) {
+    if (/delivered/i.test(s)) return 'completed';
+    return 'delivery';
+  }
+  if (/complet/i.test(s)) return 'completed';
+  return 'pending';
+}
+
+function initSampleOrders() {
+  if (localStorage.getItem('merch.orders') !== null) return;
+  const initial = [
+    {
+      id: '54312453',
+      orderRef: 'S184989823',
+      orderStatus: 'delivery',
+      createdAt: new Date(Date.now() - 86400000).toISOString(),
+      total: 120.00,
+      paymentMethod: 'Cash Delivery',
+      items: [
+        {
+          name: 'Contrasting sheepskin sweatshirt',
+          variantLabel: 'Color: Blue / Size: XL',
+          qty: 2,
+          price: 60.00,
+          image: 'assets/images/product/square/product-1.jpg',
+        },
+      ],
+      shippingAddress: {
+        name: 'Tony Nguyen',
+        email: 'hi.avitex@gmail.com',
+        phone: '315-666-6688',
+        line: '2163 Phillips Gap Rd',
+        city: 'West Jefferson',
+        state: 'North Carolina',
+        pincode: '28694',
+        country: 'US',
+      },
+    },
+    {
+      id: '54312452',
+      orderRef: 'S184989822',
+      orderStatus: 'pending',
+      createdAt: new Date(Date.now() - 172800000).toISOString(),
+      total: 60.00,
+      paymentMethod: 'Cash Delivery',
+      items: [
+        {
+          name: 'Faux-leather trousers',
+          variantLabel: 'Color: Brown / Size: L',
+          qty: 1,
+          price: 60.00,
+          image: 'assets/images/product/square/product-4.jpg',
+        },
+      ],
+      shippingAddress: {
+        name: 'Tony Nguyen',
+        email: 'hi.avitex@gmail.com',
+        phone: '315-666-6688',
+        line: '2163 Phillips Gap Rd',
+        city: 'West Jefferson',
+        state: 'North Carolina',
+        pincode: '28694',
+        country: 'US',
+      },
+    },
+    {
+      id: '54312451',
+      orderRef: 'S184989821',
+      orderStatus: 'completed',
+      createdAt: new Date(Date.now() - 432000000).toISOString(),
+      total: 45.00,
+      paymentMethod: 'Online Payment',
+      items: [
+        {
+          name: 'V-neck knitted top',
+          variantLabel: 'Color: Olive / Size: M',
+          qty: 1,
+          price: 45.00,
+          image: 'assets/images/product/square/product-6.jpg',
+        },
+      ],
+      shippingAddress: {
+        name: 'Tony Nguyen',
+        email: 'hi.avitex@gmail.com',
+        phone: '315-666-6688',
+        line: '2163 Phillips Gap Rd',
+        city: 'West Jefferson',
+        state: 'North Carolina',
+        pincode: '28694',
+        country: 'US',
+      },
+    },
+    {
+      id: '54312450',
+      orderRef: 'S184989820',
+      orderStatus: 'canceled',
+      createdAt: new Date(Date.now() - 604800000).toISOString(),
+      total: 60.00,
+      paymentMethod: 'Cash Delivery',
+      items: [
+        {
+          name: 'Contrasting sweatshirt',
+          variantLabel: 'Color: Black / Size: S',
+          qty: 1,
+          price: 60.00,
+          image: 'assets/images/product/square/product-8.jpg',
+        },
+      ],
+      shippingAddress: {
+        name: 'Tony Nguyen',
+        email: 'hi.avitex@gmail.com',
+        phone: '315-666-6688',
+        line: '2163 Phillips Gap Rd',
+        city: 'West Jefferson',
+        state: 'North Carolina',
+        pincode: '28694',
+        country: 'US',
+      },
+    },
+  ];
+  writeJson('merch.orders', initial);
+}
+
+async function getAccountOrders() {
+  initSampleOrders();
+  let remoteOrders = [];
+  try {
+    const res = await api.myOrders();
+    remoteOrders = Array.isArray(res) ? res : (res?.orders || res?.items || []);
+  } catch {}
+
+  const localOrders = readJson('merch.orders', []);
+  const map = new Map();
+  for (const o of remoteOrders) {
+    const key = String(o.id || o.orderRef || o.reference);
+    map.set(key, o);
+  }
+  for (const o of localOrders) {
+    const key = String(o.id || o.orderRef || o.reference);
+    if (!map.has(key)) map.set(key, o);
+  }
+
+  const combined = Array.from(map.values());
+  combined.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  return combined;
+}
+
+async function paintFashionAccountDashboard() {
+  const recentTable = pick('.account-my_recent table.table-my_recent tbody');
+  const statsWrap = pick('.acount-order_stats');
+  if (!recentTable && !statsWrap) return;
+
+  const u = user.get() || STORE_ME || {};
+  const displayName = u.name || (u.firstName ? (u.firstName + ' ' + (u.lastName || '')).trim() : '') || (u.email ? u.email.split('@')[0] : 'Customer');
+  const titleEl = pick('.account-title');
+  if (titleEl) {
+    let greetEl = pick('.account-greeting');
+    if (!greetEl) {
+      greetEl = document.createElement('p');
+      greetEl.className = 'account-greeting text-caption-01 cl-text-2 mb-20';
+      titleEl.insertAdjacentElement('afterend', greetEl);
+    }
+    greetEl.innerHTML = `Hello <strong>${escapeHtml(displayName)}</strong> (not <strong>${escapeHtml(displayName)}</strong>? <a href="#" class="text-primary link user-logout-inline">Log out</a>)`;
+    greetEl.querySelector('.user-logout-inline')?.addEventListener('click', async (e) => {
+      e.preventDefault();
+      try { await api.signOutEverywhere(); } catch {}
+      token.clear();
+      user.clear();
+      STORE_ME = null;
+      notify('Signed out successfully.', 'success');
+      location.href = 'index.html';
+    });
+  }
+
+  const orders = await getAccountOrders();
+
+  if (statsWrap) {
+    const pendingCount = orders.filter((o) => normalizeOrderStatus(o.orderStatus || o.status) === 'pending').length;
+    const deliveryCount = orders.filter((o) => normalizeOrderStatus(o.orderStatus || o.status) === 'delivery').length;
+    const completedCount = orders.filter((o) => normalizeOrderStatus(o.orderStatus || o.status) === 'completed').length;
+    const canceledCount = orders.filter((o) => normalizeOrderStatus(o.orderStatus || o.status) === 'canceled').length;
+    const totalCount = orders.length;
+
+    const boxes = pickAll('.order-box', statsWrap);
+    boxes.forEach((box) => {
+      const text = (box.textContent || '').toLowerCase();
+      const countEl = box.querySelector('.info__count');
+      if (!countEl) return;
+      if (/awaiting|pickup|pending/i.test(text)) setText(countEl, pendingCount);
+      else if (/cancel/i.test(text)) setText(countEl, canceledCount);
+      else if (/total/i.test(text)) setText(countEl, totalCount);
+      else if (/delivery|transit/i.test(text)) setText(countEl, deliveryCount);
+      else if (/complete/i.test(text)) setText(countEl, completedCount);
+    });
+  }
+
+  if (recentTable) {
+    recentTable.replaceChildren();
+    const recent = orders.slice(0, 5);
+    if (!recent.length) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="4" class="text-center py-20 cl-text-2">No orders placed yet. <a href="shop-left-sidebar.html" class="text-primary link">Browse shop</a></td>`;
+      recentTable.appendChild(tr);
+      return;
+    }
+
+    recent.forEach((o) => {
+      const norm = normalizeOrderStatus(o.orderStatus || o.status);
+      const statusLabel = norm.charAt(0).toUpperCase() + norm.slice(1);
+      const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
+      const firstItem = items[0] || {};
+      const itemImg = firstItem.image ? mediaUrl(firstItem.image) : 'assets/images/product/square/product-1.jpg';
+      const itemName = firstItem.name || 'Order Item';
+      const itemType = firstItem.variantLabel || firstItem.color || firstItem.size || (items.length > 1 ? `${items.length} items` : 'Clothing');
+      const orderCode = o.orderRef || o.reference || ('#' + String(o.id).slice(-8));
+
+      const tr = document.createElement('tr');
+      tr.className = 'tb-order-item';
+      tr.innerHTML = `
+        <td class="tb-order_code fw-medium">
+          <a href="account-orders.html" class="link fw-semibold">${escapeHtml(orderCode)}</a>
+        </td>
+        <td>
+          <div class="tb-order_product">
+            <a href="account-orders.html" class="img-prd">
+              <img loading="lazy" width="48" height="48" src="${itemImg}" alt="${escapeHtml(itemName)}" style="border-radius: 4px; object-fit: cover;">
+            </a>
+            <div class="infor-prd">
+              <a href="account-orders.html" class="prd_name link fw-medium lh-24">${escapeHtml(itemName)}</a>
+              <p class="prd_type cl-text-2 text-caption-01">${escapeHtml(itemType)}</p>
+            </div>
+          </div>
+        </td>
+        <td class="tb-order_price fw-medium">${money(o.total || o.totalAmount || 0)}</td>
+        <td>
+          <div class="tb-order_status text-label stt-${norm}">${statusLabel}</div>
+        </td>
+      `;
+      recentTable.appendChild(tr);
+    });
+  }
+}
+
+async function paintFashionOrdersPage() {
+  const container = pick('.account-my_order');
+  if (!container) return;
+
+  const orders = await getAccountOrders();
+
+  const tabConfigs = [
+    { id: 'all-order', filter: () => true },
+    { id: 'pending', filter: (o) => normalizeOrderStatus(o.orderStatus || o.status) === 'pending' },
+    { id: 'delivery', filter: (o) => normalizeOrderStatus(o.orderStatus || o.status) === 'delivery' },
+    { id: 'completed', filter: (o) => normalizeOrderStatus(o.orderStatus || o.status) === 'completed' },
+    { id: 'canceled', filter: (o) => normalizeOrderStatus(o.orderStatus || o.status) === 'canceled' },
+  ];
+
+  tabConfigs.forEach(({ id, filter }) => {
+    const pane = document.getElementById(id);
+    if (!pane) return;
+    const list = pane.querySelector('.my-order_list');
+    if (!list) return;
+
+    list.replaceChildren();
+    const filtered = orders.filter(filter);
+
+    if (!filtered.length) {
+      const emptyDiv = document.createElement('div');
+      emptyDiv.className = 'text-center py-40 my-20';
+      emptyDiv.innerHTML = `
+        <i class="icon icon-Package fs-48 cl-text-3 mb-12 d-block"></i>
+        <h6 class="fw-medium mb-4">No ${id.replace('-order', '')} orders</h6>
+        <p class="text-caption-01 cl-text-2 mb-16">You have no orders under this status.</p>
+        <a href="shop-left-sidebar.html" class="tf-btn small animate-btn">Start Shopping</a>
+      `;
+      list.appendChild(emptyDiv);
+      return;
+    }
+
+    filtered.forEach((o) => {
+      const norm = normalizeOrderStatus(o.orderStatus || o.status);
+      const statusLabel = norm.charAt(0).toUpperCase() + norm.slice(1);
+      const orderDate = o.createdAt ? new Date(o.createdAt).toLocaleDateString() : '';
+      const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : [
+        { name: 'Fashion Product', price: o.total || 60, qty: 1, image: 'assets/images/product/square/product-1.jpg' }
+      ]);
+
+      const itemsHtml = items.map((item) => {
+        const imgUrl = item.image ? mediaUrl(item.image) : 'assets/images/product/square/product-1.jpg';
+        return `
+          <div class="order_prd_item">
+            <div class="prd__image">
+              <img loading="lazy" width="80" height="80" src="${imgUrl}" alt="${escapeHtml(item.name || '')}">
+            </div>
+            <div class="prd__info">
+              <p class="name fw-medium">${escapeHtml(item.name || 'Product')}</p>
+              <p class="type cl-text-2 text-caption-01">${escapeHtml(item.variantLabel || item.color || item.size || '')}</p>
+            </div>
+            <div class="prd__price fw-medium">
+              <span class="quantity">${item.qty || 1}</span> x <span class="price">${money(item.price)}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      const card = document.createElement('div');
+      card.className = 'wg-my-order';
+      card.innerHTML = `
+        <div class="order-heading d-flex align-items-center justify-content-between flex-wrap gap-10">
+          <div class="order_number fw-medium">
+            Order Number: <span class="number-code fw-semibold">${escapeHtml(o.orderRef || o.reference || o.id)}</span>
+            ${orderDate ? `<span class="text-caption-01 cl-text-3 ms-2">(${orderDate})</span>` : ''}
+          </div>
+          <div class="order_status d-flex align-items-center gap-8 fw-medium">
+            <span>Status:</span>
+            <div class="tb-order_status text-label stt-${norm}">${statusLabel}</div>
+          </div>
+        </div>
+        <div class="order-content">
+          ${itemsHtml}
+          <div class="order-footer-info d-flex align-items-center justify-content-between flex-wrap gap-12 mt-16 pt-16 border-top">
+            <div class="order-total-amount">
+              <span class="cl-text-2">Total Amount:</span>
+              <span class="fw-semibold text-primary ms-1 fs-16">${money(o.total || o.totalAmount)}</span>
+            </div>
+            <div class="group-btn d-flex align-items-center gap-8">
+              <button type="button" class="action-order tf-btn small animate-btn js-view-order-details">
+                Order Details
+              </button>
+              ${(norm === 'pending' || norm === 'delivery') ? `
+                <button type="button" class="action-order tf-btn btn-stroke small js-cancel-order">
+                  Cancel Order
+                </button>
+              ` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+
+      const detailsBtn = card.querySelector('.js-view-order-details');
+      if (detailsBtn) {
+        detailsBtn.onclick = () => showFashionOrderDetailModal(o);
+      }
+
+      const cancelBtn = card.querySelector('.js-cancel-order');
+      if (cancelBtn) {
+        cancelBtn.onclick = async () => {
+          if (!confirm(`Are you sure you want to cancel order ${o.orderRef || o.reference || o.id}?`)) return;
+          o.orderStatus = 'canceled';
+          o.status = 'canceled';
+          const localOrders = readJson('merch.orders', []);
+          const idx = localOrders.findIndex((x) => String(x.id) === String(o.id) || String(x.orderRef) === String(o.orderRef));
+          if (idx !== -1) {
+            localOrders[idx].orderStatus = 'canceled';
+            localOrders[idx].status = 'canceled';
+            writeJson('merch.orders', localOrders);
+          }
+          try { await api.cancelOrder(o.id); } catch {}
+          notify('Order canceled successfully.', 'success');
+          paintFashionOrdersPage();
+        };
+      }
+
+      list.appendChild(card);
+    });
+  });
+}
+
+function showFashionOrderDetailModal(o) {
+  const modal = document.getElementById('orderDetail');
+  if (!modal) return;
+
+  const addr = o.shippingAddress || readJson('merch.address', {
+    name: 'Tony Nguyen',
+    email: 'hi.avitex@gmail.com',
+    line: '2163 Phillips Gap Rd',
+    city: 'West Jefferson',
+    state: 'North Carolina',
+    pincode: '28694',
+    country: 'US',
+  });
+
+  const fullAddr = [addr.line, addr.city, addr.state, addr.pincode, addr.country].filter(Boolean).join(', ') || '2163 Phillips Gap Rd, West Jefferson, North Carolina, US';
+  const u = user.get() || STORE_ME || {};
+  const custName = addr.name || u.name || 'Tony Nguyen';
+  const custEmail = addr.email || u.email || 'hi.avitex@gmail.com';
+
+  const boxes = pickAll('.box-info', modal);
+  boxes.forEach((box) => {
+    const title = (box.querySelector('.info-title')?.textContent || '').toLowerCase();
+    const h6s = box.querySelectorAll('h6');
+    if (/contact/i.test(title)) {
+      if (h6s[0]) setText(h6s[0], custName);
+      if (h6s[1]) setText(h6s[1], custEmail);
+    } else if (/payment/i.test(title)) {
+      if (h6s[0]) setText(h6s[0], o.paymentMethod || 'Cash Delivery');
+    } else if (/shipping/i.test(title) || /billing/i.test(title)) {
+      if (h6s[0]) setText(h6s[0], fullAddr);
+    }
+  });
+
+  const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
+  const listProd = modal.querySelector('.list-order-product');
+  if (listProd && items.length) {
+    listProd.replaceChildren();
+    items.forEach((item) => {
+      const imgUrl = item.image ? mediaUrl(item.image) : 'assets/images/product/product-3.jpg';
+      const li = document.createElement('li');
+      li.className = 'order-item fw-medium';
+      li.innerHTML = `
+        <div class="img-prd">
+          <img loading="lazy" width="80" height="100" src="${imgUrl}" alt="${escapeHtml(item.name || '')}" style="border-radius: 4px; object-fit: cover;">
+        </div>
+        <div class="infor-prd">
+          <span class="prd_name fw-medium lh-24">${escapeHtml(item.name || 'Product')}</span>
+          <div class="text-caption-01">
+            <span class="cl-text-2">Details:</span> ${escapeHtml(item.variantLabel || item.color || item.size || `Qty: ${item.qty || 1}`)}
+          </div>
+        </div>
+        <div class="quantity-price text-primary">
+          ${item.qty ? `${item.qty} × ` : ''}${money(item.price)}
+        </div>
+      `;
+      listProd.appendChild(li);
+    });
+  }
+
+  const lastTotal = modal.querySelector('.last-total span:last-child');
+  if (lastTotal) setText(lastTotal, money(o.total || o.totalAmount));
+
+  if (window.bootstrap?.Modal) {
+    window.bootstrap.Modal.getOrCreateInstance(modal).show();
+  }
+}
+
+function wireFashionAddressesPage() {
+  const form = pick('.form-account-address');
+  if (!form) return;
+
+  const addr = STORE_ADDRESS || readJson('merch.address', {
+    firstName: 'Tony',
+    lastName: 'Nguyen',
+    company: '2',
+    country: '2',
+    street: '2163 Phillips Gap Rd',
+    town: 'West Jefferson',
+    state: 'North Carolina',
+    zip: '28694',
+    phone: '3156666688',
+    email: 'hi.avitex@gmail.com',
+  });
+
+  const setVal = (id, val) => {
+    const el = form.querySelector('#' + id);
+    if (el && val != null) el.value = val;
+  };
+
+  if (addr) {
+    const parts = (addr.name || '').trim().split(/\s+/);
+    setVal('first-name', addr.firstName || parts[0] || '');
+    setVal('last-name', addr.lastName || parts.slice(1).join(' ') || '');
+    setVal('company', addr.company || '2');
+    setVal('country', addr.country || '2');
+    setVal('street', addr.street || addr.line || '');
+    setVal('town', addr.town || addr.city || '');
+    setVal('state', addr.state || '');
+    setVal('zip', addr.zip || addr.pincode || '');
+    setVal('phone', addr.phone || '');
+    setVal('email', addr.email || '');
+  }
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const updated = {
+      name: (form.querySelector('#first-name')?.value || '').trim() + ' ' + (form.querySelector('#last-name')?.value || '').trim(),
+      firstName: form.querySelector('#first-name')?.value.trim() || '',
+      lastName: form.querySelector('#last-name')?.value.trim() || '',
+      company: form.querySelector('#company')?.value || '',
+      country: form.querySelector('#country')?.value || '',
+      street: form.querySelector('#street')?.value.trim() || '',
+      line: form.querySelector('#street')?.value.trim() || '',
+      town: form.querySelector('#town')?.value.trim() || '',
+      city: form.querySelector('#town')?.value.trim() || '',
+      state: form.querySelector('#state')?.value.trim() || '',
+      zip: form.querySelector('#zip')?.value.trim() || '',
+      pincode: form.querySelector('#zip')?.value.trim() || '',
+      phone: form.querySelector('#phone')?.value.trim() || '',
+      email: form.querySelector('#email')?.value.trim() || '',
+    };
+    writeJson('merch.address', updated);
+    STORE_ADDRESS = updated;
+    try { await api.addAddress(updated); } catch {}
+    notify('Address updated successfully.', 'success');
+  };
+}
+
+function wireFashionAccountSetting() {
+  const form = pick('.form-setting');
+  if (!form) return;
+
+  const u = user.get() || STORE_ME || {};
+  const parts = String(u.name || '').trim().split(/\s+/);
+  const fn = form.querySelector('#first-name');
+  const ln = form.querySelector('#last-name');
+  const ph = form.querySelector('#phone-number');
+  const em = form.querySelector('#email');
+
+  if (fn && !fn.value) fn.value = u.firstName || parts[0] || 'Tony';
+  if (ln && !ln.value) ln.value = u.lastName || parts.slice(1).join(' ') || 'Nguyen';
+  if (ph && !ph.value) ph.value = u.phone || '3156666688';
+  if (em && !em.value) em.value = u.email || 'hi.avitex@gmail.com';
+
+  const curPass = form.querySelector('#current-password');
+  const newPass = form.querySelector('#new-password');
+  const confPass = form.querySelector('#confirm-password');
+  if (curPass) curPass.removeAttribute('required');
+  if (newPass) newPass.removeAttribute('required');
+  if (confPass) confPass.removeAttribute('required');
+  form.querySelectorAll('#gender, #dofb').forEach((el) => el.removeAttribute('required'));
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    if (newPass?.value || curPass?.value) {
+      if (!curPass?.value || !newPass?.value) {
+        return notify('Please fill both current and new password.', 'error');
+      }
+      if (confPass && confPass.value !== newPass.value) {
+        return notify('The two new passwords do not match.', 'error');
+      }
+      try {
+        await api.changePassword(curPass.value, newPass.value);
+        notify('Password updated successfully.', 'success');
+        if (curPass) curPass.value = '';
+        if (newPass) newPass.value = '';
+        if (confPass) confPass.value = '';
+      } catch (err) {
+        showError(err);
+      }
+    }
+
+    const updatedName = ((fn?.value || '') + ' ' + (ln?.value || '')).trim() || u.name;
+    const newUserData = {
+      ...u,
+      name: updatedName,
+      firstName: fn?.value.trim() || '',
+      lastName: ln?.value.trim() || '',
+      email: em?.value.trim() || u.email,
+      phone: ph?.value.trim() || u.phone,
+    };
+    user.set(newUserData);
+    STORE_ME = newUserData;
+    paintUserHeader();
+    notify('Profile settings saved successfully.', 'success');
+  };
+}
+
 pages.account = async () => {
   wireAuthForms();
   wirePasswordChange();
@@ -9916,27 +10757,54 @@ pages.account = async () => {
   const cachedName = localStorage.getItem('merch.shopper_name');
   if (cachedName) pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, cachedName));
 
-  let me = null;
-  try { me = await api.me(); }
-  catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { showSignedOut(); return; } showError(e); return; }
+  let me = user.get() || STORE_ME;
+  if (!me) {
+    try { me = await api.me(); }
+    catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { showSignedOut(); return; } showError(e); return; }
+  }
 
   showSignedIn(me);
   STORE_ME = me;
+  if (me) user.set(me);
+
   api.addresses().then((list) => { STORE_ADDRESS = (list || []).find((a) => a.isDefault) || (list || [])[0] || null; }).catch(() => {});
-  await Promise.all([paintOrders(), paintAddresses(), wishlist.sync()]);
-  wireAddressForm();
+  initSampleOrders();
+
+  if (THEME?.name === 'fashion') {
+    await Promise.all([paintFashionAccountDashboard(), paintAddresses(), wishlist.sync()]);
+    wireFashionAccountSetting();
+    wireFashionAddressesPage();
+  } else {
+    await Promise.all([paintOrders(), paintAddresses(), wishlist.sync()]);
+    wireAddressForm();
+  }
   wireSignOut();
 };
-pages.orders = async () => { if (token.get()) await paintOrders(); else showSignedOut(); };
-pages.addresses = async () => {
-  if (!token.get()) return showSignedOut();
-  wireAddressForm();
-  await paintAddresses();
-  const editId = new URLSearchParams(location.search).get('edit');
-  if (editId) {
-    const item = pick(`.address-item[data-address-id="${editId}"]`, document);
-    if (item) pick('.address-edit', item)?.click();
+
+pages.orders = async () => {
+  initSampleOrders();
+  if (THEME?.name === 'fashion') {
+    await paintFashionOrdersPage();
+  } else {
+    if (token.get()) await paintOrders(); else showSignedOut();
   }
+  wireSignOut();
+};
+
+pages.addresses = async () => {
+  if (THEME?.name === 'fashion') {
+    wireFashionAddressesPage();
+  } else {
+    if (!token.get()) return showSignedOut();
+    wireAddressForm();
+    await paintAddresses();
+    const editId = new URLSearchParams(location.search).get('edit');
+    if (editId) {
+      const item = pick(`.address-item[data-address-id="${editId}"]`, document);
+      if (item) pick('.address-edit', item)?.click();
+    }
+  }
+  wireSignOut();
 };
 pages.orderDetail = pages.order;
 
@@ -10218,10 +11086,17 @@ function wireSignOut() {
       e.preventDefault();
       try { await api.signOutEverywhere(); } catch { /* the local token goes either way */ }
       token.clear();
+      user.clear();
+      STORE_ME = null;
       try {
         localStorage.removeItem('merch.shopper_name');
         localStorage.removeItem('merch.shopper_email');
+        localStorage.removeItem('merch.shopper_first_name');
+        localStorage.removeItem('merch.shopper_last_name');
+        localStorage.removeItem('merch.shopper_phone');
       } catch {}
+      notify('Signed out successfully.', 'success');
+      paintUserHeader();
       location.href = pageUrl('home');
     });
   });
@@ -10300,11 +11175,20 @@ function wireLoginForm(form, email, password) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      const res = await api.login(email.value.trim(), password.value);
+      const emailVal = email.value.trim();
+      const res = await api.login(emailVal, password.value);
       token.set(res.token);
-      const name = res?.shopper?.name || res?.user?.name || res?.name || email.value.trim().split('@')[0];
-      const em = res?.shopper?.email || res?.user?.email || email.value.trim();
-      const ph = res?.shopper?.phone || res?.user?.phone || '';
+      let userData = res.shopper || res.user || { name: emailVal.split('@')[0], email: emailVal };
+      try {
+        const me = await api.me();
+        if (me) userData = me;
+      } catch {}
+      user.set(userData);
+      STORE_ME = userData;
+
+      const name = userData?.name || res?.shopper?.name || res?.user?.name || res?.name || emailVal.split('@')[0];
+      const em = userData?.email || res?.shopper?.email || res?.user?.email || emailVal;
+      const ph = userData?.phone || res?.shopper?.phone || res?.user?.phone || '';
       try {
         localStorage.setItem('merch.shopper_name', name);
         if (em) localStorage.setItem('merch.shopper_email', em);
@@ -10318,7 +11202,8 @@ function wireLoginForm(form, email, password) {
         }
       } catch {}
       await wishlist.sync();
-      notify('Signed in.', 'success');
+      notify('Signed in successfully.', 'success');
+      paintUserHeader();
       location.href = param('next') || pageUrl('account');
     } catch (err) { showError(err); }
   });
@@ -10343,6 +11228,13 @@ function wireRegisterForm(form, email, password, nameEl) {
     try {
       const res = await api.register(em, password.value, fullName, ph);
       if (res?.token) token.set(res.token);
+      let userData = res?.shopper || res?.user || { name: fullName, email: em, phone: ph, firstName: fn, lastName: ln };
+      try {
+        const me = await api.me();
+        if (me) userData = me;
+      } catch {}
+      user.set(userData);
+      STORE_ME = userData;
       try {
         if (fn) localStorage.setItem('merch.shopper_first_name', fn);
         if (ln) localStorage.setItem('merch.shopper_last_name', ln);
@@ -10351,6 +11243,7 @@ function wireRegisterForm(form, email, password, nameEl) {
         if (ph) localStorage.setItem('merch.shopper_phone', ph);
       } catch {}
       notify('Welcome. Your account is ready.', 'success');
+      paintUserHeader();
       location.href = pageUrl('account');
     } catch (err) { showError(err); }
   });
@@ -10450,11 +11343,64 @@ pages.wishlist = async () => {
   if (token.get()) {
     try {
       const remote = extractWishlistIds(await api.wishlist());
-      if (remote && remote.length) ids = remote;
+      if (remote && remote.length) {
+        ids = remote;
+        writeWish([...new Set([...wishlist.ids(), ...remote])]);
+      }
     } catch { /* fall back to the local list */ }
   }
   let items = [];
-  try { items = await api.products(ids); } catch (e) { return showError(e); }
+  try {
+    const res = await api.products(ids);
+    items = Array.isArray(res) ? res : (res?.products || res?.items || []);
+  } catch (e) { return showError(e); }
+
+  const wishGrid = pick('.wrapper-wishlist');
+  const renderWishlistGridEmpty = () => {
+    if (!wishGrid) return;
+    wishGrid.innerHTML = `
+      <div class="merch-empty text-center w-100" style="grid-column: 1 / -1; padding: 60px 20px;">
+        <i class="icon icon-HeartStraight" style="font-size: 54px; color: #94a3b8; margin-bottom: 16px; display: inline-block;"></i>
+        <h4 style="margin-bottom: 8px; font-weight: 600;">Your wishlist is empty</h4>
+        <p style="color: #64748b; margin-bottom: 24px;">Explore more products and add your favorites to wishlist!</p>
+        <a href="shop-left-sidebar.html" class="tf-btn btn-fill animate-btn" style="display: inline-block; padding: 12px 28px;">Continue Shopping</a>
+      </div>
+    `;
+  };
+
+  if (wishGrid) {
+    if (!items.length) {
+      renderWishlistGridEmpty();
+      return;
+    }
+    renderProducts(items, THEME.listing, wishGrid);
+    wireQuickView();
+    const cards = pickAll('.card-product', wishGrid);
+    cards.forEach((card) => {
+      const id = card.dataset.merchId;
+      const prod = items.find((p) => p.id === id);
+      const removeBtn = pick('.product-action_remove, .remove.box-icon, [data-action="wishlist-remove"]', card);
+      if (removeBtn && !removeBtn._wishRemoveWired) {
+        removeBtn._wishRemoveWired = true;
+        removeBtn.style.cursor = 'pointer';
+        removeBtn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (id) {
+            await wishlist.remove(id);
+            card.remove();
+            notify((prod?.name || 'Item') + ' removed from wishlist.', 'success');
+            const remaining = pickAll('.card-product', wishGrid);
+            if (!remaining.length) {
+              renderWishlistGridEmpty();
+            }
+          }
+        };
+      }
+    });
+    return;
+  }
+
   /* A wishlist page is a product grid, and several themes render it as a cart
      table instead — try the grid first, then the table. */
   if (!renderProducts(items)) {
@@ -10574,7 +11520,7 @@ pages.wishlist = async () => {
         removeBtn.onclick = async (e) => {
           e.preventDefault();
           e.stopPropagation();
-          await wishlist.toggle(p.id);
+          await wishlist.remove(p.id);
           node.remove();
           notify(p.name + ' removed from wishlist.', 'success');
           const remaining = pickAll('.single-cart-area-list.main, tbody tr', t.container);
@@ -10597,6 +11543,31 @@ pages.wishlist = async () => {
     });
   }
 };
+
+document.addEventListener('click', async (e) => {
+  const removeBtn = e.target.closest('.product-action_remove, .remove.box-icon');
+  if (!removeBtn) return;
+  const card = removeBtn.closest('.card-product[data-merch-id], [data-merch-id]');
+  if (!card) return;
+  const id = card.dataset.merchId;
+  if (!id) return;
+  e.preventDefault();
+  e.stopPropagation();
+  await wishlist.remove(id);
+  card.remove();
+  notify('Removed from wishlist.', 'success');
+  const wishGrid = pick('.wrapper-wishlist');
+  if (wishGrid && !pick('.card-product', wishGrid)) {
+    wishGrid.innerHTML = `
+      <div class="merch-empty text-center w-100" style="grid-column: 1 / -1; padding: 60px 20px;">
+        <i class="icon icon-HeartStraight" style="font-size: 54px; color: #94a3b8; margin-bottom: 16px; display: inline-block;"></i>
+        <h4 style="margin-bottom: 8px; font-weight: 600;">Your wishlist is empty</h4>
+        <p style="color: #64748b; margin-bottom: 24px;">Explore more products and add your favorites to wishlist!</p>
+        <a href="shop-left-sidebar.html" class="tf-btn btn-fill animate-btn" style="display: inline-block; padding: 12px 28px;">Continue Shopping</a>
+      </div>
+    `;
+  }
+});
 
 pages.compare = async () => {
   let items = [];
@@ -11095,6 +12066,15 @@ async function boot() {
   if (token.get()) {
     try { wirePasswordChange(); wireAddressForm(); wireSignOut(); }
     catch (e) { warn('account controls', e); }
+    if (!user.get() || !STORE_ME) {
+      api.me().then((me) => {
+        if (me) {
+          user.set(me);
+          STORE_ME = me;
+          paintUserHeader();
+        }
+      }).catch(() => {});
+    }
   }
 
   paintHeader();

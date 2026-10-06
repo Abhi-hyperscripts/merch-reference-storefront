@@ -6008,7 +6008,7 @@ header.header-sticky.tf-header-landing {
 .tf-product-quick_add .product-mini-view {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 .tf-product-quick_add .product-mini-view .prd-content {
   display: grid;
@@ -6017,6 +6017,17 @@ header.header-sticky.tf-header-landing {
 .tf-product-quick_add .product-mini-view .prd-image {
   border-radius: 8px;
   overflow: hidden;
+  flex-shrink: 0;
+  width: 80px;
+  height: 107px;
+  display: block;
+}
+.tf-product-quick_add .product-mini-view .prd-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
 }
 .tf-product-quick_add .wg-quantity {
   min-width: 140px;
