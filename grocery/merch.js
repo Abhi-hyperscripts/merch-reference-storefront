@@ -1117,6 +1117,9 @@ const THEMES = {
       login: 'login.html', register: 'register.html', forgot: 'forgot-password.html',
       addresses: 'addresses.html', returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
       blog: 'blog.html', post: 'blog-details.html',
+      about: 'about.html', contact: 'contact.html', faq: 'faq.html',
+      privacy: 'privacy-policy.html', terms: 'terms-conditions.html',
+      shipping: 'shipping.html', orders: 'order-received.html',
     },
     footerContact: { phone: '.call-area a.number|a[href^="tel:"]', email: 'a[href^="mailto:"]', address: 'address|[data-store-address]' },
     /* The promo strip this theme runs across the very top, and the row of
@@ -2508,13 +2511,14 @@ function detectRole() {
 
 /* Where each role lives in THIS theme, so links we write stay inside it. */
 function pageUrl(role, query = {}) {
-  const file = THEME?.pages?.[role];
+  const normalizedRole = String(role || '').replace(/^policy:/, '');
+  const file = THEME?.pages?.[role] || THEME?.pages?.[normalizedRole];
   if (!file) {
     /* The fallback below is a guess, and `post.html` exists in none of these
        themes — so every blog post link pointed at a 404 on three of them,
        silently. Say so instead of shipping a dead link in silence. */
-    warn(`this theme names no '${role}' page; linking to ${role}.html, which probably does not exist`);
-    return role + '.html' + qs(query);
+    warn(`this theme names no '${role}' page; linking to ${normalizedRole}.html, which probably does not exist`);
+    return normalizedRole + '.html' + qs(query);
   }
   return file + qs(query);
 }
@@ -4449,6 +4453,9 @@ const UNBACKED_UNLESS_PAINTED = [
 const ART_FOLDERS = /\/(banner|banners|section|about|contact|shop|team|grocery|slider|hero|product|products)\//i;
 
 function replaceTemplateArt() {
+  const isAboutPage = PAGE === 'about' || PAGE === 'policy:about' || /about\.html?/i.test(location.pathname);
+  if (isAboutPage) return;
+
   const banner = (STORE?.banners || []).find((b) => b && b.imageUrl);
   const replacement = banner ? mediaUrl(banner.imageUrl) : '';
   let nodes = [];
@@ -4508,6 +4515,9 @@ function replaceTemplateArt() {
    there hid the strip and then painted the real brand names into a hidden
    element. "Unless painted" is only a true test AFTER painting. */
 function sweepUnbackedUnlessPainted() {
+  const isAboutPage = PAGE === 'about' || PAGE === 'policy:about' || /about\.html?/i.test(location.pathname);
+  if (isAboutPage) return;
+
   for (const sel of UNBACKED_UNLESS_PAINTED) {
     let nodes = [];
     try { nodes = $$(sel); } catch { continue; }
@@ -4669,20 +4679,85 @@ function storeLink(link) {
   if (!link) return '#';
   if (/^(https?:|mailto:|tel:)/i.test(link)) return link;
 
-  const collection = link.match(/^\/collections\/([^/?#]+)/);
-  if (collection) return pageUrl('listing', { collection: collection[1] });
-  const product = link.match(/^\/product\/([^/?#]+)/);
-  if (product) return pageUrl('product', { id: product[1] });
-  const category = link.match(/^\/(?:shop|category|collections)\/?$/) ? '' : null;
-  if (category !== null) return pageUrl('listing');
+  const [pathAndQuery, hash] = link.split('#');
+  const [path, query] = pathAndQuery.split('?');
+  const hashPart = hash ? '#' + hash : '';
+  const queryPart = query ? '?' + query : '';
 
-  /* The merchant writes these against their OWN storefront's routes. Left as
-     sent, a hero button reading "Shop Now" goes to /shop — a 404 on a folder
-     of static pages. Map the ones the store owns; leave the rest alone, since
-     a merchant may well be linking somewhere real. */
-  const known = { '/cart': 'cart', '/checkout': 'checkout', '/account': 'account', '/orders': 'orders', '/track': 'track', '/wishlist': 'wishlist', '/blog': 'blog' };
-  const role = known[link.replace(/\/$/, '')];
-  if (role) return pageUrl(role);
+  const collection = (path || '').match(/^\/collections\/([^/?#]+)/);
+  if (collection) return pageUrl('listing', { collection: collection[1] }) + hashPart;
+  const product = (path || '').match(/^\/product\/([^/?#]+)/);
+  if (product) return pageUrl('product', { id: product[1] }) + hashPart;
+  const category = (path || '').match(/^\/(?:shop|category|collections)\/?$/) ? '' : null;
+  if (category !== null) return pageUrl('listing') + hashPart;
+
+  const known = {
+    '/cart': 'cart',
+    '/checkout': 'checkout',
+    '/account': 'account',
+    '/my-account': 'account',
+    '/dashboard': 'account',
+    '/orders': 'orders',
+    '/my-orders': 'orders',
+    '/track': 'track',
+    '/track-order': 'track',
+    '/trackorder': 'track',
+    '/wishlist': 'wishlist',
+    '/blog': 'blog',
+    '/news': 'blog',
+    '/about': 'about',
+    '/about-us': 'about',
+    '/contact': 'contact',
+    '/contact-us': 'contact',
+    '/faq': 'faq',
+    '/faqs': 'faq',
+    '/privacy': 'privacy',
+    '/privacy-policy': 'privacy',
+    '/p/privacy': 'privacy',
+    '/p/privacy-policy': 'privacy',
+    '/terms': 'terms',
+    '/terms-conditions': 'terms',
+    '/terms-and-conditions': 'terms',
+    '/p/terms': 'terms',
+    '/p/terms-conditions': 'terms',
+    '/shipping': 'shipping',
+    '/shipping-policy': 'shipping',
+    '/shipping-delivery': 'shipping',
+    '/p/shipping': 'shipping',
+    '/p/shipping-policy': 'shipping',
+    '/returns': 'returns',
+    '/returns-refunds': 'returns',
+    '/return-policy': 'returns',
+    '/refund': 'returns',
+    '/p/returns': 'returns',
+    '/p/refund': 'returns',
+    '/addresses': 'addresses',
+    '/address': 'addresses',
+    '/subscriptions': 'subscriptions',
+    '/login': 'login',
+    '/register': 'register',
+    '/forgot': 'forgot',
+    '/forgot-password': 'forgot',
+  };
+
+  const normalized = (path || '').replace(/\/$/, '') || '/';
+  const role = known[normalized];
+  if (role) return pageUrl(role) + queryPart + hashPart;
+
+  const pMatch = normalized.match(/^\/p\/([^/?#]+)/);
+  if (pMatch) {
+    const slug = pMatch[1];
+    const roleKey = known['/' + slug] || slug;
+    return pageUrl(roleKey) + queryPart + hashPart;
+  }
+
+  const bareMatch = normalized.match(/^\/([^/?#]+)$/);
+  if (bareMatch) {
+    const slug = bareMatch[1];
+    const roleKey = known['/' + slug] || slug;
+    return pageUrl(roleKey) + queryPart + hashPart;
+  }
+
   return link;
 }
 
@@ -6787,12 +6862,32 @@ function remapDeadLinks() {
 
   $$('a[href]').forEach((a) => {
     const href = a.getAttribute('href');
-    if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+    if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+    if (href.startsWith('http://') || href.startsWith('https://')) {
+      try {
+        const u = new URL(href);
+        if (u.origin === location.origin) {
+          const mapped = storeLink(u.pathname + u.search + u.hash);
+          if (mapped && mapped !== href) a.setAttribute('href', mapped);
+        }
+      } catch {}
+      return;
+    }
     const cleanHref = href.split('?')[0].split('#')[0];
     if (shopPages.includes(cleanHref)) {
-      a.setAttribute('href', href.replace(cleanHref, 'shop-left-sidebar.html'));
+      a.setAttribute('href', href.replace(cleanHref, THEME?.pages?.listing || 'shop-grid-sidebar.html'));
     } else if (prodPages.includes(cleanHref)) {
-      a.setAttribute('href', href.replace(cleanHref, 'product-detail.html'));
+      a.setAttribute('href', href.replace(cleanHref, THEME?.pages?.product || 'shop-details.html'));
+    } else if (cleanHref.startsWith('/p/') || cleanHref.startsWith('/')) {
+      a.setAttribute('href', storeLink(href));
+    } else if (cleanHref === './about.html' || cleanHref === 'about') {
+      a.setAttribute('href', 'about.html');
+    } else if (cleanHref === './privacy-policy.html' || cleanHref === 'privacy') {
+      a.setAttribute('href', 'privacy-policy.html');
+    } else if (cleanHref === 'terms-conditions.htm' || cleanHref === 'terms') {
+      a.setAttribute('href', 'terms-conditions.html');
+    } else if (cleanHref === 'shipping') {
+      a.setAttribute('href', 'shipping.html');
     }
   });
 }
@@ -9166,10 +9261,16 @@ pages.order = async () => {
 
   /* One template serves BOTH roles from one file (`trackorder.html` is its
      order page and its lookup page), and the page table returns whichever
-     role it listed first. With no `?id=` there is no order to show, so the
-     page is the lookup form — and binding it as an order page left that form
-     dead. */
-  if (!id) return pages.track();
+     role it listed first. With no `?id=` there is no order to show. */
+  if (!id) {
+    if (PAGE === 'track') return pages.track();
+    if (!token.get()) {
+      location.href = pageUrl('login') + '?next=' + encodeURIComponent(location.pathname.split('/').pop() || 'account.html');
+      return;
+    }
+    location.href = pageUrl('account');
+    return;
+  }
   let order;
   try { order = await api.order(id); } catch (e) { return showError(e); }
   paintOrder(order);
@@ -9360,17 +9461,27 @@ pages.track = async () => {
    Sign-in, the order history, addresses and the password form — whichever of
    them this particular theme puts on this particular page. */
 pages.account = async () => {
+  if (!token.get()) {
+    location.href = pageUrl('login') + '?next=' + encodeURIComponent(location.pathname.split('/').pop() || 'account.html');
+    return;
+  }
   wireAuthForms();
   wirePasswordChange();
   wireAccountDetailsForm();
-  if (!token.get()) { showSignedOut(); return; }
 
   const cachedName = localStorage.getItem('merch.shopper_name');
   if (cachedName) pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, cachedName));
 
   let me = null;
   try { me = await api.me(); }
-  catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { showSignedOut(); return; } showError(e); return; }
+  catch (e) {
+    if (e instanceof ApiError && e.isUnauthenticated) {
+      location.href = pageUrl('login') + '?next=' + encodeURIComponent(location.pathname.split('/').pop() || 'account.html');
+      return;
+    }
+    showError(e);
+    return;
+  }
 
   showSignedIn(me);
   STORE_ME = me;
@@ -9379,9 +9490,18 @@ pages.account = async () => {
   wireAddressForm();
   wireSignOut();
 };
-pages.orders = async () => { if (token.get()) await paintOrders(); else showSignedOut(); };
+pages.orders = async () => {
+  if (!token.get()) {
+    location.href = pageUrl('login') + '?next=' + encodeURIComponent(location.pathname.split('/').pop() || 'account.html');
+    return;
+  }
+  await paintOrders();
+};
 pages.addresses = async () => {
-  if (!token.get()) return showSignedOut();
+  if (!token.get()) {
+    location.href = pageUrl('login') + '?next=' + encodeURIComponent(location.pathname.split('/').pop() || 'addresses.html');
+    return;
+  }
   wireAddressForm();
   await paintAddresses();
   const editId = new URLSearchParams(location.search).get('edit');
@@ -10407,6 +10527,13 @@ pages.vendor = async () => warn('This store has no vendors; the vendor pages sta
 pages.unknown = async () => log('no binder for this page; only the header and search were wired');
 pages.paymentFailed = async () => {};
 pages.invoice = pages.order;
+pages.privacy = () => pages.policy('privacy');
+pages.terms = () => pages.policy('terms');
+pages.shipping = () => pages.policy('shipping');
+pages.refund = () => pages.policy('refund');
+pages.about = () => pages.policy('about');
+pages.contact = pages.unknown;
+pages.faq = pages.unknown;
 
 /* ---------------------------------------------------------------------------
    11. BOOT
