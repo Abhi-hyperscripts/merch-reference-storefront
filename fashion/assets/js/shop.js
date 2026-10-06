@@ -6,6 +6,7 @@
     var rangeTwoPrice = function () {
         if ($("#price-value-range").length > 0) {
             var skipSlider = document.getElementById("price-value-range");
+            if (skipSlider.noUiSlider) return;
             var skipValues = [document.getElementById("price-min-value"), document.getElementById("price-max-value")];
 
             var min = parseInt(skipSlider.getAttribute("data-min"), 10) || 0;
@@ -38,7 +39,9 @@
     /* Filter Products
   -------------------------------------------------------------------------------------*/
     var filterProducts = function () {
+        if (window.__merchLive || window.STORE || window.THEME) return;
         const priceSlider = document.getElementById("price-value-range");
+        if (!priceSlider) return;
 
         const minPrice = parseInt(priceSlider.dataset.min, 10) || 0;
         const maxPrice = parseInt(priceSlider.dataset.max, 10) || 500;
@@ -311,6 +314,24 @@
     /* Filter Sort
     -------------------------------------------------------------------------------------*/
     var filterSort = function () {
+        if (window.__merchLive || window.STORE || window.THEME) {
+            $(".tf-view-layout-switch").off("click.merchLayout").on("click.merchLayout", function () {
+                const layout = $(this).data("value-layout");
+                if (layout === "list") {
+                    $("#gridLayout").hide();
+                    $("#listLayout").show();
+                    $(".tf-view-layout-switch").removeClass("active");
+                    $(".sw-layout-list").addClass("active");
+                } else {
+                    $("#listLayout").hide();
+                    $("#gridLayout").show().removeClass().addClass(`wrapper-shop tf-grid-layout ${layout}`);
+                    $(".tf-view-layout-switch").removeClass("active");
+                    $(`.tf-view-layout-switch[data-value-layout="${layout}"]`).addClass("active");
+                }
+            });
+            return;
+        }
+
         let isListActive = $(".sw-layout-list").hasClass("active");
         let originalProductsList = $("#listLayout .card-product").clone();
         let originalProductsGrid = $("#gridLayout .card-product").clone();
@@ -556,6 +577,7 @@
     /* Loading product 
     -------------------------------------------------------------------------------------*/
     var loadProduct = function () {
+        if (window.__merchLive || window.STORE || window.THEME) return;
         const gridInitialItems = 8;
         const listInitialItems = 4;
         const gridItemsPerPage = 4;
@@ -677,6 +699,7 @@
     /* Limit Layout
     -------------------------------------------------------------------------------------*/
     function limitLayout() {
+        if (window.__merchLive || window.STORE || window.THEME) return;
         const $gridLayout = $("#gridLayout");
         const $listLayout = $("#listLayout");
         const gridItems = $("#gridLayout .card-product");
@@ -783,6 +806,12 @@
 
     $(function () {
         rangeTwoPrice();
+        if (window.__merchLive || window.STORE || window.THEME) {
+            filterSort();
+            handleDropdownFilter();
+            swLayoutShop();
+            return;
+        }
         filterProducts();
         filterSort();
         loadProduct();

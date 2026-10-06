@@ -2067,6 +2067,13 @@ THEMES.fashion = {
       colors:{ sel: '.product-color_list', dropWhen: () => true },
       marquee: { sel: '.product-marquee_sale', hideWhen: hasNoMrp },
       badges: { sel: '.product-badge_list .product-badge_item', text: (p) => (p.featured ? 'FEATURED' : discountText(p)), hideWhen: (p) => hasNoMrp(p) && !p.featured },
+      sizes: {
+        sel: '.product-size_list',
+        each: (el, p) => {
+          const card = el.closest('.card-product') || el.parentElement;
+          if (card) fillProductSizes(card, p);
+        },
+      },
       add:   { sel: '.btn-add-to-cart|.box-icon.bg_white.quick-add', action: 'add' },
       /* This theme puts the class on the <li>, not on the icon: neither
          `.box-icon.wishlist` nor `.box-icon.compare` exists anywhere in it,
@@ -3765,6 +3772,86 @@ function renderEmpty(container, message, spec) {
    boot can tell a hydrated strip from one still showing demo stock. */
 const hydrated = new WeakSet();
 
+const SIZE_ORDER = ['XXS', 'XS', 'S', 'S/M', 'M', 'L', 'L/XL', 'XL', 'XXL',
+                    '2XL', '3XL', '4XL', '5XL', '6XL', '7XL', 'FREE SIZE', 'FREE-SIZE', 'FREE'];
+
+function productSizes(p) {
+  if (!p) return [];
+  const set = new Set();
+  if (Array.isArray(p.optionValues)) {
+    for (const ov of p.optionValues) {
+      if ((ov.key || '').toLowerCase() === 'size' && ov.value) {
+        set.add(String(ov.value).trim());
+      }
+    }
+  }
+  if (Array.isArray(p.variants)) {
+    for (const v of p.variants) {
+      if (Array.isArray(v.attributes)) {
+        for (const a of v.attributes) {
+          if ((a.key || '').toLowerCase() === 'size' && a.value) {
+            set.add(String(a.value).trim());
+          }
+        }
+      }
+      if (Array.isArray(v.optionValues)) {
+        for (const ov of v.optionValues) {
+          if ((ov.key || '').toLowerCase() === 'size' && ov.value) {
+            set.add(String(ov.value).trim());
+          }
+        }
+      }
+      if (v.size) set.add(String(v.size).trim());
+    }
+  }
+  if (Array.isArray(p.attributes)) {
+    for (const a of p.attributes) {
+      if ((a.key || '').toLowerCase() === 'size' && a.value) {
+        set.add(String(a.value).trim());
+      }
+    }
+  }
+  if (Array.isArray(p.sizes)) {
+    for (const s of p.sizes) {
+      if (typeof s === 'string') set.add(s.trim());
+      else if (s && s.value) set.add(String(s.value).trim());
+      else if (s && s.name) set.add(String(s.name).trim());
+    }
+  }
+  const list = [...set].filter(Boolean);
+  list.sort((a, b) => {
+    const ia = SIZE_ORDER.indexOf(a.toUpperCase());
+    const ib = SIZE_ORDER.indexOf(b.toUpperCase());
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    const na = parseFloat(a);
+    const nb = parseFloat(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a.localeCompare(b);
+  });
+  return list;
+}
+
+function fillProductSizes(node, p) {
+  if (!node) return;
+  const sizeLists = node.querySelectorAll('.product-size_list');
+  if (!sizeLists.length) return;
+  const sizes = productSizes(p);
+  sizeLists.forEach((list) => {
+    const variantBox = list.closest('.variant-box');
+    if (!sizes.length) {
+      list.style.display = 'none';
+      if (variantBox) variantBox.style.display = 'none';
+      list.innerHTML = '';
+      return;
+    }
+    list.style.display = '';
+    if (variantBox) variantBox.style.display = '';
+    list.innerHTML = sizes.map((s) => `<li class="size-item text-caption-01">${escapeHtml(s)}</li>`).join('');
+  });
+}
+
 function renderProducts(items, spec = THEME.listing, regionEl = null) {
   /* Every product carries its colour AND that colour's hex, so learn the pair
      here — this is the one place every product on every page passes through. */
@@ -3810,6 +3897,7 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
       node.dataset.merchId = p.id;
       fillFields(node, spec.fields, p, { node, qtyEl: pick(THEME.qtyInput, node) });
       if (p.availability === 'out') node.classList.add('out-of-stock');
+      fillProductSizes(node, p);
     });
   }
   return containers[0];
@@ -4887,6 +4975,7 @@ pages.listing = async () => {
     wireQuickView();
     const total = await paintResultCount(items, state, pageSize);
     renderPagination(total, state, run, pageSize);
+    updateAppliedFiltersBar(state, run);
     THEME.reinit?.();
   };
 
@@ -4898,6 +4987,7 @@ pages.listing = async () => {
   wirePriceFilter(state, run);
   wireStockFilter(state, run);
   await paintFilters(state, run);
+  updateAppliedFiltersBar(state, run);
   await run();
 };
 
@@ -5541,6 +5631,8 @@ async function paintResultCount(items, state, pageSize) {
       category: state.category || undefined,
       brand: state.brand || undefined,
       inStock: state.inStock || undefined,
+      size: state.size || undefined,
+      color: state.color || undefined,
     });
     if (Number.isFinite(f?.total)) total = f.total;
   } catch { /* the page count is a fair fallback */ }
@@ -5550,6 +5642,10 @@ async function paintResultCount(items, state, pageSize) {
   if (sentence.length) {
     sentence.forEach((el) => setText(el, 'Showing ' + from + '\u2013' + to + ' of ' + total + ' results'));
   }
+  const countGrid = document.getElementById('product-count-grid');
+  const countList = document.getElementById('product-count-list');
+  if (countGrid) countGrid.innerHTML = `<span class="count">${total}</span> ${total === 1 ? 'Product' : 'Products'} found`;
+  if (countList) countList.innerHTML = `<span class="count">${total}</span> ${total === 1 ? 'Product' : 'Products'} found`;
   return total;
 }
 
@@ -8278,9 +8374,6 @@ function wireQuickViewFashion() {
    vocabulary: a shoe shop sends numbers, a pharmacy sends strengths, and
    neither belongs in this ladder. A value the ladder does not know keeps its
    incoming position, behind the ones it does. */
-const SIZE_ORDER = ['XXS', 'XS', 'S', 'S/M', 'M', 'L', 'L/XL', 'XL', 'XXL',
-                    '2XL', '3XL', '4XL', '5XL', '6XL', '7XL'];
-
 function sizeFacetRank(v) {
   const i = SIZE_ORDER.indexOf(String(v || '').trim().toUpperCase());
   return i === -1 ? Number.MAX_SAFE_INTEGER : i;
@@ -8403,6 +8496,192 @@ async function paintFilters(state, run) {
     window.addEventListener('load', applyPriceRange);
     [150, 400, 900, 1800].forEach((ms) => setTimeout(applyPriceRange, ms));
   }
+
+  wireFashionPriceSlider(price, state, run);
+  [150, 400, 900, 1800].forEach((ms) => setTimeout(() => wireFashionPriceSlider(price, state, run), ms));
+  updateAppliedFiltersBar(state, run);
+}
+
+function wireFashionPriceSlider(price, state, run) {
+  const slider = document.getElementById('price-value-range');
+  if (!slider) return;
+
+  const sym = (typeof CURRENCY !== 'undefined' && CURRENCY?.symbol) ? CURRENCY.symbol : '₹';
+  document.querySelectorAll('.price-val_wrap span').forEach((span) => {
+    span.textContent = sym;
+  });
+
+  if (!price || !Number.isFinite(price.min) || !Number.isFinite(price.max)) return;
+
+  const pMin = Math.floor(price.min);
+  const pMax = Math.ceil(price.max);
+  slider.setAttribute('data-min', pMin);
+  slider.setAttribute('data-max', pMax);
+
+  const curMin = Number(state.minPrice) && Number(state.minPrice) >= pMin ? Math.round(Number(state.minPrice)) : pMin;
+  const curMax = Number(state.maxPrice) && Number(state.maxPrice) <= pMax ? Math.round(Number(state.maxPrice)) : pMax;
+
+  const minEl = document.getElementById('price-min-value');
+  const maxEl = document.getElementById('price-max-value');
+  if (minEl) minEl.textContent = curMin;
+  if (maxEl) maxEl.textContent = curMax;
+
+  if (slider.noUiSlider) {
+    try {
+      slider.noUiSlider.updateOptions({
+        range: { min: pMin, max: pMax },
+        start: [curMin, curMax],
+      });
+    } catch {}
+  } else if (typeof noUiSlider !== 'undefined') {
+    try {
+      noUiSlider.create(slider, {
+        start: [curMin, curMax],
+        connect: true,
+        step: 1,
+        range: { min: pMin, max: pMax },
+        format: {
+          from: (v) => Math.round(Number(v)),
+          to: (v) => Math.round(Number(v)),
+        },
+      });
+    } catch {}
+  }
+
+  if (slider.noUiSlider && !slider._merchWired) {
+    slider._merchWired = true;
+    slider.noUiSlider.on('update', (values, handle) => {
+      const val = Math.round(Number(values[handle]));
+      if (handle === 0 && minEl) minEl.textContent = val;
+      if (handle === 1 && maxEl) maxEl.textContent = val;
+    });
+    slider.noUiSlider.on('change', (values) => {
+      const vMin = Math.round(Number(values[0]));
+      const vMax = Math.round(Number(values[1]));
+      state.minPrice = vMin > pMin ? vMin : '';
+      state.maxPrice = vMax < pMax ? vMax : '';
+      state.page = 1;
+      pushState(state);
+      run();
+      updateAppliedFiltersBar(state, run);
+    });
+  }
+}
+
+function updateAppliedFiltersBar(state, run) {
+  const container = document.getElementById('applied-filters');
+  const removeAllBtn = document.getElementById('remove-all');
+  const metaBar = document.querySelector('.meta-filter-shop');
+  if (!container) return;
+
+  container.innerHTML = '';
+  const activeTags = [];
+
+  if (state.category) {
+    activeTags.push({
+      key: 'category',
+      label: state.category,
+      clear: () => { state.category = ''; },
+    });
+  }
+  if (state.brand) {
+    activeTags.push({
+      key: 'brand',
+      label: state.brand,
+      clear: () => { state.brand = ''; },
+    });
+  }
+  if (state.size) {
+    activeTags.push({
+      key: 'size',
+      label: 'Size: ' + state.size,
+      clear: () => { state.size = ''; },
+    });
+  }
+  if (state.color) {
+    activeTags.push({
+      key: 'color',
+      label: 'Color: ' + state.color,
+      clear: () => { state.color = ''; },
+    });
+  }
+  if (state.minPrice || state.maxPrice) {
+    const sym = (typeof CURRENCY !== 'undefined' && CURRENCY?.symbol) ? CURRENCY.symbol : '₹';
+    const minTxt = state.minPrice ? `${sym}${state.minPrice}` : `${sym}0`;
+    const maxTxt = state.maxPrice ? `${sym}${state.maxPrice}` : '';
+    activeTags.push({
+      key: 'price',
+      label: maxTxt ? `${minTxt} - ${maxTxt}` : `>= ${minTxt}`,
+      clear: () => {
+        state.minPrice = '';
+        state.maxPrice = '';
+        const slider = document.getElementById('price-value-range');
+        if (slider?.noUiSlider) {
+          const pMin = parseInt(slider.getAttribute('data-min'), 10) || 0;
+          const pMax = parseInt(slider.getAttribute('data-max'), 10) || 5000;
+          slider.noUiSlider.set([pMin, pMax]);
+        }
+      },
+    });
+  }
+  if (state.inStock) {
+    activeTags.push({
+      key: 'inStock',
+      label: 'In Stock',
+      clear: () => { state.inStock = false; },
+    });
+  }
+
+  activeTags.forEach((tag) => {
+    const tagEl = document.createElement('span');
+    tagEl.className = 'filter-tag remove-tag';
+    tagEl.style.cursor = 'pointer';
+    tagEl.innerHTML = `<span class="icon icon-X2" style="margin-right:4px;"></span> ${escapeHtml(tag.label)}`;
+    tagEl.addEventListener('click', (e) => {
+      e.preventDefault();
+      tag.clear();
+      state.page = 1;
+      pushState(state);
+      run();
+      pickAll(`input[name="${tag.key}"]`).forEach((i) => { i.checked = false; });
+      updateAppliedFiltersBar(state, run);
+    });
+    container.appendChild(tagEl);
+  });
+
+  const hasFilters = activeTags.length > 0;
+  if (removeAllBtn) {
+    removeAllBtn.style.display = hasFilters ? '' : 'none';
+    if (!removeAllBtn._merchWired) {
+      removeAllBtn._merchWired = true;
+      removeAllBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        state.category = '';
+        state.brand = '';
+        state.size = '';
+        state.color = '';
+        state.minPrice = '';
+        state.maxPrice = '';
+        state.inStock = false;
+        state.page = 1;
+        pushState(state);
+        run();
+        pickAll('.filter-group-size input, .group-check-color input, .filter-group-check input').forEach((i) => { i.checked = false; });
+        pickAll('li, .list-item, label').forEach((el) => { el.classList.remove('active'); });
+        const slider = document.getElementById('price-value-range');
+        if (slider?.noUiSlider) {
+          const pMin = parseInt(slider.getAttribute('data-min'), 10) || 0;
+          const pMax = parseInt(slider.getAttribute('data-max'), 10) || 5000;
+          slider.noUiSlider.set([pMin, pMax]);
+        }
+        updateAppliedFiltersBar(state, run);
+      });
+    }
+  }
+
+  if (metaBar) {
+    metaBar.style.display = 'flex';
+  }
 }
 
 /* The block that holds one group's options, found from its heading. */
@@ -8425,70 +8704,149 @@ function filterGroupScope(rx) {
 }
 
 function paintFilterGroup(list, group, values, state, run) {
-  if (list.dataset.merchFilter === group.key) return;
+  if (list.dataset.merchFilter === group.key) {
+    const items = [...list.children];
+    items.forEach((node) => {
+      const val = node.dataset.merchValue;
+      const isSelected = val && String(state[group.key] || '').toLowerCase() === String(val).toLowerCase();
+      const input = node.querySelector('input[type="checkbox"], input[type="radio"]');
+      if (input) input.checked = Boolean(isSelected);
+      node.classList.toggle('active', Boolean(isSelected));
+      const lbl = node.querySelector('.label-size, .label, label');
+      if (lbl) lbl.classList.toggle('active', Boolean(isSelected));
+    });
+    return;
+  }
   list.dataset.merchFilter = group.key;
 
   const sample = [...list.children].find((c) => c.querySelector('input, a, label')) || list.firstElementChild;
   if (!sample) return;
   const template = sample.cloneNode(true);
 
-  /* Never more rows than the designer laid out room for — these sidebars are
-     a fixed column, and 100 brands is a scroll, not a filter. */
   const room = Math.max(6, [...list.children].length);
-  const shown = values.slice(0, Math.min(values.length, Math.max(room, 12)));
+  const maxItems = group.key === 'size' ? 18 : Math.max(room, 16);
+  const shown = values.slice(0, Math.min(values.length, maxItems));
 
   list.replaceChildren();
   for (const v of shown) {
     const node = template.cloneNode(true);
+    node.dataset.merchValue = v.value;
     const input = node.querySelector('input[type="checkbox"], input[type="radio"]');
     const label = node.querySelector('label') || node.querySelector('a') || node;
+    const isSelected = String(state[group.key] || '').toLowerCase() === String(v.value).toLowerCase();
 
+    const id = 'merch-' + group.key + '-' + String(v.value).replace(/[^\w-]+/g, '-').toLowerCase();
     if (input) {
-      const id = 'merch-' + group.key + '-' + v.value.replace(/[^\w-]+/g, '-').toLowerCase();
       input.id = id;
-      input.checked = String(state[group.key] || '') === String(v.value);
-      if (label.tagName === 'LABEL') label.setAttribute('for', id);
+      input.checked = isSelected;
     }
-    setText(label, v.count ? `${v.label} (${v.count})` : v.label);
+    if (isSelected) {
+      node.classList.add('active');
+      if (label) label.classList.add('active');
+    }
+
     if (group.key === 'color') {
-      const dot = colourDot(v.value, 12);
-      if (dot) label.insertBefore(dot, label.firstChild);
+      const colorSwatch = node.querySelector('.color');
+      const textLabel = node.querySelector('.label') || node.querySelector('label:not(.color)');
+      const colorTextEl = node.querySelector('.color-text');
+      const countEl = node.querySelector('.count');
+
+      if (colorSwatch) {
+        colorSwatch.className = 'color';
+        const bg = colourBackground(v.value);
+        if (bg) colorSwatch.style.background = bg;
+        colorSwatch.innerHTML = '';
+        if (input) colorSwatch.setAttribute('for', id);
+        if (textLabel && input) textLabel.setAttribute('for', id);
+        if (colorTextEl) setText(colorTextEl, v.label);
+        else if (textLabel) setText(textLabel, v.label);
+        if (countEl) setText(countEl, v.count ? `(${v.count})` : '');
+        node.title = v.count ? `${v.label} (${v.count})` : v.label;
+      } else {
+        setText(label, v.count ? `${v.label} (${v.count})` : v.label);
+        const dot = colourDot(v.value, 12);
+        if (dot) label.insertBefore(dot, label.firstChild);
+        if (label.tagName === 'LABEL' && input) label.setAttribute('for', id);
+      }
+    } else if (group.key === 'size') {
+      const labelSize = node.querySelector('.label-size') || label;
+      const sizeTextEl = node.querySelector('.size-text');
+      if (sizeTextEl) {
+        setText(sizeTextEl, v.label);
+      } else if (labelSize) {
+        setText(labelSize, v.label);
+      } else {
+        setText(label, v.label);
+      }
+      if (labelSize) {
+        if (String(v.label).length > 2) labelSize.classList.add('over-size');
+        else labelSize.classList.remove('over-size');
+        if (input) labelSize.setAttribute('for', id);
+        labelSize.title = v.count ? `${v.label} (${v.count})` : v.label;
+      }
+      node.title = v.count ? `${v.label} (${v.count})` : v.label;
+    } else {
+      const cateText = node.querySelector('.cate-text');
+      const brandText = node.querySelector('.brand-text');
+      const countEl = node.querySelector('.count');
+      if (cateText) setText(cateText, v.label);
+      else if (brandText) setText(brandText, v.label);
+      else setText(label, v.count ? `${v.label} (${v.count})` : v.label);
+      if (countEl) setText(countEl, v.count ? `(${v.count})` : '');
+      if (label.tagName === 'LABEL' && input) label.setAttribute('for', id);
     }
+
     if (label.tagName === 'A') label.setAttribute('href', pageUrl('listing', { [group.key]: v.value }));
 
     const choose = (e) => {
       e.preventDefault();
-      /* The store takes ONE value per filter, so picking another replaces it
-         and picking the current one clears it. */
-      const already = String(state[group.key] || '') === String(v.value);
+      const already = String(state[group.key] || '').toLowerCase() === String(v.value).toLowerCase();
       state[group.key] = already ? '' : v.value;
       state.page = 1;
       pushState(state);
       run();
       pickAll('input', list).forEach((i) => { i.checked = false; });
-      if (input && !already) input.checked = true;
+      pickAll('li, .list-item, label', list).forEach((el) => { el.classList.remove('active'); });
+      if (input && !already) {
+        input.checked = true;
+        node.classList.add('active');
+        if (label) label.classList.add('active');
+      }
       syncHorizontalDropdownFromState(state);
+      updateAppliedFiltersBar(state, run);
     };
-    (input || label).addEventListener('click', choose);
-    if (input) input.addEventListener('change', choose);
+
+    node.addEventListener('click', choose);
     list.appendChild(node);
   }
 }
 
 /* "In stock only" — a checkbox every theme has somewhere near the filters. */
 function wireStockFilter(state, run) {
-  const boxes = $$('input[type="checkbox"]').filter((el) => {
+  const boxes = $$('input[type="checkbox"], input[type="radio"]').filter((el) => {
     const row = el.closest('li, .single-category, .facet, label, div');
-    return /in stock|availability|stock only/i.test(row?.textContent || '');
+    return /in stock|availability|stock only/i.test(row?.textContent || '') || el.id === 'inStock';
   });
   for (const box of boxes) {
-    box.checked = state.inStock;
-    box.addEventListener('change', () => {
-      state.inStock = box.checked;
-      state.page = 1;
-      pushState(state);
-      run();
-    });
+    if (box.id === 'inStock' || /in stock/i.test(box.parentElement?.textContent || '')) {
+      box.checked = Boolean(state.inStock);
+      box.addEventListener('change', () => {
+        state.inStock = box.checked;
+        state.page = 1;
+        pushState(state);
+        run();
+        updateAppliedFiltersBar(state, run);
+      });
+      const row = box.closest('li, .list-item');
+      if (row) {
+        row.addEventListener('click', (e) => {
+          if (e.target === box) return;
+          e.preventDefault();
+          box.checked = !box.checked;
+          box.dispatchEvent(new Event('change'));
+        });
+      }
+    }
   }
 }
 
@@ -11268,6 +11626,8 @@ async function boot() {
     await runDeferredThemeScripts();
     return;
   }
+
+  window.__merchLive = true;
 
   THEME = detectTheme();
   if (!THEME) {
