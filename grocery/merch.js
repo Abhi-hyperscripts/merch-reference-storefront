@@ -4919,7 +4919,7 @@ pages.listing = async () => {
   ) || 24));
 
   const state = {
-    q: param('q') || '',
+    q: param('search') || param('q') || '',
     category: param('category') || '',
     brand: param('brand') || '',
     color: param('color') || '',
@@ -5628,8 +5628,13 @@ async function paintResultCount(items, state, pageSize) {
 function pushState(state) {
   const url = new URL(location.href);
   for (const [k, v] of Object.entries(state)) {
-    if (v === '' || v === false || v === 1) url.searchParams.delete(k);
-    else url.searchParams.set(k, String(v));
+    if (v === '' || v === false || v === 1) {
+      url.searchParams.delete(k);
+      if (k === 'q') url.searchParams.delete('search');
+    } else {
+      url.searchParams.set(k, String(v));
+      if (k === 'q') url.searchParams.set('search', String(v));
+    }
   }
   history.replaceState(null, '', url);
 }
@@ -5637,21 +5642,137 @@ function pushState(state) {
 /* Themes put a search box in the header of every page. One handler covers all
    of them, on every page, and sends the shopper to this theme's listing. */
 function wireSearchInputs(onSearch) {
-  const inputs = pickAll('input[placeholder*="Search" i]|input[type="search"]|.header-search-field|.form-search-select input|.form-search input');
+  const inputs = pickAll('input[placeholder*="Search" i], input[type="search"], .header-search-field, .form-search-select input, .form-search input, .search-input');
+  const initialQ = (param('search') || param('q') || '').trim();
+
   for (const input of inputs) {
+    if (input.dataset.merchSearchWired) continue;
+    input.dataset.merchSearchWired = '1';
+
+    if (PAGE === 'listing' && initialQ && !input.value) {
+      input.value = initialQ;
+    }
+
     const form = input.closest('form');
-    const go = (e) => {
-      e.preventDefault();
-      const q = input.value.trim();
-      if (onSearch) onSearch(q);
-      else location.href = pageUrl('listing', { q });
+    const container = form || input.closest('.input-div, .search-input-inner, .search-header') || input.parentElement;
+
+    let dropdown = container ? container.querySelector('.search-live-dropdown') : null;
+    if (!dropdown && container) {
+      dropdown = document.createElement('div');
+      dropdown.className = 'search-live-dropdown';
+      dropdown.style.cssText = 'display: none; position: absolute; top: 100%; left: 0; right: 0; min-width: 280px; max-width: 100%; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.05); z-index: 99999; margin-top: 6px; max-height: 400px; overflow-y: auto; text-align: left;';
+      if (getComputedStyle(container).position === 'static') {
+        container.style.position = 'relative';
+      }
+      container.appendChild(dropdown);
+    }
+
+    const closeDropdown = () => {
+      if (dropdown) {
+        dropdown.style.display = 'none';
+        dropdown.innerHTML = '';
+      }
     };
+
+    const go = (e) => {
+      if (e) e.preventDefault();
+      const q = input.value.trim();
+      if (!q) return;
+      closeDropdown();
+      if (onSearch) onSearch(q);
+      else location.href = pageUrl('listing', { search: q, q });
+    };
+
     if (form) {
       form.addEventListener('submit', go);
-      const btn = form.querySelector('button');
-      if (btn) btn.addEventListener('click', go);
+      form.querySelectorAll('button, a.rts-btn, .btn-primary, [type="submit"], .arrow-icon, .fa-magnifying-glass').forEach((el) => {
+        el.addEventListener('click', go);
+      });
     }
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(e); });
+
+    if (container) {
+      container.querySelectorAll('button, .fa-search, .search-btn').forEach((el) => {
+        if (!el.closest('form')) el.addEventListener('click', go);
+      });
+    }
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        go(e);
+      } else if (e.key === 'Escape') {
+        closeDropdown();
+      }
+    });
+
+    let debounceTimer = null;
+    input.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      const q = input.value.trim();
+      if (!q || !dropdown) {
+        closeDropdown();
+        return;
+      }
+      debounceTimer = setTimeout(async () => {
+        try {
+          const res = await api.catalog({ search: q, pageSize: 6 });
+          const items = Array.isArray(res) ? res : (res.products || res.items || []);
+          if (!input.value.trim()) {
+            closeDropdown();
+            return;
+          }
+          if (!items.length) {
+            dropdown.innerHTML = `
+              <div style="padding: 16px; text-align: center; color: #64748b; font-size: 13px;">
+                No products found matching "<strong>${escapeHtml(q)}</strong>"
+              </div>
+            `;
+            dropdown.style.display = 'block';
+            return;
+          }
+          const listingHref = pageUrl('listing', { search: q, q });
+          let html = `
+            <div style="padding: 8px 14px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 12px; font-weight: 600; color: #64748b; display: flex; justify-content: space-between; align-items: center;">
+              <span>Products (${items.length})</span>
+              <span style="font-size: 11px; color: #94a3b8;">Press Enter to see all</span>
+            </div>
+            <div class="search-live-list">
+          `;
+          for (const item of items) {
+            const img = mediaUrl(item.imageUrls?.[0] || item.imageUrl || item.image || 'assets/images/grocery/01.jpg');
+            const itemUrl = pageUrl('product', { id: item.id });
+            const itemPrice = money(item.price);
+            html += `
+              <a href="${itemUrl}" style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #f1f5f9; text-decoration: none; color: #1e293b; transition: background 0.15s ease;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
+                <img src="${img}" alt="${escapeHtml(item.name)}" style="width: 44px; height: 44px; object-fit: contain; border-radius: 4px; background: #f8fafc; border: 1px solid #f1f5f9; flex-shrink: 0;">
+                <div style="flex: 1; min-width: 0;">
+                  <div style="font-size: 13px; font-weight: 600; color: #1e293b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(item.name)}</div>
+                  <div style="font-size: 11px; color: #64748b;">${escapeHtml(item.category || item.brandName || '')}</div>
+                </div>
+                <div style="font-size: 13px; font-weight: 700; color: #629D23; flex-shrink: 0;">${itemPrice}</div>
+              </a>
+            `;
+          }
+          html += `
+            </div>
+            <a href="${listingHref}" style="display: block; text-align: center; padding: 10px 14px; font-size: 13px; font-weight: 600; color: #629D23; background: #f8fafc; text-decoration: none; border-top: 1px solid #e2e8f0;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
+              View all results on Shop page &rarr;
+            </a>
+          `;
+          dropdown.innerHTML = html;
+          dropdown.style.display = 'block';
+        } catch (err) {
+          closeDropdown();
+        }
+      }, 250);
+    });
+
+    if (container) {
+      document.addEventListener('click', (e) => {
+        if (!container.contains(e.target)) {
+          closeDropdown();
+        }
+      });
+    }
   }
 }
 
@@ -9258,10 +9379,21 @@ function orderPayload(spec, method) {
 
 /* Path A: pay later. One call, and the order exists. */
 async function payLater(spec) {
+  const cust = readCustomer(spec);
   const result = await api.checkout(orderPayload(spec, 'cod'));
+  try {
+    if (result?.id) {
+      localStorage.setItem('merch.order_addr_' + result.id, JSON.stringify(cust));
+      if (result.orderRef) localStorage.setItem('merch.order_addr_' + result.orderRef, JSON.stringify(cust));
+      localStorage.setItem('merch.last_order_addr', JSON.stringify(cust));
+    }
+  } catch {}
+  if (token.get()) {
+    api.addAddress(cust).catch(() => {});
+  }
   /* The reply carries no paymentMethod: say which this was, or the order page
      reads "You paid" for money the courier has yet to collect. */
-  done({ ...result, paymentMethod: 'cod' });
+  done({ ...result, customer: cust, shippingAddress: cust, paymentMethod: 'cod' });
 }
 
 /* create-order's 409s carry recovery data; each needs its own exit, not a
@@ -9291,13 +9423,21 @@ function handleRefusal(err) {
 
 /* Path B: pay now. Three steps, and only the third one creates the order. */
 async function payNow(spec) {
+  const cust = readCustomer(spec);
   const intent = await api.createPaymentOrder(orderPayload(spec, 'online'));
 
   /* …unless nothing is owed. A gift card (or a 100% coupon with waived
      shipping) covering the total makes create-order PLACE the order and answer
      `{ freeOrder: true, orderId }` — with no gateway fields at all. */
   if (intent.freeOrder) {
-    done({ id: intent.orderId, amountDue: 0, paymentMethod: 'online' });
+    try {
+      if (intent.orderId) {
+        localStorage.setItem('merch.order_addr_' + intent.orderId, JSON.stringify(cust));
+        localStorage.setItem('merch.last_order_addr', JSON.stringify(cust));
+      }
+    } catch {}
+    if (token.get()) api.addAddress(cust).catch(() => {});
+    done({ id: intent.orderId, customer: cust, shippingAddress: cust, amountDue: 0, paymentMethod: 'online' });
     return;
   }
 
@@ -9321,7 +9461,16 @@ async function payNow(spec) {
             razorpayPaymentId: response.razorpay_payment_id,
             razorpaySignature: response.razorpay_signature,
           });
-          done(order);
+          try {
+            const ordId = order?.id || order?.order?.id;
+            if (ordId) {
+              localStorage.setItem('merch.order_addr_' + ordId, JSON.stringify(cust));
+              if (order?.orderRef) localStorage.setItem('merch.order_addr_' + order.orderRef, JSON.stringify(cust));
+              localStorage.setItem('merch.last_order_addr', JSON.stringify(cust));
+            }
+          } catch {}
+          if (token.get()) api.addAddress(cust).catch(() => {});
+          done({ ...order, customer: cust, shippingAddress: cust });
           resolve();
         } catch (err) {
           /* Money may well have been taken. Never tell them the order failed
@@ -9422,6 +9571,158 @@ function readJustPaid() {
   try { return JSON.parse(sessionStorage.getItem('merch.justPaid') || 'null'); } catch { return null; }
 }
 
+/* Extract customer name and delivery address from the official invoice PDF
+   streams, which always contain the exact billing/shipping address. */
+async function extractAddressFromInvoicePdf(orderId) {
+  if (!orderId) return null;
+  try {
+    const blob = await api.invoicePdf(orderId);
+    if (!blob || blob.size < 100) return null;
+
+    const arrayBuffer = await blob.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let latin = '';
+    const CHUNK_SIZE = 8192;
+    for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+      latin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK_SIZE));
+    }
+    if (!latin.startsWith('%PDF')) return null;
+
+    async function inflateStream(uint8Bytes) {
+      if (typeof DecompressionStream === 'undefined') return '';
+      const ds = new DecompressionStream('deflate');
+      const writer = ds.writable.getWriter();
+      writer.write(uint8Bytes);
+      writer.close();
+      const reader = ds.readable.getReader();
+      const chunks = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      let totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
+      let merged = new Uint8Array(totalLen);
+      let off = 0;
+      for (const c of chunks) {
+        merged.set(c, off);
+        off += c.length;
+      }
+      let res = '';
+      for (let i = 0; i < merged.length; i += CHUNK_SIZE) {
+        res += String.fromCharCode.apply(null, merged.subarray(i, i + CHUNK_SIZE));
+      }
+      return res;
+    }
+
+    function parseCMap(cmapStr) {
+      const map = {};
+      const bfcharRegex = /beginbfchar([\s\S]*?)endbfchar/g;
+      let m;
+      while ((m = bfcharRegex.exec(cmapStr)) !== null) {
+        const lines = m[1].trim().split(/\r?\n/);
+        for (const l of lines) {
+          const match = /<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/.exec(l);
+          if (match) {
+            map[parseInt(match[1], 16)] = String.fromCharCode(parseInt(match[2], 16));
+          }
+        }
+      }
+      const bfrangeRegex = /beginbfrange([\s\S]*?)endbfrange/g;
+      while ((m = bfrangeRegex.exec(cmapStr)) !== null) {
+        const lines = m[1].trim().split(/\r?\n/);
+        for (const l of lines) {
+          const match = /<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/.exec(l);
+          if (match) {
+            const start = parseInt(match[1], 16);
+            const end = parseInt(match[2], 16);
+            let dest = parseInt(match[3], 16);
+            for (let c = start; c <= end; c++) {
+              map[c] = String.fromCharCode(dest++);
+            }
+          }
+        }
+      }
+      return map;
+    }
+
+    const streamRegex = /<<[\s\S]*?\/Length\s+(\d+)[\s\S]*?>>\s*stream\r?\n/g;
+    let match;
+    const decompressedStreams = [];
+
+    while ((match = streamRegex.exec(latin)) !== null) {
+      const length = parseInt(match[1], 10);
+      const start = match.index + match[0].length;
+      const slice = bytes.subarray(start, start + length);
+      try {
+        const uncompressed = await inflateStream(slice);
+        if (uncompressed) decompressedStreams.push(uncompressed);
+      } catch (err) {}
+    }
+
+    const cmaps = {};
+    let contentStream = '';
+    for (const s of decompressedStreams) {
+      if (s.includes('begincmap')) {
+        Object.assign(cmaps, parseCMap(s));
+      } else if (s.includes('BT') && s.includes('ET')) {
+        contentStream = s;
+      }
+    }
+
+    const tokens = [];
+    const lines = contentStream.split(/\r?\n/);
+    for (const line of lines) {
+      const tjMatches = line.match(/<([0-9a-fA-F]+)>\s*Tj/g) || [];
+      for (const tj of tjMatches) {
+        const hex = tj.replace(/[^0-9a-fA-F]/g, '');
+        let str = '';
+        for (let i = 0; i < hex.length; i += 4) {
+          const code = parseInt(hex.slice(i, i + 4), 16);
+          str += cmaps[code] || '';
+        }
+        if (str.trim().length) tokens.push(str.trim());
+      }
+    }
+
+    let name = '';
+    let address = '';
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t.includes(',') && (/\b\d{4,6}\b/.test(t) || /india|state|street|road|sector|block|vihar|nagar|flat|apartment|delhi|noida/i.test(t))) {
+        address = t;
+        if (i > 0) {
+          const prev = tokens[i - 1];
+          if (!/^(status|approved|date|invoice|billed|to|total|due)$/i.test(prev) && prev.length > 1 && prev.length < 50) {
+            name = prev;
+          }
+        }
+        break;
+      }
+    }
+
+    if (!address) {
+      for (let i = 0; i < tokens.length; i++) {
+        let word = '';
+        let k = i;
+        while (k < tokens.length && k < i + 10 && tokens[k].length <= 2) {
+          word += tokens[k];
+          k++;
+        }
+        if (/BILLED\s*TO/i.test(word) || word === 'BILLEDTO') {
+          name = tokens[k] || '';
+          address = tokens[k + 1] || '';
+          break;
+        }
+      }
+    }
+
+    return { name, address };
+  } catch (e) {
+    return null;
+  }
+}
+
 function paintOrder(order) {
   const o = order.order || order;
   const items = order.items || o.lines || [];
@@ -9457,13 +9758,22 @@ function paintOrder(order) {
   /* Delivery address on order details */
   const jp = readJustPaid();
   const jpMatches = jp && String(jp.id) === String(o.id);
-  const cust = o.customer || (jpMatches ? jp.customer : null) || {};
+  let savedLocalCust = null;
+  try {
+    savedLocalCust = JSON.parse(
+      localStorage.getItem('merch.order_addr_' + o.id) ||
+      localStorage.getItem('merch.order_addr_' + o.orderRef) ||
+      'null'
+    );
+  } catch {}
+
+  const cust = o.customer || (jpMatches ? jp.customer : null) || savedLocalCust || {};
   const ship = o.shippingAddress || o.deliveryAddress || o.shipping || cust.shippingAddress || cust.deliveryAddress || cust.address || (jpMatches ? (jp.shippingAddress || jp.deliveryAddress) : null) || {};
 
-  const recipientName = (typeof ship === 'object' && (ship.name || ship.fullName))
+  let recipientName = (typeof ship === 'object' && (ship.name || ship.fullName))
     || cust.name || o.customerName || o.name || [o.firstName, o.lastName].filter(Boolean).join(' ') || '';
 
-  const recipientPhone = (typeof ship === 'object' && ship.phone)
+  let recipientPhone = (typeof ship === 'object' && ship.phone)
     || cust.phone || o.customerPhone || o.phone || '';
 
   let addressText = '';
@@ -9484,25 +9794,64 @@ function paintOrder(order) {
     addressText = [street, o.city, o.state, o.pincode, o.country].filter(Boolean).join(', ');
   }
 
-  if (recipientName) {
-    put('.order-recipient-name|.order-customer-name|[data-order-recipient-name]', recipientName);
-  }
-  if (recipientPhone) {
-    const phoneDisplay = recipientPhone.startsWith('+') || recipientPhone.toLowerCase().startsWith('phone') ? recipientPhone : ('Phone: ' + recipientPhone);
-    put('.order-recipient-phone|.order-customer-phone|[data-order-recipient-phone]', phoneDisplay);
-  }
-  if (addressText) {
-    put('.order-delivery-address|.delivery-address|.order-address-text|[data-order-address]', addressText);
-    pickAll('.order-shipping-section|.order-delivery-card|.order-delivery-address-area').forEach((el) => show(el, true));
-  } else if (token.get()) {
+  const applyDeliveryInfo = (name, phone, addr) => {
+    if (name) put('.order-recipient-name|.order-customer-name|[data-order-recipient-name]', name);
+    if (phone) {
+      const phoneDisplay = phone.startsWith('+') || phone.toLowerCase().startsWith('phone') ? phone : ('Phone: ' + phone);
+      put('.order-recipient-phone|.order-customer-phone|[data-order-recipient-phone]', phoneDisplay);
+    }
+    if (addr) {
+      put('.order-delivery-address|.delivery-address|.order-address-text|[data-order-address]', addr);
+      pickAll('.order-shipping-section|.order-delivery-card|.order-delivery-address-area').forEach((el) => show(el, true));
+    }
+  };
+
+  applyDeliveryInfo(recipientName, recipientPhone, addressText);
+
+  // If addressText or recipientName is missing or incomplete, asynchronously extract from Invoice PDF
+  if (!addressText || !recipientName) {
+    extractAddressFromInvoicePdf(o.id).then((extracted) => {
+      if (extracted && extracted.address) {
+        if (!recipientName && extracted.name) {
+          recipientName = extracted.name;
+        }
+        addressText = extracted.address;
+        if (!recipientPhone) {
+          try {
+            recipientPhone = localStorage.getItem('merch.shopper_phone') || '';
+          } catch {}
+        }
+        applyDeliveryInfo(recipientName, recipientPhone, addressText);
+        try {
+          localStorage.setItem('merch.order_addr_' + o.id, JSON.stringify({ name: recipientName, address: addressText, phone: recipientPhone }));
+          if (o.orderRef) localStorage.setItem('merch.order_addr_' + o.orderRef, JSON.stringify({ name: recipientName, address: addressText, phone: recipientPhone }));
+        } catch {}
+      } else if (token.get() && !addressText) {
+        api.addresses().then((list) => {
+          const def = (list || []).find((a) => a.isDefault) || (list || [])[0];
+          if (def) {
+            const addrStr = [def.line, def.line1, def.line2, def.city, def.state, def.pincode, def.country].filter(Boolean).join(', ');
+            applyDeliveryInfo(def.name || recipientName, def.phone || recipientPhone, addrStr);
+          }
+        }).catch(() => {});
+      }
+    }).catch(() => {
+      if (token.get() && !addressText) {
+        api.addresses().then((list) => {
+          const def = (list || []).find((a) => a.isDefault) || (list || [])[0];
+          if (def) {
+            const addrStr = [def.line, def.line1, def.line2, def.city, def.state, def.pincode, def.country].filter(Boolean).join(', ');
+            applyDeliveryInfo(def.name || recipientName, def.phone || recipientPhone, addrStr);
+          }
+        }).catch(() => {});
+      }
+    });
+  } else if (token.get() && !addressText) {
     api.addresses().then((list) => {
       const def = (list || []).find((a) => a.isDefault) || (list || [])[0];
       if (def) {
         const addrStr = [def.line, def.line1, def.line2, def.city, def.state, def.pincode, def.country].filter(Boolean).join(', ');
-        if (addrStr) put('.order-delivery-address|.delivery-address|.order-address-text|[data-order-address]', addrStr);
-        if (def.name && !recipientName) put('.order-recipient-name|.order-customer-name|[data-order-recipient-name]', def.name);
-        if (def.phone && !recipientPhone) put('.order-recipient-phone|.order-customer-phone|[data-order-recipient-phone]', 'Phone: ' + def.phone);
-        pickAll('.order-shipping-section|.order-delivery-card|.order-delivery-address-area').forEach((el) => show(el, true));
+        applyDeliveryInfo(def.name || recipientName, def.phone || recipientPhone, addrStr);
       }
     }).catch(() => {});
   }
