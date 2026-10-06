@@ -48,7 +48,7 @@
    Fill it in and the same pages show your real catalogue instead.
    =========================================================================== */
 
-export const STOREFRONT_URL = 'https://demo.wisetracktechnologies.com/admin';
+export const STOREFRONT_URL = 'https://grocery.wisetracktechnologies.com/admin';
 
 /* ---------------------------------------------------------------------------
    WHO OWNS THE LOOK — the admin panel, or this template?
