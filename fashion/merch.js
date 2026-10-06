@@ -694,56 +694,90 @@ function syncWishlistCardStates(container = document) {
 const WISH_KEY = 'merch.wishlist';
 const wishListeners = new Set();
 function writeWish(ids) {
-  writeJson(WISH_KEY, ids);
-  wishListeners.forEach((fn) => { try { fn(ids); } catch (e) { warn(e); } });
+  const clean = Array.isArray(ids) ? [...new Set(ids.map((x) => String(x || '').trim()).filter(Boolean))] : [];
+  writeJson(WISH_KEY, clean);
+  wishListeners.forEach((fn) => { try { fn(clean); } catch (e) { warn(e); } });
 }
 
 export const wishlist = {
-  ids: () => readJson(WISH_KEY, []),
-  has: (id) => wishlist.ids().includes(id),
+  ids: () => {
+    const raw = readJson(WISH_KEY, []);
+    if (!Array.isArray(raw)) return [];
+    return [...new Set(raw.map((x) => String(x || '').trim()).filter(Boolean))];
+  },
+  has: (id) => wishlist.ids().includes(String(id || '').trim()),
   onChange: (fn) => { wishListeners.add(fn); return () => wishListeners.delete(fn); },
   async remove(itemId) {
     if (!itemId) return false;
-    const ids = wishlist.ids().filter((x) => x !== itemId);
+    const sId = String(itemId).trim();
+    const ids = wishlist.ids().filter((x) => x !== sId);
     writeWish(ids);
-    try {
-      await api.removeFromWishlist(itemId);
-    } catch (e) {
-      if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist api error', e);
+    if (token.get()) {
+      try {
+        await api.removeFromWishlist(sId);
+      } catch (e) {
+        if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist api error', e);
+      }
     }
     syncWishlistCardStates();
     return false;
   },
   async toggle(itemId) {
     if (!itemId) return false;
-    const on = !wishlist.has(itemId);
-    const ids = wishlist.ids().filter((x) => x !== itemId);
-    if (on) ids.push(itemId);
+    const sId = String(itemId).trim();
+    const on = !wishlist.has(sId);
+    const ids = wishlist.ids().filter((x) => x !== sId);
+    if (on) ids.push(sId);
     writeWish(ids);
-    try {
-      if (on) {
-        await api.addToWishlist(itemId);
-      } else {
-        await api.removeFromWishlist(itemId);
+    if (token.get()) {
+      try {
+        if (on) {
+          await api.addToWishlist(sId);
+        } else {
+          await api.removeFromWishlist(sId);
+        }
+      } catch (e) {
+        if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist api error', e);
       }
-    } catch (e) {
-      if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist api error', e);
     }
     syncWishlistCardStates();
     return on;
   },
   /* After sign-in or on boot: sync local with remote store wishlist */
   async sync() {
+    if (!token.get()) return;
     try {
+      const local = wishlist.ids();
+      for (const id of local) {
+        await api.addToWishlist(id).catch(() => {});
+      }
       const remote = await api.wishlist();
       const remoteIds = extractWishlistIds(remote);
-      if (remoteIds.length) {
-        const combined = [...new Set([...wishlist.ids(), ...remoteIds])];
-        writeWish(combined);
-        syncWishlistCardStates();
-      }
+      writeWish(remoteIds);
+      syncWishlistCardStates();
     } catch (e) {
-      /* guest mode fallback */
+      if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist sync error', e);
+    }
+  },
+  /* Validate cached wishlist IDs against the actual store catalogue */
+  async refresh() {
+    if (token.get()) {
+      try {
+        const remote = await api.wishlist();
+        writeWish(extractWishlistIds(remote));
+      } catch {}
+    }
+    const current = wishlist.ids();
+    if (!current.length) return current;
+    try {
+      const fresh = await api.products(current);
+      const valid = Array.isArray(fresh) ? fresh.map((p) => p.id) : ((fresh?.products || fresh?.items || []).map((p) => p.id));
+      if (valid.length !== current.length) {
+        writeWish(valid);
+      }
+      return valid;
+    } catch {
+      return current;
     }
   },
 };
@@ -2044,9 +2078,11 @@ THEMES.fashion = {
      TOPBAR's carousel first, so the promises were written over the promo bar
      and the announcement had nowhere left to go. */
   usps: { container: '.swiper-wrapper:has(.box-icon_V01)', card: '.swiper-slide:has(.box-icon_V01)', title: '.content .title', text: '.content .desc|.content p:not(.title)' },
-  /* This theme names its basket badge `.count`; the inherited `.count-box`
-     matches nothing here, so the header kept the template's "12". */
-  header: { cartCount: '.nav-icon-item .count|.toolbar-count|.count', cartTotal: '.sub-total-price|.tf-totals-total-value' },
+  header: {
+    cartCount: '.shop-cart .count, .tf-toolbar-bottom a[href*="cart"] .toolbar-count',
+    wishCount: '.nav-icon-list a[href*="wishlist"] .count, a.nav-icon-item[href*="wishlist"] .count, .tf-toolbar-bottom a[href*="wishlist"] .toolbar-count',
+    cartTotal: '.sub-total-price|.tf-totals-total-value',
+  },
 
   banners: {
     container: '.sw-slide-show .swiper-wrapper|.tf-slideshow .swiper-wrapper',
@@ -2227,6 +2263,41 @@ THEMES.fashion = {
     totals: { subtotal: '.each-subtotal|.tf-totals-total-value', total: '.total-price|.tf-totals-total-value' },
     coupon: { input: 'input[placeholder*="iscount"]', button: '.ip-discount-code button' },
     checkoutBtn: 'a[href*="checkout"]',
+  },
+
+  checkout: {
+    summary: {
+      container: '.box-your-order .list-order-product',
+      card: '.order-item',
+      fields: {
+        image: { sel: '.img-prd img', attr: 'src', value: (l) => mediaUrl(l.image) },
+        link:  { sel: 'a.img-prd, a.prd_name', attr: 'href', value: (l) => productHref({ id: l.itemId }) },
+        title: { sel: '.prd_name', text: (l) => l.name },
+        meta:  { sel: '.infor-prd .text-caption-01', text: (l) => l.variantLabel || (l.qty > 1 ? 'Qty ' + l.qty : '') },
+        price: { sel: '.quantity-price', text: (l) => money(l.price * l.qty) },
+      },
+    },
+    totals: {
+      subtotal: '.total-item-subtotal span:last-child|.list-total li:nth-child(1) span:last-child',
+      shipping: '.total-item-shipping span:last-child|.list-total li:nth-child(2) span:last-child',
+      discount: '.total-item-discount span:last-child|.list-total li:nth-child(3) span:last-child',
+      total: '.last-total span:last-child',
+    },
+    form: {
+      firstName: 'input[placeholder*="First Name" i]',
+      lastName:  'input[placeholder*="Last Name" i]',
+      email:     'input[placeholder*="Email" i]',
+      phone:     'input[placeholder*="Phone" i]',
+      country:   'select#shipping-country-form',
+      city:      'input[placeholder*="Town" i]|input[placeholder*="City" i]',
+      address1:  'input[placeholder*="Street" i]|input[placeholder*="Address" i]',
+      state:     'select#shipping-province-form|input[placeholder*="State" i]',
+      pincode:   'input[placeholder*="Postal" i]|input[placeholder*="Post" i]|input[placeholder*="Pin" i]|input[placeholder*="Zip" i]',
+      notes:     'textarea[placeholder*="note" i]',
+    },
+    paymentRadios: 'input[name="payment-method"]',
+    terms: '#agree-term',
+    placeBtn: '.btn-place-order, .tf-checkout-cart-main a.tf-btn, .tf-checkout-cart-main button, a[href*="thank-you.html"].tf-btn',
   },
 };
 
@@ -3049,9 +3120,6 @@ function paintHeader() {
     }
     setText(num, cartCount);
   });
-  pickAll(h.cartCount).forEach((el) => setText(el, cartCount));
-  if (h.wishCount) pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
-
   pickAll('.btn-border-only.wishlist').forEach((btn) => {
     let num = btn.querySelector('.number');
     if (!num) {
@@ -3071,7 +3139,58 @@ function paintHeader() {
     }
     setText(num, wishCount);
   });
-  pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
+
+  // Fashion desktop header wishlist count badge
+  pickAll('.nav-icon-list a[href*="wishlist"], a.nav-icon-item[href*="wishlist"]').forEach((a) => {
+    a.classList.add('nav-wishlist');
+    let num = a.querySelector('.count');
+    if (!num) {
+      num = document.createElement('span');
+      num.className = 'count';
+      a.appendChild(num);
+    }
+    if (wishCount > 0) {
+      setText(num, wishCount);
+      show(num, true);
+    } else {
+      setText(num, '');
+      show(num, false);
+    }
+  });
+
+  // Fashion mobile bottom toolbar wishlist badge
+  pickAll('.tf-toolbar-bottom a[href*="wishlist"] .toolbar-icon').forEach((wrap) => {
+    let num = wrap.querySelector('.toolbar-count');
+    if (!num) {
+      num = document.createElement('span');
+      num.className = 'toolbar-count';
+      wrap.appendChild(num);
+    }
+    if (wishCount > 0) {
+      setText(num, wishCount);
+      show(num, true);
+    } else {
+      setText(num, '');
+      show(num, false);
+    }
+  });
+
+  // Fashion mobile bottom toolbar cart badge
+  pickAll('.tf-toolbar-bottom a[href*="cart"] .toolbar-icon').forEach((wrap) => {
+    let num = wrap.querySelector('.toolbar-count');
+    if (num) setText(num, cartCount);
+  });
+
+  if (h.cartCount) pickAll(h.cartCount).forEach((el) => setText(el, cartCount));
+  if (h.wishCount) pickAll(h.wishCount).forEach((el) => {
+    if (wishCount > 0) {
+      setText(el, wishCount);
+      show(el, true);
+    } else {
+      setText(el, '');
+      show(el, false);
+    }
+  });
 
   pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
 
@@ -9598,13 +9717,15 @@ function readCustomer(spec) {
   const f = spec.form || {};
   const v = (key) => (pick(f[key])?.value || '').trim();
   const name = [v('firstName'), v('lastName')].filter(Boolean).join(' ') || v('name');
+  const stateVal = v('state');
+  const state = (!stateVal || stateVal === 'Choose State' || stateVal === '------') ? (v('city') || 'N/A') : stateVal;
   return {
     name,
     email: v('email'),
     phone: v('phone'),
     address: [v('address1'), v('address2')].filter(Boolean).join(', '),
     city: v('city'),
-    state: v('state'),
+    state,
     pincode: v('pincode'),
   };
 }
@@ -11343,9 +11464,9 @@ pages.wishlist = async () => {
   if (token.get()) {
     try {
       const remote = extractWishlistIds(await api.wishlist());
-      if (remote && remote.length) {
+      if (Array.isArray(remote)) {
         ids = remote;
-        writeWish([...new Set([...wishlist.ids(), ...remote])]);
+        writeWish(remote);
       }
     } catch { /* fall back to the local list */ }
   }
@@ -12084,6 +12205,7 @@ async function boot() {
   cart.onChange(() => { paintHeader(); paintFashionMiniCart(); });
   wishlist.onChange(() => { paintHeader(); syncWishlistCardStates(); });
   wishlist.sync().catch(() => {});
+  wishlist.refresh().catch(() => {});
   paintFashionMiniCart();
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
