@@ -702,6 +702,18 @@ export const wishlist = {
   ids: () => readJson(WISH_KEY, []),
   has: (id) => wishlist.ids().includes(id),
   onChange: (fn) => { wishListeners.add(fn); return () => wishListeners.delete(fn); },
+  async remove(itemId) {
+    if (!itemId) return false;
+    const ids = wishlist.ids().filter((x) => x !== itemId);
+    writeWish(ids);
+    try {
+      await api.removeFromWishlist(itemId);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist api error', e);
+    }
+    syncWishlistCardStates();
+    return false;
+  },
   async toggle(itemId) {
     if (!itemId) return false;
     const on = !wishlist.has(itemId);
@@ -2021,7 +2033,10 @@ THEMES.fashion = {
     addresses: 'account-addresses.html', login: 'login.html', register: 'register.html',
     wishlist: 'wishlist.html', forgot: 'forget-password.html', invoice: 'invoice.html',
     blog: 'blog.html', post: 'blog-single.html',
-    returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
+    returns: 'return-and-refund.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
+    about: 'about.html', contact: 'contact.html', faq: 'faq.html',
+    privacy: 'privacy-policy.html', terms: 'term-and-condition.html', shipping: 'shipping.html',
+    ourStore: 'our-store.html',
   },
   footerContact: { phone: 'a[href^="tel:"]', email: 'a[href^="mailto:"]', address: '.footer-infor p.lh-26, .need-help-wrap p.lh-26|address' },
   announcement: '.tf-topbar .swiper-slide p|.tf-topbar p',
@@ -3984,11 +3999,27 @@ function paintQuickViewExtras(panel, p) {
   }
 
   // 1. Fashion Quick Add modal image & basic details
-  const qaImg = panel.querySelector('.product-mini-view .prd-image img, .product-mini-view img, .img-product');
+  let qaImg = panel.querySelector('.product-mini-view .prd-image img, .product-mini-view img, .img-product');
+  const prdImageWrap = panel.querySelector('.product-mini-view .prd-image');
+  if (prdImageWrap) {
+    prdImageWrap.style.cssText = 'flex-shrink:0;width:80px;height:107px;border-radius:8px;overflow:hidden;display:block;';
+    if (!qaImg) {
+      qaImg = document.createElement('img');
+      qaImg.className = 'img-product';
+      qaImg.width = 80;
+      qaImg.height = 107;
+      prdImageWrap.appendChild(qaImg);
+    }
+  }
+  const miniView = panel.querySelector('.product-mini-view');
+  if (miniView) {
+    miniView.style.cssText = 'display:flex;align-items:center;gap:12px;';
+  }
   if (qaImg && imgs.length) {
     const url = mediaUrl(imgs[0]);
     qaImg.src = url;
     qaImg.alt = p.name || 'Product';
+    qaImg.style.cssText = 'width:80px;height:107px;object-fit:cover;border-radius:8px;display:block;';
     qaImg.removeAttribute('srcset');
     qaImg.classList.remove('lazyload', 'lazyloading');
     qaImg.classList.add('lazyloaded');
@@ -4807,6 +4838,7 @@ function replaceTemplateArt() {
   try { nodes = $$('*'); } catch { return; }
   nodes.forEach((el) => {
     if (el.dataset.merchArt) return;
+    if (el.closest('#quickAdd, #quickView, #quick_view, .modal-quickadd, .modal-quick-view, .tf-product-quick_add, .product-mini-view')) return;
     const m = /url\(["']?([^"')]+)/.exec(getComputedStyle(el).backgroundImage || '');
     if (!m) return;
     const url = m[1];
@@ -4834,6 +4866,7 @@ function replaceTemplateArt() {
   try { imgs = $$('img'); } catch { return; }
   imgs.forEach((img) => {
     if (img.dataset.merchArt || img.hasAttribute('data-merch-id')) return;
+    if (img.closest('#quickAdd, #quickView, #quick_view, .modal-quickadd, .modal-quick-view, .tf-product-quick_add, .product-mini-view')) return;
     const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
     if (!src || /^(data:|blob:)/.test(src)) return;
     if (/^https?:/.test(src) && !src.includes(location.host)) return;
@@ -5032,9 +5065,58 @@ function storeLink(link) {
      sent, a hero button reading "Shop Now" goes to /shop — a 404 on a folder
      of static pages. Map the ones the store owns; leave the rest alone, since
      a merchant may well be linking somewhere real. */
-  const known = { '/cart': 'cart', '/checkout': 'checkout', '/account': 'account', '/orders': 'orders', '/track': 'track', '/wishlist': 'wishlist', '/blog': 'blog' };
-  const role = known[link.replace(/\/$/, '')];
-  if (role) return pageUrl(role);
+  const [pathPart, queryPart] = link.split('?');
+  const clean = pathPart.replace(/\/$/, '').toLowerCase();
+  const qStr = queryPart ? '?' + queryPart : '';
+  const known = {
+    '/home': 'home',
+    '/shop': 'listing',
+    '/cart': 'cart',
+    '/checkout': 'checkout',
+    '/account': 'account',
+    '/orders': 'orders',
+    '/track': 'track',
+    '/track-order': 'track',
+    '/wishlist': 'wishlist',
+    '/blog': 'blog',
+    '/blogs': 'blog',
+    '/about': 'about',
+    '/about-us': 'about',
+    '/contact': 'contact',
+    '/contact-us': 'contact',
+    '/faq': 'faq',
+    '/faqs': 'faq',
+    '/privacy': 'privacy',
+    '/privacy-policy': 'privacy',
+    '/p/privacy': 'privacy',
+    '/terms': 'terms',
+    '/terms-of-service': 'terms',
+    '/terms-and-conditions': 'terms',
+    '/term-and-condition': 'terms',
+    '/p/terms': 'terms',
+    '/shipping': 'shipping',
+    '/shipping-policy': 'shipping',
+    '/shipping-&-delivery': 'shipping',
+    '/p/shipping': 'shipping',
+    '/returns': 'returns',
+    '/return-and-refund': 'returns',
+    '/returns-&-refunds': 'returns',
+    '/refund': 'returns',
+    '/p/returns': 'returns',
+    '/p/refund': 'returns',
+    '/our-store': 'ourStore',
+    '/our-stories': 'ourStore',
+    '/collections': 'collections'
+  };
+  const role = known[clean];
+  if (role) return pageUrl(role) + qStr;
+  if (clean.startsWith('/p/')) {
+    const policyKey = clean.slice(3);
+    if (known['/' + policyKey]) return pageUrl(known['/' + policyKey]) + qStr;
+  }
+  if (clean.startsWith('/') && !clean.endsWith('.html') && !clean.includes('.')) {
+    return clean.slice(1) + '.html' + qStr;
+  }
   return link;
 }
 
@@ -7205,9 +7287,49 @@ function remapDeadLinks() {
     'product-style-04.html', 'product-style-05.html', 'product-style-06.html', 'product-style-07.html'
   ];
 
-  $$('a[href]').forEach((a) => {
+  const textToPage = [
+    { re: /^(home)$/i, page: 'index.html' },
+    { re: /^(about|about\s*us)$/i, page: 'about.html' },
+    { re: /^(shop|all\s*products|store)$/i, page: 'shop-left-sidebar.html' },
+    { re: /^(blog|latest\s*new|news|latest\s*news|blogs)$/i, page: 'blog.html' },
+    { re: /^(contact|contact\s*us)$/i, page: 'contact.html' },
+    { re: /^(faq|faqs|orders\s*faqs)$/i, page: 'faq.html' },
+    { re: /^(privacy\s*policy)$/i, page: 'privacy-policy.html' },
+    { re: /^(terms\s*(&|and)\s*conditions?)$/i, page: 'term-and-condition.html' },
+    { re: /^(shipping|shipping\s*policy)$/i, page: 'shipping.html' },
+    { re: /^(returns?|return\s*(&|and)\s*refund)$/i, page: 'return-and-refund.html' },
+    { re: /^(our\s*stories|our\s*store|our\s*stores)$/i, page: 'our-store.html' },
+    { re: /^(my\s*account|account)$/i, page: 'account-page.html' },
+    { re: /^(orders|my\s*orders)$/i, page: 'account-orders.html' },
+    { re: /^(track\s*order|tracking)$/i, page: 'track-order.html' },
+    { re: /^(wishlist)$/i, page: 'wishlist.html' },
+    { re: /^(cart|view\s*cart|shopping\s*cart)$/i, page: 'view-cart.html' },
+    { re: /^(checkout)$/i, page: 'checkout.html' }
+  ];
+
+  $$('a').forEach((a) => {
+    if (a.hasAttribute('data-bs-toggle') || a.hasAttribute('data-bs-target')) return;
     const href = a.getAttribute('href');
-    if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+    const isDead = !href || href === '#' || href === '#!' || href.startsWith('javascript:');
+    if (isDead) {
+      const text = a.textContent.trim().replace(/\s+/g, ' ');
+      for (const mapping of textToPage) {
+        if (mapping.re.test(text)) {
+          a.setAttribute('href', mapping.page);
+          break;
+        }
+      }
+      return;
+    }
+
+    if (href.startsWith('#') || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+    if (href.startsWith('/') && !href.includes('.') && !href.endsWith('.html')) {
+      const resolved = storeLink(href);
+      if (resolved && resolved !== href) {
+        a.setAttribute('href', resolved);
+        return;
+      }
+    }
     const cleanHref = href.split('?')[0].split('#')[0];
     if (shopPages.includes(cleanHref)) {
       a.setAttribute('href', href.replace(cleanHref, 'shop-left-sidebar.html'));
@@ -11221,11 +11343,64 @@ pages.wishlist = async () => {
   if (token.get()) {
     try {
       const remote = extractWishlistIds(await api.wishlist());
-      if (remote && remote.length) ids = remote;
+      if (remote && remote.length) {
+        ids = remote;
+        writeWish([...new Set([...wishlist.ids(), ...remote])]);
+      }
     } catch { /* fall back to the local list */ }
   }
   let items = [];
-  try { items = await api.products(ids); } catch (e) { return showError(e); }
+  try {
+    const res = await api.products(ids);
+    items = Array.isArray(res) ? res : (res?.products || res?.items || []);
+  } catch (e) { return showError(e); }
+
+  const wishGrid = pick('.wrapper-wishlist');
+  const renderWishlistGridEmpty = () => {
+    if (!wishGrid) return;
+    wishGrid.innerHTML = `
+      <div class="merch-empty text-center w-100" style="grid-column: 1 / -1; padding: 60px 20px;">
+        <i class="icon icon-HeartStraight" style="font-size: 54px; color: #94a3b8; margin-bottom: 16px; display: inline-block;"></i>
+        <h4 style="margin-bottom: 8px; font-weight: 600;">Your wishlist is empty</h4>
+        <p style="color: #64748b; margin-bottom: 24px;">Explore more products and add your favorites to wishlist!</p>
+        <a href="shop-left-sidebar.html" class="tf-btn btn-fill animate-btn" style="display: inline-block; padding: 12px 28px;">Continue Shopping</a>
+      </div>
+    `;
+  };
+
+  if (wishGrid) {
+    if (!items.length) {
+      renderWishlistGridEmpty();
+      return;
+    }
+    renderProducts(items, THEME.listing, wishGrid);
+    wireQuickView();
+    const cards = pickAll('.card-product', wishGrid);
+    cards.forEach((card) => {
+      const id = card.dataset.merchId;
+      const prod = items.find((p) => p.id === id);
+      const removeBtn = pick('.product-action_remove, .remove.box-icon, [data-action="wishlist-remove"]', card);
+      if (removeBtn && !removeBtn._wishRemoveWired) {
+        removeBtn._wishRemoveWired = true;
+        removeBtn.style.cursor = 'pointer';
+        removeBtn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (id) {
+            await wishlist.remove(id);
+            card.remove();
+            notify((prod?.name || 'Item') + ' removed from wishlist.', 'success');
+            const remaining = pickAll('.card-product', wishGrid);
+            if (!remaining.length) {
+              renderWishlistGridEmpty();
+            }
+          }
+        };
+      }
+    });
+    return;
+  }
+
   /* A wishlist page is a product grid, and several themes render it as a cart
      table instead — try the grid first, then the table. */
   if (!renderProducts(items)) {
@@ -11345,7 +11520,7 @@ pages.wishlist = async () => {
         removeBtn.onclick = async (e) => {
           e.preventDefault();
           e.stopPropagation();
-          await wishlist.toggle(p.id);
+          await wishlist.remove(p.id);
           node.remove();
           notify(p.name + ' removed from wishlist.', 'success');
           const remaining = pickAll('.single-cart-area-list.main, tbody tr', t.container);
@@ -11368,6 +11543,31 @@ pages.wishlist = async () => {
     });
   }
 };
+
+document.addEventListener('click', async (e) => {
+  const removeBtn = e.target.closest('.product-action_remove, .remove.box-icon');
+  if (!removeBtn) return;
+  const card = removeBtn.closest('.card-product[data-merch-id], [data-merch-id]');
+  if (!card) return;
+  const id = card.dataset.merchId;
+  if (!id) return;
+  e.preventDefault();
+  e.stopPropagation();
+  await wishlist.remove(id);
+  card.remove();
+  notify('Removed from wishlist.', 'success');
+  const wishGrid = pick('.wrapper-wishlist');
+  if (wishGrid && !pick('.card-product', wishGrid)) {
+    wishGrid.innerHTML = `
+      <div class="merch-empty text-center w-100" style="grid-column: 1 / -1; padding: 60px 20px;">
+        <i class="icon icon-HeartStraight" style="font-size: 54px; color: #94a3b8; margin-bottom: 16px; display: inline-block;"></i>
+        <h4 style="margin-bottom: 8px; font-weight: 600;">Your wishlist is empty</h4>
+        <p style="color: #64748b; margin-bottom: 24px;">Explore more products and add your favorites to wishlist!</p>
+        <a href="shop-left-sidebar.html" class="tf-btn btn-fill animate-btn" style="display: inline-block; padding: 12px 28px;">Continue Shopping</a>
+      </div>
+    `;
+  }
+});
 
 pages.compare = async () => {
   let items = [];
