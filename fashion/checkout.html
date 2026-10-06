@@ -257,7 +257,7 @@
                                     </button>
                                 </form>
                             </div>
-                            <form action="https://tfamerce.vercel.app/thank-you.html" class="tf-checkout-cart-main">
+                            <form action="account-page.html" class="tf-checkout-cart-main" onsubmit="event.preventDefault();">
                                 <div class="box-ip-checkout estimate-shipping">
                                     <div class="h5 title">Information</div>
                                     <div class="form-content">
@@ -272,8 +272,8 @@
                                         <fieldset>
                                             <div class="tf-select">
                                                 <select class="w-100" id="shipping-country-form" name="address[country]"
-                                                    data-default="">
-                                                    <option selected disabled value=""> Choose Country / Region</option>
+                                                    data-default="India">
+                                                    <option disabled value=""> Choose Country / Region</option>
                                                     <option value="Australia"
                                                         data-provinces='[["Australian Capital Territory","Australian Capital Territory"],["New South Wales","New South Wales"],["Northern Territory","Northern Territory"],["Queensland","Queensland"],["South Australia","South Australia"],["Tasmania","Tasmania"],["Victoria","Victoria"],["Western Australia","Western Australia"]]'>
                                                         Australia</option>
@@ -294,7 +294,10 @@
                                                     <option value="United Kingdom"
                                                         data-provinces='[["England","England"],["Scotland","Scotland"],["Wales","Wales"],["Northern Ireland","Northern Ireland"]]'>
                                                         United Kingdom</option>
-                                                    <option value="India" data-provinces='[]'>India</option>
+                                                    <option value="India" selected
+                                                        data-provinces='[["Andhra Pradesh","Andhra Pradesh"],["Arunachal Pradesh","Arunachal Pradesh"],["Assam","Assam"],["Bihar","Bihar"],["Chhattisgarh","Chhattisgarh"],["Goa","Goa"],["Gujarat","Gujarat"],["Haryana","Haryana"],["Himachal Pradesh","Himachal Pradesh"],["Jharkhand","Jharkhand"],["Karnataka","Karnataka"],["Kerala","Kerala"],["Madhya Pradesh","Madhya Pradesh"],["Maharashtra","Maharashtra"],["Manipur","Manipur"],["Meghalaya","Meghalaya"],["Mizoram","Mizoram"],["Nagaland","Nagaland"],["Odisha","Odisha"],["Punjab","Punjab"],["Rajasthan","Rajasthan"],["Sikkim","Sikkim"],["Tamil Nadu","Tamil Nadu"],["Telangana","Telangana"],["Tripura","Tripura"],["Uttar Pradesh","Uttar Pradesh"],["Uttarakhand","Uttarakhand"],["West Bengal","West Bengal"],["Delhi","Delhi"],["Jammu and Kashmir","Jammu and Kashmir"],["Ladakh","Ladakh"],["Chandigarh","Chandigarh"],["Puducherry","Puducherry"]]'>
+                                                        India
+                                                    </option>
                                                     <option value="Japan" data-provinces='[]'>Japan</option>
                                                     <option value="Mexico" data-provinces='[]'>Mexico</option>
                                                     <option value="South Korea" data-provinces='[]'>South Korea</option>
@@ -313,8 +316,41 @@
                                         <div class="tf-grid-layout sm-col-2">
                                             <div class="tf-select">
                                                 <select id="shipping-province-form" name="address[province]"
-                                                    data-default="">
-                                                    <option selected disabled value="">Choose State</option>
+                                                    data-default="Rajasthan">
+                                                    <option disabled value="">Choose State</option>
+                                                    <option value="Andhra Pradesh">Andhra Pradesh</option>
+                                                    <option value="Arunachal Pradesh">Arunachal Pradesh</option>
+                                                    <option value="Assam">Assam</option>
+                                                    <option value="Bihar">Bihar</option>
+                                                    <option value="Chhattisgarh">Chhattisgarh</option>
+                                                    <option value="Goa">Goa</option>
+                                                    <option value="Gujarat">Gujarat</option>
+                                                    <option value="Haryana">Haryana</option>
+                                                    <option value="Himachal Pradesh">Himachal Pradesh</option>
+                                                    <option value="Jharkhand">Jharkhand</option>
+                                                    <option value="Karnataka">Karnataka</option>
+                                                    <option value="Kerala">Kerala</option>
+                                                    <option value="Madhya Pradesh">Madhya Pradesh</option>
+                                                    <option value="Maharashtra">Maharashtra</option>
+                                                    <option value="Manipur">Manipur</option>
+                                                    <option value="Meghalaya">Meghalaya</option>
+                                                    <option value="Mizoram">Mizoram</option>
+                                                    <option value="Nagaland">Nagaland</option>
+                                                    <option value="Odisha">Odisha</option>
+                                                    <option value="Punjab">Punjab</option>
+                                                    <option value="Rajasthan" selected>Rajasthan</option>
+                                                    <option value="Sikkim">Sikkim</option>
+                                                    <option value="Tamil Nadu">Tamil Nadu</option>
+                                                    <option value="Telangana">Telangana</option>
+                                                    <option value="Tripura">Tripura</option>
+                                                    <option value="Uttar Pradesh">Uttar Pradesh</option>
+                                                    <option value="Uttarakhand">Uttarakhand</option>
+                                                    <option value="West Bengal">West Bengal</option>
+                                                    <option value="Delhi">Delhi</option>
+                                                    <option value="Jammu and Kashmir">Jammu and Kashmir</option>
+                                                    <option value="Ladakh">Ladakh</option>
+                                                    <option value="Chandigarh">Chandigarh</option>
+                                                    <option value="Puducherry">Puducherry</option>
                                                 </select>
                                             </div>
                                             <input type="number" placeholder="Postal Code*" required="">
@@ -455,7 +491,7 @@
                                             </div>
                                         </div>
                                         <div class="quantity-price text-primary">
-                                            $29.99
+                                            ₹0
                                         </div>
                                     </li>
                                     <li class="order-item fw-medium">
@@ -481,7 +517,7 @@
                                             </div>
                                         </div>
                                         <div class="quantity-price text-primary">
-                                            $69.99
+                                            ₹0
                                         </div>
                                     </li>
                                     <li class="order-item fw-medium">
@@ -507,7 +543,7 @@
                                             </div>
                                         </div>
                                         <div class="quantity-price text-primary">
-                                            $49.99
+                                            ₹0
                                         </div>
                                     </li>
                                 </ul>
@@ -520,20 +556,20 @@
                                 <ul class="list-total">
                                     <li class="total-item lh-24 fw-medium total-item-subtotal">
                                         <span>Subtotal</span>
-                                        <span>$0.00</span>
+                                        <span>₹0</span>
                                     </li>
                                     <li class="total-item lh-24 fw-medium total-item-shipping">
                                         <span>Shipping</span>
                                         <span>Free</span>
                                     </li>
-                                    <li class="total-item lh-24 fw-medium total-item-discount">
+                                    <li class="total-item lh-24 fw-medium total-item-discount" style="display: none;">
                                         <span>Discounts</span>
-                                        <span>$0.00</span>
+                                        <span>₹0</span>
                                     </li>
                                 </ul>
                                 <div class="last-total h5 fw-medium">
                                     <span>Total</span>
-                                    <span>$0.00</span>
+                                    <span>₹0</span>
                                 </div>
                             </div>
                         </div>
@@ -1806,7 +1842,10 @@
                                             data-provinces='[["England","England"],["Scotland","Scotland"],["Wales","Wales"],["Northern Ireland","Northern Ireland"]]'>
                                             United Kingdom
                                         </option>
-                                        <option value="India" data-provinces="[]">India</option>
+                                        <option value="India" selected
+                                            data-provinces='[["Andhra Pradesh","Andhra Pradesh"],["Arunachal Pradesh","Arunachal Pradesh"],["Assam","Assam"],["Bihar","Bihar"],["Chhattisgarh","Chhattisgarh"],["Goa","Goa"],["Gujarat","Gujarat"],["Haryana","Haryana"],["Himachal Pradesh","Himachal Pradesh"],["Jharkhand","Jharkhand"],["Karnataka","Karnataka"],["Kerala","Kerala"],["Madhya Pradesh","Madhya Pradesh"],["Maharashtra","Maharashtra"],["Manipur","Manipur"],["Meghalaya","Meghalaya"],["Mizoram","Mizoram"],["Nagaland","Nagaland"],["Odisha","Odisha"],["Punjab","Punjab"],["Rajasthan","Rajasthan"],["Sikkim","Sikkim"],["Tamil Nadu","Tamil Nadu"],["Telangana","Telangana"],["Tripura","Tripura"],["Uttar Pradesh","Uttar Pradesh"],["Uttarakhand","Uttarakhand"],["West Bengal","West Bengal"],["Delhi","Delhi"],["Jammu and Kashmir","Jammu and Kashmir"],["Ladakh","Ladakh"],["Chandigarh","Chandigarh"],["Puducherry","Puducherry"]]'>
+                                            India
+                                        </option>
                                         <option value="Japan" data-provinces="[]">Japan</option>
                                         <option value="Mexico" data-provinces="[]">Mexico</option>
                                         <option value="South Korea" data-provinces="[]">South Korea</option>
@@ -1830,8 +1869,7 @@
                                 <div id="zipcode-success" class="success" style="display: none">
                                     <p>We found one shipping rate available for your address:</p>
                                     <p class="standard">
-                                        Standard at <span>$0.00</span>
-                                        USD
+                                        Standard at <span>₹0</span>
                                     </p>
                                 </div>
                             </div>

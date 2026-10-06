@@ -2033,8 +2033,9 @@ THEMES.electronic = {
       lastName: 'input[placeholder="Last Name*"]',
       email: 'input[placeholder="Email Address*"]',
       phone: 'input[placeholder="Phone Number*"]',
+      country: 'select#shipping-country-form, select[name*="country"]',
       city: 'input[placeholder="Town/City*"]',
-      state: '#merch-state, select.text-title:not([name*="country"])',
+      state: 'select#shipping-province-form, select[name*="province"], select[name*="state"], #merch-state',
       address1: 'input[placeholder="Street,..."]',
       pincode: 'input[placeholder="Postal Code*"]',
     },
@@ -2075,7 +2076,7 @@ THEMES.fashion = {
   name: 'fashion',
   pages: {
     home: 'index.html', listing: 'shop-left-sidebar.html', product: 'product-detail.html',
-    cart: 'view-cart.html', checkout: 'checkout.html', order: 'thank-you.html',
+    cart: 'view-cart.html', checkout: 'checkout.html', order: 'account-page.html',
     track: 'track-order.html', account: 'account-page.html', orders: 'account-orders.html',
     addresses: 'account-addresses.html', login: 'login.html', register: 'register.html',
     wishlist: 'wishlist.html', forgot: 'forget-password.html', invoice: 'invoice.html',
@@ -9523,6 +9524,15 @@ pages.checkout = async () => {
   const placeBtn = findPlaceButton(spec);
   if (!placeBtn) return warn('no place-order button found on this checkout');
 
+  const checkoutForm = pick('.tf-checkout-cart-main');
+  if (checkoutForm && !checkoutForm._merchWiredSubmit) {
+    checkoutForm._merchWiredSubmit = true;
+    checkoutForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      placeBtn.click();
+    });
+  }
+
   placeBtn.addEventListener('click', async (e) => {
     e.preventDefault();
     if (moneyCaptured) return;
@@ -9566,7 +9576,16 @@ function paintCheckoutSummary(spec, lines) {
   const tt = spec.totals || {};
   pickAll(tt.subtotal).forEach((el) => setText(el, money(subtotal)));
   pickAll(tt.shipping).forEach((el) => setText(el, p.shipping == null ? 'Calculated' : (p.shipping ? money(p.shipping) : 'Free')));
-  pickAll(tt.discount).forEach((el) => setText(el, p.discount ? '-' + money(p.discount) : money(0)));
+  pickAll(tt.discount).forEach((el) => {
+    const row = el.closest('li, tr, .total-item');
+    if (p.discount && p.discount > 0) {
+      if (row) row.style.display = '';
+      setText(el, '-' + money(p.discount));
+    } else {
+      if (row) row.style.display = 'none';
+      else setText(el, money(0));
+    }
+  });
   pickAll(tt.total).forEach((el) => setText(el, money(total)));
 
   /* Themes that lay their summary out as generic label/value rows (grocery)
@@ -9718,6 +9737,13 @@ function cloneFieldAfter(source, { id, name, placeholder, label }) {
 
 function ensureCustomerFields(spec) {
   const form = spec.form || {};
+  if (THEME?.name === 'fashion') {
+    const provinceSelect = pick('#shipping-province-form, select[name*="province"], select[name*="state"]');
+    if (provinceSelect) {
+      document.querySelectorAll('#merch-state').forEach((el) => el.closest('.form-group, .field, .tf-field, .tf-grid-layout, div')?.remove());
+      return;
+    }
+  }
   if (pick(form.state)) return;                     // the template has one
 
   const source = pick(form.city) || pick(form.pincode);
@@ -10140,6 +10166,12 @@ function done(order) {
   cart.clear();
   pending.clear();
   currentKey = null;
+
+  if (THEME?.name === 'fashion') {
+    notify('Order placed successfully! Reference: ' + (order.orderRef || order.id), 'success');
+    location.href = 'account-page.html';
+    return;
+  }
 
   /* Not every template HAS an order page — one of these four ships none, and
      sending the shopper to `order.html` after they have paid lands them on a
@@ -10855,8 +10887,56 @@ async function paintFashionOrdersPage() {
 }
 
 function showFashionOrderDetailModal(o) {
-  const modal = document.getElementById('orderDetail');
-  if (!modal) return;
+  let modal = document.getElementById('orderDetail');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal modalCentered fade modal-order_detail';
+    modal.id = 'orderDetail';
+    modal.innerHTML = `
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content tf-grid-layout md-col-2 gap-0">
+          <div class="col-left">
+            <div class="modal-heading text-center">
+              <h5 class="title-pop">Order Details</h5>
+              <span class="icon-X2 fs-24 cs-pointer link d-none d-md-block" data-bs-dismiss="modal"></span>
+            </div>
+            <div class="tf-grid-layout sm-col-2 md-col-1 lg-col-2 grid-info">
+              <div class="box-info">
+                <p class="info-title fw-medium cl-text-3">Contact Information</p>
+                <h6></h6>
+                <h6></h6>
+              </div>
+              <div class="box-info">
+                <p class="info-title fw-medium cl-text-3">Payment Method</p>
+                <h6></h6>
+              </div>
+              <div class="box-info">
+                <p class="info-title fw-medium cl-text-3">Shipping Address</p>
+                <h6></h6>
+              </div>
+              <div class="box-info">
+                <p class="info-title fw-medium cl-text-3">Billing Address</p>
+                <h6></h6>
+              </div>
+            </div>
+          </div>
+          <div class="col-right">
+            <div class="modal-heading text-center">
+              <h5 class="title-pop">Items</h5>
+              <span class="icon-X2 fs-24 cs-pointer link d-md-none" data-bs-dismiss="modal"></span>
+            </div>
+            <ul class="list-order-product"></ul>
+            <ul class="list-total"></ul>
+            <div class="last-total h5 fw-medium d-flex align-items-center justify-content-between">
+              <span>Total</span>
+              <span>₹0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  }
 
   const addr = o.shippingAddress || readJson('merch.address', {});
 
@@ -10869,6 +10949,10 @@ function showFashionOrderDetailModal(o) {
   const boxes = pickAll('.box-info', modal);
   boxes.forEach((box) => {
     const title = (box.querySelector('.info-title')?.textContent || '').toLowerCase();
+    if (/company/i.test(title)) {
+      box.remove();
+      return;
+    }
     const h6s = box.querySelectorAll('h6');
     if (/contact/i.test(title)) {
       if (h6s[0]) setText(h6s[0], custName);
@@ -10882,32 +10966,65 @@ function showFashionOrderDetailModal(o) {
 
   const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
   const listProd = modal.querySelector('.list-order-product');
-  if (listProd && items.length) {
+  if (listProd) {
     listProd.replaceChildren();
-    items.forEach((item) => {
-      const imgUrl = resolveOrderItemImage(item, catalogImageCache);
-      const li = document.createElement('li');
-      li.className = 'order-item fw-medium';
-      li.innerHTML = `
-        <div class="img-prd">
-          <img loading="lazy" width="80" height="100" src="${imgUrl}" alt="${escapeHtml(item.name || '')}" style="border-radius: 4px; object-fit: cover;" onerror="this.src='assets/images/product/product-3.jpg'">
-        </div>
-        <div class="infor-prd">
-          <span class="prd_name fw-medium lh-24">${escapeHtml(item.name || 'Product')}</span>
-          <div class="text-caption-01">
-            <span class="cl-text-2">Details:</span> ${escapeHtml(item.variantLabel || item.color || item.size || `Qty: ${item.qty || 1}`)}
+    if (items.length) {
+      items.forEach((item) => {
+        const imgUrl = resolveOrderItemImage(item, catalogImageCache);
+        const variantText = item.variantLabel || item.color || item.size ||
+          (item.name && item.name.includes('—') ? item.name.split('—')[1].trim() : `Qty: ${item.qty || 1}`);
+        const li = document.createElement('li');
+        li.className = 'order-item fw-medium';
+        li.innerHTML = `
+          <div class="img-prd">
+            <img loading="lazy" width="80" height="100" src="${imgUrl}" alt="${escapeHtml(item.name || '')}" style="border-radius: 4px; object-fit: cover;" onerror="this.src='assets/images/product/product-3.jpg'">
           </div>
-        </div>
-        <div class="quantity-price text-primary">
-          ${item.qty ? `${item.qty} × ` : ''}${money(item.price)}
-        </div>
-      `;
-      listProd.appendChild(li);
-    });
+          <div class="infor-prd">
+            <span class="prd_name fw-medium lh-24">${escapeHtml(item.name || 'Product')}</span>
+            <div class="text-caption-01">
+              <span class="cl-text-2">Details:</span> ${escapeHtml(variantText)}
+            </div>
+          </div>
+          <div class="quantity-price text-primary">
+            ${item.qty ? `${item.qty} × ` : ''}${money(item.price)}
+          </div>
+        `;
+        listProd.appendChild(li);
+      });
+    }
   }
 
-  const lastTotal = modal.querySelector('.last-total span:last-child');
-  if (lastTotal) setText(lastTotal, money(o.total || o.totalAmount));
+  const itemsSubtotal = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 1), 0);
+  const totalAmount = Number(o.total || o.totalAmount) || itemsSubtotal;
+  const discountVal = Number(o.discount || o.discountAmount || o.couponDiscount || 0);
+
+  const listTotal = modal.querySelector('.list-total');
+  if (listTotal) {
+    listTotal.replaceChildren();
+
+    const subLi = document.createElement('li');
+    subLi.className = 'total-item lh-24 fw-medium d-flex align-items-center justify-content-between';
+    subLi.innerHTML = `<span>Subtotal</span><span>${money(itemsSubtotal || totalAmount)}</span>`;
+    listTotal.appendChild(subLi);
+
+    const shipFee = Number(o.shippingFee || o.shippingRate || o.shipping || 0);
+    const shipLi = document.createElement('li');
+    shipLi.className = 'total-item lh-24 fw-medium d-flex align-items-center justify-content-between';
+    shipLi.innerHTML = `<span>Shipping</span><span>${shipFee > 0 ? money(shipFee) : 'Free'}</span>`;
+    listTotal.appendChild(shipLi);
+
+    if (discountVal > 0) {
+      const discLi = document.createElement('li');
+      discLi.className = 'total-item lh-24 fw-medium d-flex align-items-center justify-content-between text-success';
+      discLi.innerHTML = `<span>Discounts</span><span>-${money(discountVal)}</span>`;
+      listTotal.appendChild(discLi);
+    }
+  }
+
+  const lastTotal = modal.querySelector('.last-total');
+  if (lastTotal) {
+    lastTotal.innerHTML = `<span>Total</span><span>${money(totalAmount)}</span>`;
+  }
 
   if (window.bootstrap?.Modal) {
     window.bootstrap.Modal.getOrCreateInstance(modal).show();
@@ -10918,17 +11035,22 @@ function wireFashionAddressesPage() {
   const form = pick('.form-account-address');
   if (!form) return;
 
+  const u = user.get() || STORE_ME || {};
+  const [uFirst, ...uRest] = String(u.name || localStorage.getItem('merch.shopper_name') || '').trim().split(/\s+/);
+  const defaultEmail = u.email || localStorage.getItem('merch.shopper_email') || '';
+  const defaultPhone = u.phone || localStorage.getItem('merch.shopper_phone') || '';
+  const defaultState = localStorage.getItem('merch.shopper_state') || '';
+
   const addr = STORE_ADDRESS || readJson('merch.address', {
-    firstName: 'Tony',
-    lastName: 'Nguyen',
-    company: '2',
-    country: '2',
-    street: '2163 Phillips Gap Rd',
-    town: 'West Jefferson',
-    state: 'North Carolina',
-    zip: '28694',
-    phone: '3156666688',
-    email: 'hi.avitex@gmail.com',
+    firstName: localStorage.getItem('merch.shopper_first_name') || uFirst || '',
+    lastName: localStorage.getItem('merch.shopper_last_name') || uRest.join(' ') || '',
+    country: 'India',
+    street: '',
+    town: '',
+    state: defaultState,
+    zip: '',
+    phone: defaultPhone,
+    email: defaultEmail,
   });
 
   const setVal = (id, val) => {
@@ -10938,26 +11060,26 @@ function wireFashionAddressesPage() {
 
   if (addr) {
     const parts = (addr.name || '').trim().split(/\s+/);
-    setVal('first-name', addr.firstName || parts[0] || '');
-    setVal('last-name', addr.lastName || parts.slice(1).join(' ') || '');
-    setVal('company', addr.company || '2');
-    setVal('country', addr.country || '2');
+    setVal('first-name', addr.firstName || parts[0] || uFirst || '');
+    setVal('last-name', addr.lastName || parts.slice(1).join(' ') || uRest.join(' ') || '');
+    setVal('country', addr.country || 'India');
     setVal('street', addr.street || addr.line || '');
     setVal('town', addr.town || addr.city || '');
-    setVal('state', addr.state || '');
+    setVal('state', addr.state || defaultState || '');
     setVal('zip', addr.zip || addr.pincode || '');
-    setVal('phone', addr.phone || '');
-    setVal('email', addr.email || '');
+    setVal('phone', addr.phone || defaultPhone || '');
+    setVal('email', addr.email || defaultEmail || '');
   }
 
   form.onsubmit = async (e) => {
     e.preventDefault();
+    const fn = form.querySelector('#first-name')?.value.trim() || '';
+    const ln = form.querySelector('#last-name')?.value.trim() || '';
     const updated = {
-      name: (form.querySelector('#first-name')?.value || '').trim() + ' ' + (form.querySelector('#last-name')?.value || '').trim(),
-      firstName: form.querySelector('#first-name')?.value.trim() || '',
-      lastName: form.querySelector('#last-name')?.value.trim() || '',
-      company: form.querySelector('#company')?.value || '',
-      country: form.querySelector('#country')?.value || '',
+      name: [fn, ln].filter(Boolean).join(' ') || fn,
+      firstName: fn,
+      lastName: ln,
+      country: form.querySelector('#country')?.value || 'India',
       street: form.querySelector('#street')?.value.trim() || '',
       line: form.querySelector('#street')?.value.trim() || '',
       town: form.querySelector('#town')?.value.trim() || '',
@@ -10970,6 +11092,9 @@ function wireFashionAddressesPage() {
     };
     writeJson('merch.address', updated);
     STORE_ADDRESS = updated;
+    if (updated.state) {
+      try { localStorage.setItem('merch.shopper_state', updated.state); } catch {}
+    }
     try { await api.addAddress(updated); } catch {}
     notify('Address updated successfully.', 'success');
   };
