@@ -389,10 +389,10 @@
                 $("#anywhere-home").removeClass("bgshow");
               });
 
-              $(".message-show-action").on('click', function () {
-                $(".successfully-addedin-wishlist").show(500);
-                $("#anywhere-home").addClass("bgshow");
-              });
+              // $(".message-show-action").on('click', function () {
+              //   $(".successfully-addedin-wishlist").show(500);
+              //   $("#anywhere-home").addClass("bgshow");
+              // });
 
               $("#anywhere-home").on('click', function () {
                 $(".successfully-addedin-wishlist").hide(0);

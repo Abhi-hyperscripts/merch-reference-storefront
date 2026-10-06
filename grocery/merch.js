@@ -665,6 +665,72 @@ export const wishlist = {
   },
 };
 
+export function updateWishlistIcon(containerOrEl, active) {
+  if (!containerOrEl) return;
+  const btns = containerOrEl.matches?.('.single-action, .btn-wishlist, a.ml--20, [class*="wish"]')
+    ? [containerOrEl]
+    : pickAll('.action-share-option .single-action:first-child, .single-action[title*="Wishlist" i], .single-action.openuptip:first-child, a.ml--20, .single-share-option:first-child', containerOrEl);
+  btns.forEach((btn) => {
+    btn.classList.toggle('active', !!active);
+    const icon = btn.querySelector('i') || (btn.tagName === 'I' ? btn : null);
+    if (icon) {
+      if (active) {
+        icon.classList.remove('fa-light', 'fa-regular');
+        icon.classList.add('fa-solid');
+        icon.style.setProperty('color', '#e53e3e', 'important');
+      } else {
+        icon.classList.remove('fa-solid');
+        icon.classList.add('fa-light');
+        icon.style.removeProperty('color');
+      }
+    }
+  });
+}
+
+export function showWishlistOverlay(added) {
+  const overlay = pick('.successfully-addedin-wishlist');
+  const bg = pick('#anywhere-home, .anywere');
+  if (overlay) {
+    const textEl = pick('p', overlay);
+    const iconEl = pick('i', overlay);
+    if (textEl) {
+      textEl.textContent = added 
+        ? 'Your item has been added to wishlist successfully' 
+        : 'Your item has been removed from wishlist';
+      textEl.style.color = added ? 'var(--color-success, #22c55e)' : '#e53e3e';
+    }
+    if (iconEl) {
+      iconEl.className = added ? 'fa-regular fa-check' : 'fa-regular fa-trash-can';
+      iconEl.style.background = added ? 'var(--color-primary, #629D23)' : '#e53e3e';
+      iconEl.style.borderColor = added ? 'var(--color-success, #22c55e)' : '#e53e3e';
+    }
+    overlay.style.display = 'flex';
+    overlay.style.visibility = 'visible';
+    overlay.style.opacity = '1';
+    if (bg) bg.classList.add('bgshow');
+    clearTimeout(overlay._hideTimer);
+    overlay._hideTimer = setTimeout(() => {
+      overlay.style.display = 'none';
+      if (bg && !document.querySelector('.product-details-popup-wrapper.popup')) {
+        bg.classList.remove('bgshow');
+      }
+    }, 1800);
+  } else {
+    notify(added ? 'Saved to your wishlist.' : 'Removed from your wishlist.', 'success');
+  }
+}
+
+export function syncWishlistState(id, on) {
+  $$(`[data-merch-id="${id}"]`).forEach((card) => {
+    updateWishlistIcon(card, on);
+  });
+  $$('.product-details-popup-wrapper:not(.in-shopdetails)').forEach((panel) => {
+    if ((panel._merchProduct?.id === id) || (quickViewProduct?.id === id)) {
+      updateWishlistIcon(panel.querySelector('.ml--20, .single-share-option, [class*="wish"]'), on);
+    }
+  });
+}
+
 /* A compare list. There is no compare endpoint — this is entirely local, which
    is all the themes' compare pages ever needed. */
 const COMPARE_KEY = 'merch.compare';
@@ -1001,11 +1067,13 @@ function wireAction(el, action, data, ctx) {
       });
       break;
     case 'wishlist':
+      updateWishlistIcon(el, wishlist.has(data.id));
       el.addEventListener('click', async (e) => {
         stop(e);
         const on = await wishlist.toggle(data.id);
-        el.classList.toggle('active', on);
-        notify(on ? 'Saved to your wishlist.' : 'Removed from your wishlist.', 'success');
+        updateWishlistIcon(el, on);
+        showWishlistOverlay(on);
+        syncWishlistState(data.id, on);
       });
       break;
     case 'compare':
@@ -3668,8 +3736,11 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
     hydrated.add(container);
     repeat(t, slice, (node, p) => {
       node.dataset.merchId = p.id;
+      const card = node.matches?.('.single-shopping-card-one, .product-item, .product-cart') ? node : node.querySelector?.('.single-shopping-card-one, .product-item, .product-cart');
+      if (card) card.dataset.merchId = p.id;
       fillFields(node, spec.fields, p, { node, qtyEl: pick(THEME.qtyInput, node) });
       if (p.availability === 'out') node.classList.add('out-of-stock');
+      if (wishlist.has(p.id)) updateWishlistIcon(node, true);
     });
   }
   return containers[0];
@@ -3769,7 +3840,10 @@ function wireQuickView() {
     $$(sel).forEach((el) => { if (!panels.includes(el)) panels.push(el); });
   }
   if (!panels.length || panels[0].dataset.merchQuickView) return;
-  panels.forEach((el) => { el.dataset.merchQuickView = '1'; });
+  panels.forEach((el) => {
+    el.dataset.merchQuickView = '1';
+    el.querySelectorAll('.cart-edit, .quantity-edit').forEach((c) => c.remove());
+  });
 
   /* The text fields only. Anything carrying an `action` is wired once, below,
      against whichever product is currently showing — re-running wireAction per
@@ -3786,16 +3860,32 @@ function wireQuickView() {
       '[data-bs-target="#quick_view"], [data-bs-target="#quickAdd"]',
     );
     if (!trigger) return;
-    const id = trigger.closest('[data-merch-id]')?.dataset.merchId;
+    const cardEl = trigger.closest('[data-merch-id], .single-shopping-card-one, .product-item, .product-cart');
+    let id = cardEl?.dataset?.merchId || trigger.closest('[data-merch-id]')?.dataset?.merchId;
+    if (!id && cardEl) {
+      const link = cardEl.querySelector('a[href*="id="]') || trigger.closest('a[href*="id="]');
+      if (link) {
+        try {
+          const u = new URL(link.href, location.href);
+          id = u.searchParams.get('id');
+        } catch {}
+      }
+    }
     if (!id) return;                       // a trigger on markup we never filled
 
     try {
       const p = await api.product(id);
       quickViewProduct = p;
       for (const panel of panels) {
+        panel._merchProduct = p;
+        panel.querySelectorAll('.cart-edit, .quantity-edit').forEach((el) => el.remove());
         fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
         paintGalleryIn(panel, THEME.product?.gallery, p);
         paintQuickViewExtras(panel, p);
+        const wishBtn = panel.querySelector('.ml--20, .single-share-option, [class*="wish"]');
+        if (wishBtn) {
+          updateWishlistIcon(wishBtn, wishlist.has(p.id));
+        }
         /* After the theme has opened and laid the panel out, not before. */
         setTimeout(() => keepPanelControlsOnScreen(panel), 0);
         setTimeout(() => keepPanelControlsOnScreen(panel), 350);
@@ -3804,16 +3894,31 @@ function wireQuickView() {
   }, true);                                 // capture, so we fill BEFORE the theme opens it
 
   /* One handler for the panels' own buttons, reading whatever is showing. */
-  for (const modal of panels) modal.addEventListener('click', (e) => {
+  for (const modal of panels) modal.addEventListener('click', async (e) => {
+    const wish = e.target.closest('.ml--20, .single-share-option, a[title*="Wishlist" i], [class*="wish"]');
+    if (wish) {
+      const prod = modal._merchProduct || quickViewProduct;
+      if (!prod) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const on = await wishlist.toggle(prod.id);
+      updateWishlistIcon(wish, on);
+      showWishlistOverlay(on);
+      syncWishlistState(prod.id, on);
+      return;
+    }
+
     const add = e.target.closest('.btn-add-to-cart, .btn-action-price, .btn-cart2, .btn-cart, .rts-btn.btn-primary, .tf-btn');
-    if (!add || !quickViewProduct) return;
-    if (/wish/i.test(add.className)) return;
+    if (!add) return;
+    if (add.matches('.ml--20, .single-share-option') || /wish/i.test(add.className)) return;
+    const prod = modal._merchProduct || quickViewProduct;
+    if (!prod) return;
     e.preventDefault();
-    const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
-    if (quickViewProduct.availability === 'out') return notify('That one is sold out.', 'error');
-    cart.add(quickViewProduct, qty);
-    notify(quickViewProduct.name + ' added to your cart.', 'success');
-    track('add_to_cart', { itemId: quickViewProduct.id, qty, via: 'quickview' });
+    if (prod.availability === 'out') return notify('That one is sold out.', 'error');
+    const qty = 1;
+    cart.add(prod, qty);
+    notify(prod.name + ' added to your cart.', 'success');
+    track('add_to_cart', { itemId: prod.id, qty, via: 'quickview' });
   });
 }
 
@@ -6378,7 +6483,7 @@ pages.cart = async () => {
           <i class="fa-sharp fa-regular fa-cart-shopping" style="font-size:48px;color:#94a3b8;margin-bottom:16px;display:block;"></i>
           <h4 style="margin-bottom:8px;font-weight:600;">Your cart is empty</h4>
           <p style="color:#64748b;margin-bottom:20px;">Looks like you haven't added anything to your cart yet.</p>
-          <a href="shop.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
+          <a href="shop-grid-sidebar.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
         `;
         t.container.prepend(emptyDiv);
       }
@@ -6841,6 +6946,7 @@ async function paintStickyAtcBar(p) {
 
 function remapDeadLinks() {
   const shopPages = [
+    'shop.html',
     'shop-default-grid.html', 'shop-default-list.html', 'shop-fullwidth-list.html',
     'shop-fullwidth-grid.html', 'shop-right-sidebar.html', 'shop-filter-dropdown.html',
     'shop-filter-canvas.html', 'shop-categories-top-02.html', 'shop-collection.html',
@@ -10047,7 +10153,7 @@ pages.wishlist = async () => {
           <i class="fa-regular fa-heart" style="font-size:48px;color:#94a3b8;margin-bottom:16px;display:block;"></i>
           <h4 style="margin-bottom:8px;font-weight:600;">Your wishlist is empty</h4>
           <p style="color:#64748b;margin-bottom:20px;">Explore more products and add your favorites to wishlist!</p>
-          <a href="shop.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
+          <a href="shop-grid-sidebar.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
         `;
         t.container.appendChild(emptyDiv);
       }
