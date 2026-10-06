@@ -634,22 +634,35 @@ export const cart = {
    owns the real one; this is what makes the heart icon work signed out. */
 const WISH_KEY = 'merch.wishlist';
 const wishListeners = new Set();
+
+export function extractWishlistIds(res) {
+  if (!res) return [];
+  const list = Array.isArray(res) ? res : (res.items || res.wishlist || res.data || []);
+  return list.map((item) => {
+    if (typeof item === 'string') return item;
+    return item?.itemId || item?.id || item?._id || item?.productId || item?.product?.id || '';
+  }).filter(Boolean);
+}
+
 function writeWish(ids) {
-  writeJson(WISH_KEY, ids);
-  wishListeners.forEach((fn) => { try { fn(ids); } catch (e) { warn(e); } });
+  const cleanIds = extractWishlistIds(ids);
+  writeJson(WISH_KEY, cleanIds);
+  wishListeners.forEach((fn) => { try { fn(cleanIds); } catch (e) { warn(e); } });
 }
 
 export const wishlist = {
-  ids: () => readJson(WISH_KEY, []),
-  has: (id) => wishlist.ids().includes(id),
+  ids: () => extractWishlistIds(readJson(WISH_KEY, [])),
+  has: (id) => wishlist.ids().includes(String(id)),
   onChange: (fn) => { wishListeners.add(fn); return () => wishListeners.delete(fn); },
   async toggle(itemId) {
-    const on = !wishlist.has(itemId);
-    const ids = wishlist.ids().filter((x) => x !== itemId);
-    if (on) ids.push(itemId);
+    if (!itemId) return false;
+    const sId = String(itemId);
+    const on = !wishlist.has(sId);
+    const ids = wishlist.ids().filter((x) => x !== sId);
+    if (on) ids.push(sId);
     writeWish(ids);
     if (token.get()) {
-      try { on ? await api.addToWishlist(itemId) : await api.removeFromWishlist(itemId); }
+      try { on ? await api.addToWishlist(sId) : await api.removeFromWishlist(sId); }
       catch (e) { if (!(e instanceof ApiError && e.isUnauthenticated)) warn(e); }
     }
     return on;
@@ -660,8 +673,30 @@ export const wishlist = {
     const local = wishlist.ids();
     try {
       for (const id of local) await api.addToWishlist(id).catch(() => {});
-      writeWish((await api.wishlist()) || []);
+      const remote = await api.wishlist();
+      writeWish(extractWishlistIds(remote));
     } catch (e) { warn(e); }
+  },
+  /* Validate cached wishlist IDs against the actual store catalogue */
+  async refresh() {
+    if (token.get()) {
+      try {
+        const remote = await api.wishlist();
+        writeWish(extractWishlistIds(remote));
+      } catch {}
+    }
+    const current = wishlist.ids();
+    if (!current.length) return current;
+    try {
+      const fresh = await api.products(current);
+      const valid = (fresh || []).map((p) => p.id);
+      if (valid.length !== current.length) {
+        writeWish(valid);
+      }
+      return valid;
+    } catch {
+      return current;
+    }
   },
 };
 
@@ -2901,8 +2936,8 @@ function paintHeader() {
   pickAll(h.cartCount).forEach((el) => setText(el, cartCount));
   if (h.wishCount) pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
 
-  pickAll('.btn-border-only.wishlist').forEach((btn) => {
-    let num = btn.querySelector('.number');
+  pickAll('.btn-border-only.wishlist, .nav-wishlist > a, [class*="wishlist-btn"]').forEach((btn) => {
+    let num = btn.querySelector('.number, .count-box, .notification, .badge');
     if (!num) {
       num = document.createElement('span');
       num.className = 'number';
@@ -2910,17 +2945,7 @@ function paintHeader() {
     }
     setText(num, wishCount);
   });
-
-  pickAll('.nav-wishlist > a').forEach((a) => {
-    let num = a.querySelector('.count-box');
-    if (!num) {
-      num = document.createElement('span');
-      num.className = 'count-box';
-      a.appendChild(num);
-    }
-    setText(num, wishCount);
-  });
-  pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
+  if (h.wishCount) pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
 
   pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
 
@@ -10124,15 +10149,15 @@ async function mountGoogleButton() {
 /* --- WISHLIST, COMPARE, BLOG --------------------------------------------- */
 
 pages.wishlist = async () => {
-  let ids = wishlist.ids();
-  if (token.get()) {
-    /* An array of item-id STRINGS, not objects. `.map(x => x.itemId)` on it
-       yields a list of undefineds, and `api.products` on those returns the
-       whole catalogue as "your wishlist". */
-    try { ids = (await api.wishlist()) || []; } catch { /* fall back to the local list */ }
-  }
+  let ids = await wishlist.refresh();
   let items = [];
-  try { items = await api.products(ids); } catch (e) { return showError(e); }
+  if (ids.length) {
+    try { items = await api.products(ids); } catch (e) { return showError(e); }
+  }
+  const validIds = (items || []).map((p) => p.id);
+  if (validIds.length !== ids.length) {
+    writeWish(validIds);
+  }
   /* A wishlist page is a product grid, and several themes render it as a cart
      table instead — try the grid first, then the table. */
   if (!renderProducts(items)) {
@@ -10781,6 +10806,7 @@ async function boot() {
   }
 
   paintHeader();
+  wishlist.refresh().then(() => paintHeader()).catch(() => {});
   /* paintFashionMiniCart self-gates on THEME.name, so this is a no-op on the other
      three themes — it is wired here, unconditionally, because that is where the
      fashion copy wired it and the guard already lives inside the function. */
