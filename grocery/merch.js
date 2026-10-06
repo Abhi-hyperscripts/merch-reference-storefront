@@ -1237,8 +1237,8 @@ const THEMES = {
            subtitle field, so the slot comes off rather than carry either the
            alt or the template's own demo copy. */
         pre:   { sel: '.pre', dropWhen: () => true },
-        title: { sel: '.title', text: bannerTitle },
-        cta:   { sel: 'a.rts-btn', attr: 'href', value: bannerLink },
+        title: { sel: '.title', text: bannerTitle, hideWhen: (b) => !b.title },
+        cta:   { sel: 'a.rts-btn', dropWhen: () => true },
       },
     },
     categories: {
@@ -4298,7 +4298,18 @@ async function paintBanners(data) {
     show(section, false);
     return;
   }
-  repeat(t, banners, (node, b) => fillFields(node, spec.fields, b, { node }));
+  repeat(t, banners, (node, b) => {
+    fillFields(node, spec.fields, b, { node });
+    const linkUrl = storeLink(b.link);
+    if (b.link && linkUrl && linkUrl !== '#') {
+      const card = pick('.banner-bg-image', node) || node;
+      card.style.cursor = 'pointer';
+      card.onclick = (e) => {
+        if (e.target.closest('a')) return;
+        location.href = linkUrl;
+      };
+    }
+  });
   ensureBannerLegible(spec, t.container);
   refreshSwipers();
 }
