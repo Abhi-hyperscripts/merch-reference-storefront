@@ -24110,4 +24110,18 @@ html:not([dir=rtl]) .noUi-horizontal .noUi-handle {
   border-top: 1px solid #eee;
 }
 
+/* Hide Compare everywhere */
+.compare,
+li.compare,
+a.compare,
+a[href="#compare"],
+a[href*="compare.html"],
+.canvas-compare,
+#compare,
+.product-extra-icon[href="#compare"],
+.product-extra-icon:has(.icon-ArrowsLeftRight),
+[data-action="compare"] {
+  display: none !important;
+}
+
 

@@ -736,8 +736,9 @@ export const wishlist = {
     return false;
   },
   async toggle(itemId) {
-    if (!itemId) return false;
+    if (!itemId || itemId === 'undefined' || itemId === 'null') return false;
     const sId = String(itemId).trim();
+    if (!sId) return false;
     const on = !wishlist.has(sId);
     const ids = wishlist.ids().filter((x) => x !== sId);
     if (on) ids.push(sId);
@@ -784,11 +785,13 @@ export const wishlist = {
     if (!current.length) return current;
     try {
       const fresh = await api.products(current);
-      const valid = Array.isArray(fresh) ? fresh.map((p) => p.id) : ((fresh?.products || fresh?.items || []).map((p) => p.id));
-      if (valid.length !== current.length) {
+      const list = Array.isArray(fresh) ? fresh : (fresh?.products || fresh?.items || []);
+      const currentSet = new Set(current);
+      const valid = list.filter((p) => currentSet.has(p?.id)).map((p) => p.id);
+      if (valid.length && valid.length !== current.length) {
         writeWish(valid);
       }
-      return valid;
+      return current;
     } catch {
       return current;
     }
@@ -916,6 +919,12 @@ function unitOf(card, spec, boundary = null) {
     node.parentElement !== document.body &&
     node.parentElement !== boundary &&
     node !== boundary &&
+    !matchesAny(node.parentElement, spec?.container || '') &&
+    !matchesAny(node.parentElement, RAILS) &&
+    !node.parentElement.classList.contains('wrapper-wishlist') &&
+    !node.parentElement.classList.contains('wrapper-shop') &&
+    !node.parentElement.classList.contains('tf-grid-layout') &&
+    !node.parentElement.classList.contains('tf-list-layout') &&
     realCards(spec, node.parentElement).length === 1 &&
     !swallowsAForm(card, node.parentElement)
   ) node = node.parentElement;
@@ -1133,17 +1142,17 @@ function wireAction(el, action, data, ctx) {
     case 'wishlist':
       el.addEventListener('click', async (e) => {
         stop(e);
+        if (!data?.id) return;
         const on = await wishlist.toggle(data.id);
         syncWishlistCardStates();
         notify(on ? 'Added to wishlist.' : 'Removed from wishlist.', 'success');
       });
       break;
     case 'compare':
-      el.addEventListener('click', (e) => {
-        stop(e);
-        const on = compare.toggle(data.id);
-        notify(on ? 'Added to compare.' : 'Removed from compare.', 'success');
-      });
+      if (el) {
+        const li = el.closest('li.compare') || el;
+        li.remove();
+      }
       break;
     case 'remove':
       el.addEventListener('click', (e) => { stop(e); cart.remove(data.itemId || data.id); ctx.rerender?.(); });
@@ -1401,7 +1410,7 @@ const THEMES = {
         qty:       { sel: '.quantity-edit .input', value: () => 1 },
         add:       { sel: '.cart-counter-action .rts-btn', action: 'add' },
         wish:      { sel: '.action-share-option .single-action:nth-child(1)', action: 'wishlist' },
-        compare:   { sel: '.action-share-option .single-action:nth-child(2)', action: 'compare' },
+        compare:   { sel: '.action-share-option .single-action:nth-child(2), [data-action="compare"]', dropWhen: () => true },
       },
     },
 
@@ -1709,7 +1718,7 @@ const THEMES = {
         countdown: { sel: '.product-countdown', dropWhen: () => true, all: true },
         add:    { sel: '.btn-cart', action: 'add', all: true },
         wish:   { sel: '.button-group a:nth-child(1)', action: 'wishlist', all: true },
-        compare:{ sel: '.button-group a:nth-child(2)', action: 'compare', all: true },
+        compare:{ sel: '.button-group a:nth-child(2), [data-action="compare"]', dropWhen: () => true, all: true },
       },
     },
 
@@ -1963,7 +1972,7 @@ THEMES.electronic = {
       sizes: { sel: '.size-list|.variant-box', dropWhen: (p) => !(p.variantCount > 1) },
       add:   { sel: '.btn-main-product|.btn-add-to-cart', action: 'add' },
       wish:  { sel: '.box-icon.wishlist', action: 'wishlist' },
-      compare: { sel: '.box-icon.compare', action: 'compare' },
+      compare: { sel: '.box-icon.compare, [data-action="compare"], [href*="#compare"]', dropWhen: () => true },
     },
   },
 
@@ -2202,7 +2211,7 @@ THEMES.fashion = {
          `.box-icon.wishlist` nor `.box-icon.compare` exists anywhere in it,
          so both controls were dead on every card. */
       wish:  { sel: '.product-action_list .wishlist a|.box-icon.wishlist', action: 'wishlist' },
-      compare: { sel: '.product-action_list .compare a|.box-icon.compare', action: 'compare' },
+      compare: { sel: '.product-action_list .compare, .compare.box-icon, [href*="#compare"], [data-action="compare"]', dropWhen: () => true },
     },
   },
 
@@ -2242,6 +2251,7 @@ THEMES.fashion = {
       add:      { sel: '.btn-action-price', action: 'add' },
       addSticky:{ sel: '.btn-add-to-cart', action: 'add' },
       buy:      { sel: 'a[href*="checkout"].tf-btn', action: 'buy' },
+      compare:  { sel: 'a[href*="#compare"], .product-extra-icon:has([href*="#compare"]), .product-extra-icon:has(.icon-ArrowsLeftRight)', dropWhen: () => true },
     },
     variants: { container: '.tf-product-variant', group: '.variant-picker-item' },
     gallery: { images: '.tf-product-media-main .item img', thumbs: '.tf-product-media-thumbs .item img' },
@@ -2327,7 +2337,12 @@ THEMES.fashion = {
    Fill them with something real. Hide them only if the store cannot answer,
    because an empty strip is still better than an invented one. */
 async function fillStrayStrips() {
-  const strays = productContainers().filter((el) => !hydrated.has(el) && el.offsetParent !== null);
+  if (PAGE === 'wishlist' || PAGE === 'cart' || PAGE === 'checkout' || PAGE === 'account' || PAGE === 'orders' || PAGE === 'addresses') return;
+  const strays = productContainers().filter((el) => {
+    if (hydrated.has(el)) return false;
+    if (el.closest('.wrapper-wishlist, .section-wishlist, #wrapper-wishlist')) return false;
+    return el.offsetParent !== null;
+  });
   if (!strays.length) return;
 
   let stock = [];
@@ -4428,14 +4443,15 @@ const COMPARE_TEMPLATE = new WeakMap();
 /* Repaint whenever a compare table could come into view: on the page that owns
    one, and on the capture phase of any compare trigger — BEFORE the theme's own
    handler opens the modal, so it is never seen holding the previous contents. */
+function removeAllCompareElements(root = document) {
+  try {
+    const list = root.querySelectorAll('li.compare, .box-icon.compare, a[href*="#compare"], .canvas-compare, #compare, a[href="compare.html"], a[href*="compare.html"], .product-extra-icon:has(.icon-ArrowsLeftRight), a[href="#compare"], [data-action="compare"]');
+    list.forEach((el) => el.remove());
+  } catch {}
+}
+
 function wireCompare() {
-  if (!THEME?.compare) return;
-  paintCompare().catch((e) => warn('compare', e));
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('[data-merch-action="compare"], .compare, [data-bs-target="#exampleModal"], a[href*="compare"]')) return;
-    /* After the toggle handler has run, so the list already includes this item. */
-    setTimeout(() => paintCompare().catch((err) => warn('compare', err)), 0);
-  }, true);
+  removeAllCompareElements();
 }
 
 const pages = {};
@@ -11811,7 +11827,15 @@ pages.wishlist = async () => {
   let items = [];
   try {
     const res = await api.products(ids);
-    items = Array.isArray(res) ? res : (res?.products || res?.items || []);
+    const list = Array.isArray(res) ? res : (res?.products || res?.items || []);
+    const idSet = new Set(ids.map(String));
+    items = list.filter((p) => idSet.has(String(p?.id)));
+    if (!items.length && ids.length) {
+      try {
+        const individual = await Promise.all(ids.map((id) => api.product(id).catch(() => null)));
+        items = individual.filter(Boolean);
+      } catch {}
+    }
   } catch (e) { return showError(e); }
 
   const wishGrid = pick('.wrapper-wishlist');
@@ -11828,12 +11852,18 @@ pages.wishlist = async () => {
   };
 
   if (wishGrid) {
+    hydrated.add(wishGrid);
+    if (wishGrid.parentElement) hydrated.add(wishGrid.parentElement);
+    const wishSec = wishGrid.closest('section, .section-wishlist');
+    if (wishSec) hydrated.add(wishSec);
+
     if (!items.length) {
       renderWishlistGridEmpty();
       return;
     }
     renderProducts(items, THEME.listing, wishGrid);
     wireQuickView();
+    removeAllCompareElements(wishGrid);
     const cards = pickAll('.card-product', wishGrid);
     cards.forEach((card) => {
       const id = card.dataset.merchId;
@@ -12029,10 +12059,7 @@ document.addEventListener('click', async (e) => {
 });
 
 pages.compare = async () => {
-  let items = [];
-  try { items = await api.products(compare.ids()); } catch (e) { return showError(e); }
-  if (!items.length) return;
-  renderProducts(items);
+  location.replace('shop-left-sidebar.html');
 };
 
 pages.blog = async () => {
@@ -12589,6 +12616,7 @@ async function boot() {
   /* Only needed on path A; on path B the theme has just initialised over the
      finished DOM and there is nothing to refresh. */
   if (!deferredThemeScripts().length) { try { THEME.reinit?.(); } catch (e) { warn(e); } }
+  try { removeAllCompareElements(); } catch {}
   runAfterTheme();
 }
 
