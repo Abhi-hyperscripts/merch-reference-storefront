@@ -636,12 +636,16 @@
                 const $selectedOption = $countrySelect.find("option:selected");
                 const provincesData = $selectedOption.attr("data-provinces");
 
-                const provinces = JSON.parse(provincesData);
+                let provinces = [];
+                try {
+                    provinces = provincesData ? JSON.parse(provincesData) : [];
+                } catch (e) {
+                    provinces = [];
+                }
                 $provinceSelect.empty();
 
-                if (provinces.length === 0) {
-                    $provinceSelect.append($("<option>").text("------"));
-                } else {
+                $provinceSelect.append($("<option>").val("").text("Choose State").prop("disabled", true).prop("selected", true));
+                if (Array.isArray(provinces) && provinces.length > 0) {
                     provinces.forEach(function (province) {
                         $provinceSelect.append($("<option>").val(province[0]).text(province[1]));
                     });
@@ -649,6 +653,9 @@
             }
 
             $countrySelect.on("change", updateProvinces);
+            if ($provinceSelect.children("option").length <= 1) {
+                updateProvinces();
+            }
 
             function validateZipcode(zipcode, country) {
                 let regex;
@@ -1402,11 +1409,7 @@
     -------------------------------------------------------------------------*/
     var checkOut = function () {
         $("#checkout-btn").on("click", function () {
-            if ($("#checkOutAgree").is(":checked")) {
-                window.location.href = "checkout.html";
-            } else {
-                alert("Please agree to the Terms and Conditions before continuing.");
-            }
+            window.location.href = "checkout.html";
         });
     };
 

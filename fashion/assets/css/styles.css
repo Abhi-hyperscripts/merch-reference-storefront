@@ -2709,19 +2709,24 @@ header.header-sticky.tf-header-landing {
   align-items: center;
   gap: 12px;
 }
-.nav-icon-list .shop-cart {
+.nav-icon-list .shop-cart,
+.nav-icon-list .nav-wishlist,
+.nav-icon-list a[href*="wishlist"] {
   position: relative;
 }
-.nav-icon-list .shop-cart .count {
+.nav-icon-list .shop-cart .count,
+.nav-icon-list .nav-wishlist .count,
+.nav-icon-list a[href*="wishlist"] .count {
   position: absolute;
   top: -4px;
   right: -4px;
-  width: 16px;
+  min-width: 16px;
   height: 16px;
+  padding: 0 3px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: 999px;
   font-size: 11px;
   line-height: 10px;
   color: var(--white);
@@ -5166,13 +5171,14 @@ header.header-sticky.tf-header-landing {
   position: absolute;
   top: -4px;
   right: -4px;
-  width: 16px;
+  min-width: 16px;
   height: 16px;
+  padding: 0 3px;
   display: flex;
   align-items: center;
   justify-content: center;
   background-color: var(--primary);
-  border-radius: 50%;
+  border-radius: 999px;
   font-size: 11px;
   line-height: 10px;
   color: var(--white);
@@ -24102,6 +24108,20 @@ html:not([dir=rtl]) .noUi-horizontal .noUi-handle {
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid #eee;
+}
+
+/* Hide Compare everywhere */
+.compare,
+li.compare,
+a.compare,
+a[href="#compare"],
+a[href*="compare.html"],
+.canvas-compare,
+#compare,
+.product-extra-icon[href="#compare"],
+.product-extra-icon:has(.icon-ArrowsLeftRight),
+[data-action="compare"] {
+  display: none !important;
 }
 
 

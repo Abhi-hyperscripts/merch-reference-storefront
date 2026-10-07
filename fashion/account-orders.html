@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 
 <!--[if IE 8]><html class="ie" xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-US" lang="en-US"> <![endif]-->
 <!--[if (gte IE 9)|!(IE)]><!-->
@@ -180,8 +180,9 @@
                                 </a>
                             </li>
                             <li class="d-none d-sm-block">
-                                <a href="wishlist.html" class="nav-icon-item link">
+                                <a href="wishlist.html" class="nav-icon-item link nav-wishlist">
                                     <i class="icon icon-HeartStraight"></i>
+                                    <span class="count" style="display: none;"></span>
                                 </a>
                             </li>
                             <li>
@@ -285,379 +286,51 @@
                                 <div class="tab-content">
                                     <div class="tab-pane active show" id="all-order" role="tabpanel">
                                         <div class="my-order_list d-grid gap-24">
-                                            <div class="wg-my-order">
-                                                <div class="order-heading">
-                                                    <div class="order_number fw-medium">
-                                                        Order Number:
-                                                        <span class="number-code fw-semibold">S184989823</span>
-                                                    </div>
-                                                    <div class="order_status fw-medium">
-                                                        Order Status:
-                                                        <div class="tb-order_status text-label stt-delivery">
-                                                            Delivery
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div class="order-content">
-                                                    <div class="order_prd_item">
-                                                        <div class="prd__image">
-                                                            <img loading="lazy" width="100" height="100"
-                                                                src="assets/images/product/square/product-1.jpg"
-                                                                alt="Image">
-                                                        </div>
-                                                        <div class="prd__info">
-                                                            <p class="name fw-medium">Contrasting sheepskin sweatshirt
-                                                            </p>
-                                                            <p class="type cl-text-2">XL/Blue </p>
-                                                        </div>
-                                                        <div class="prd__price fw-medium">
-                                                            <span class="quantity">1</span>
-                                                            x
-                                                            <span class="price">$60.00</span>
-                                                        </div>
-                                                    </div>
-                                                    <div class="order_prd_item">
-                                                        <div class="prd__image">
-                                                            <img loading="lazy" width="100" height="100"
-                                                                src="assets/images/product/square/product-3.jpg"
-                                                                alt="Image">
-                                                        </div>
-                                                        <div class="prd__info">
-                                                            <p class="name fw-medium">Contrasting sheepskin sweatshirt
-                                                            </p>
-                                                            <p class="type cl-text-2">XL/Blue </p>
-                                                        </div>
-                                                        <div class="prd__price fw-medium">
-                                                            <span class="quantity">1</span>
-                                                            x
-                                                            <span class="price">$60.00</span>
-                                                        </div>
-                                                    </div>
-                                                    <div class="group-btn">
-                                                        <a href="#orderDetail" data-bs-toggle="modal"
-                                                            class="action-order tf-btn small animate-btn">
-                                                            Order Details
-                                                        </a>
-                                                        <a href="#" class="action-order tf-btn btn-stroke small">
-                                                            Cancel Order
-                                                        </a>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div class="wg-my-order">
-                                                <div class="order-heading">
-                                                    <div class="order_number fw-medium">
-                                                        Order Number:
-                                                        <span class="number-code fw-semibold">S184989823</span>
-                                                    </div>
-                                                    <div class="order_status fw-medium">
-                                                        Order Status:
-                                                        <div class="tb-order_status text-label stt-pending">
-                                                            Pending
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div class="order-content">
-                                                    <div class="order_prd_item">
-                                                        <div class="prd__image">
-                                                            <img loading="lazy" width="100" height="100"
-                                                                src="assets/images/product/square/product-4.jpg"
-                                                                alt="Image">
-                                                        </div>
-                                                        <div class="prd__info">
-                                                            <p class="name fw-medium">Contrasting sheepskin sweatshirt
-                                                            </p>
-                                                            <p class="type cl-text-2">XL/Blue </p>
-                                                        </div>
-                                                        <div class="prd__price fw-medium">
-                                                            <span class="quantity">1</span>
-                                                            x
-                                                            <span class="price">$60.00</span>
-                                                        </div>
-                                                    </div>
-                                                    <div class="group-btn">
-                                                        <a href="#orderDetail" data-bs-toggle="modal"
-                                                            class="action-order tf-btn small animate-btn">
-                                                            Order Details
-                                                        </a>
-                                                        <a href="#" class="action-order tf-btn btn-stroke small">
-                                                            Cancel Order
-                                                        </a>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div class="wg-my-order">
-                                                <div class="order-heading">
-                                                    <div class="order_number fw-medium">
-                                                        Order Number:
-                                                        <span class="number-code fw-semibold">S184989823</span>
-                                                    </div>
-                                                    <div class="order_status fw-medium">
-                                                        Order Status:
-                                                        <div class="tb-order_status text-label stt-completed">
-                                                            Completed
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div class="order-content">
-                                                    <div class="order_prd_item">
-                                                        <div class="prd__image">
-                                                            <img loading="lazy" width="100" height="100"
-                                                                src="assets/images/product/square/product-6.jpg"
-                                                                alt="Image">
-                                                        </div>
-                                                        <div class="prd__info">
-                                                            <p class="name fw-medium">Contrasting sheepskin sweatshirt
-                                                            </p>
-                                                            <p class="type cl-text-2">XL/Blue </p>
-                                                        </div>
-                                                        <div class="prd__price fw-medium">
-                                                            <span class="quantity">1</span>
-                                                            x
-                                                            <span class="price">$60.00</span>
-                                                        </div>
-                                                    </div>
-                                                    <div class="group-btn">
-                                                        <a href="#orderDetail" data-bs-toggle="modal"
-                                                            class="action-order tf-btn small animate-btn">
-                                                            Order Details
-                                                        </a>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div class="wg-my-order">
-                                                <div class="order-heading">
-                                                    <div class="order_number fw-medium">
-                                                        Order Number:
-                                                        <span class="number-code fw-semibold">S184989823</span>
-                                                    </div>
-                                                    <div class="order_status fw-medium">
-                                                        Order Status:
-                                                        <div class="tb-order_status text-label stt-canceled">
-                                                            Canceled
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div class="order-content">
-                                                    <div class="order_prd_item">
-                                                        <div class="prd__image">
-                                                            <img loading="lazy" width="100" height="100"
-                                                                src="assets/images/product/square/product-8.jpg"
-                                                                alt="Image">
-                                                        </div>
-                                                        <div class="prd__info">
-                                                            <p class="name fw-medium">Contrasting sheepskin sweatshirt
-                                                            </p>
-                                                            <p class="type cl-text-2">XL/Blue </p>
-                                                        </div>
-                                                        <div class="prd__price fw-medium">
-                                                            <span class="quantity">1</span>
-                                                            x
-                                                            <span class="price">$60.00</span>
-                                                        </div>
-                                                    </div>
-                                                    <div class="group-btn">
-                                                        <a href="#orderDetail" data-bs-toggle="modal"
-                                                            class="action-order tf-btn small animate-btn">
-                                                            Order Details
-                                                        </a>
-                                                    </div>
-                                                </div>
+                                            <div class="text-center py-40 my-20">
+                                                <i class="icon icon-Package fs-48 cl-text-3 mb-12 d-block"></i>
+                                                <h6 class="fw-medium mb-4">No orders placed yet</h6>
+                                                <p class="text-caption-01 cl-text-2 mb-16">You have no orders yet.</p>
+                                                <a href="shop-left-sidebar.html" class="tf-btn small animate-btn">Start Shopping</a>
                                             </div>
                                         </div>
                                     </div>
                                     <div class="tab-pane" id="pending" role="tabpanel">
                                         <div class="my-order_list d-grid gap-24">
-                                            <div class="wg-my-order">
-                                                <div class="order-heading">
-                                                    <div class="order_number fw-medium">
-                                                        Order Number:
-                                                        <span class="number-code fw-semibold">S184989823</span>
-                                                    </div>
-                                                    <div class="order_status fw-medium">
-                                                        Order Status:
-                                                        <div class="tb-order_status text-label stt-pending">
-                                                            Pending
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div class="order-content">
-                                                    <div class="order_prd_item">
-                                                        <div class="prd__image">
-                                                            <img loading="lazy" width="100" height="100"
-                                                                src="assets/images/product/square/product-4.jpg"
-                                                                alt="Image">
-                                                        </div>
-                                                        <div class="prd__info">
-                                                            <p class="name fw-medium">Contrasting sheepskin sweatshirt
-                                                            </p>
-                                                            <p class="type cl-text-2">XL/Blue </p>
-                                                        </div>
-                                                        <div class="prd__price fw-medium">
-                                                            <span class="quantity">1</span>
-                                                            x
-                                                            <span class="price">$60.00</span>
-                                                        </div>
-                                                    </div>
-                                                    <div class="group-btn">
-                                                        <a href="#orderDetail" data-bs-toggle="modal"
-                                                            class="action-order tf-btn small animate-btn">
-                                                            Order Details
-                                                        </a>
-                                                        <a href="#" class="action-order tf-btn btn-stroke small">
-                                                            Cancel Order
-                                                        </a>
-                                                    </div>
-                                                </div>
+                                            <div class="text-center py-40 my-20">
+                                                <i class="icon icon-Package fs-48 cl-text-3 mb-12 d-block"></i>
+                                                <h6 class="fw-medium mb-4">No pending orders</h6>
+                                                <p class="text-caption-01 cl-text-2 mb-16">You have no orders under this status.</p>
+                                                <a href="shop-left-sidebar.html" class="tf-btn small animate-btn">Start Shopping</a>
                                             </div>
                                         </div>
                                     </div>
                                     <div class="tab-pane" id="delivery" role="tabpanel">
                                         <div class="my-order_list d-grid gap-24">
-                                            <div class="wg-my-order">
-                                                <div class="order-heading">
-                                                    <div class="order_number fw-medium">
-                                                        Order Number:
-                                                        <span class="number-code fw-semibold">S184989823</span>
-                                                    </div>
-                                                    <div class="order_status fw-medium">
-                                                        Order Status:
-                                                        <div class="tb-order_status text-label stt-delivery">
-                                                            Delivery
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div class="order-content">
-                                                    <div class="order_prd_item">
-                                                        <div class="prd__image">
-                                                            <img loading="lazy" width="100" height="100"
-                                                                src="assets/images/product/square/product-1.jpg"
-                                                                alt="Image">
-                                                        </div>
-                                                        <div class="prd__info">
-                                                            <p class="name fw-medium">Contrasting sheepskin sweatshirt
-                                                            </p>
-                                                            <p class="type cl-text-2">XL/Blue </p>
-                                                        </div>
-                                                        <div class="prd__price fw-medium">
-                                                            <span class="quantity">1</span>
-                                                            x
-                                                            <span class="price">$60.00</span>
-                                                        </div>
-                                                    </div>
-                                                    <div class="order_prd_item">
-                                                        <div class="prd__image">
-                                                            <img loading="lazy" width="100" height="100"
-                                                                src="assets/images/product/square/product-3.jpg"
-                                                                alt="Image">
-                                                        </div>
-                                                        <div class="prd__info">
-                                                            <p class="name fw-medium">Contrasting sheepskin sweatshirt
-                                                            </p>
-                                                            <p class="type cl-text-2">XL/Blue </p>
-                                                        </div>
-                                                        <div class="prd__price fw-medium">
-                                                            <span class="quantity">1</span>
-                                                            x
-                                                            <span class="price">$60.00</span>
-                                                        </div>
-                                                    </div>
-                                                    <div class="group-btn">
-                                                        <a href="#orderDetail" data-bs-toggle="modal"
-                                                            class="action-order tf-btn small animate-btn">
-                                                            Order Details
-                                                        </a>
-                                                        <a href="#" class="action-order tf-btn btn-stroke small">
-                                                            Cancel Order
-                                                        </a>
-                                                    </div>
-                                                </div>
+                                            <div class="text-center py-40 my-20">
+                                                <i class="icon icon-Package fs-48 cl-text-3 mb-12 d-block"></i>
+                                                <h6 class="fw-medium mb-4">No delivery orders</h6>
+                                                <p class="text-caption-01 cl-text-2 mb-16">You have no orders under this status.</p>
+                                                <a href="shop-left-sidebar.html" class="tf-btn small animate-btn">Start Shopping</a>
                                             </div>
                                         </div>
                                     </div>
                                     <div class="tab-pane" id="completed" role="tabpanel">
                                         <div class="my-order_list d-grid gap-24">
-                                            <div class="wg-my-order">
-                                                <div class="order-heading">
-                                                    <div class="order_number fw-medium">
-                                                        Order Number:
-                                                        <span class="number-code fw-semibold">S184989823</span>
-                                                    </div>
-                                                    <div class="order_status fw-medium">
-                                                        Order Status:
-                                                        <div class="tb-order_status text-label stt-completed">
-                                                            Completed
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div class="order-content">
-                                                    <div class="order_prd_item">
-                                                        <div class="prd__image">
-                                                            <img loading="lazy" width="100" height="100"
-                                                                src="assets/images/product/square/product-6.jpg"
-                                                                alt="Image">
-                                                        </div>
-                                                        <div class="prd__info">
-                                                            <p class="name fw-medium">Contrasting sheepskin sweatshirt
-                                                            </p>
-                                                            <p class="type cl-text-2">XL/Blue </p>
-                                                        </div>
-                                                        <div class="prd__price fw-medium">
-                                                            <span class="quantity">1</span>
-                                                            x
-                                                            <span class="price">$60.00</span>
-                                                        </div>
-                                                    </div>
-                                                    <div class="group-btn">
-                                                        <a href="#orderDetail" data-bs-toggle="modal"
-                                                            class="action-order tf-btn small animate-btn">
-                                                            Order Details
-                                                        </a>
-                                                    </div>
-                                                </div>
+                                            <div class="text-center py-40 my-20">
+                                                <i class="icon icon-Package fs-48 cl-text-3 mb-12 d-block"></i>
+                                                <h6 class="fw-medium mb-4">No completed orders</h6>
+                                                <p class="text-caption-01 cl-text-2 mb-16">You have no orders under this status.</p>
+                                                <a href="shop-left-sidebar.html" class="tf-btn small animate-btn">Start Shopping</a>
                                             </div>
                                         </div>
                                     </div>
                                     <div class="tab-pane" id="canceled" role="tabpanel">
                                         <div class="my-order_list d-grid gap-24">
-                                            <div class="wg-my-order">
-                                                <div class="order-heading">
-                                                    <div class="order_number fw-medium">
-                                                        Order Number:
-                                                        <span class="number-code fw-semibold">S184989823</span>
-                                                    </div>
-                                                    <div class="order_status fw-medium">
-                                                        Order Status:
-                                                        <div class="tb-order_status text-label stt-canceled">
-                                                            Canceled
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div class="order-content">
-                                                    <div class="order_prd_item">
-                                                        <div class="prd__image">
-                                                            <img loading="lazy" width="100" height="100"
-                                                                src="assets/images/product/square/product-8.jpg"
-                                                                alt="Image">
-                                                        </div>
-                                                        <div class="prd__info">
-                                                            <p class="name fw-medium">Contrasting sheepskin sweatshirt
-                                                            </p>
-                                                            <p class="type cl-text-2">XL/Blue </p>
-                                                        </div>
-                                                        <div class="prd__price fw-medium">
-                                                            <span class="quantity">1</span>
-                                                            x
-                                                            <span class="price">$60.00</span>
-                                                        </div>
-                                                    </div>
-                                                    <div class="group-btn">
-                                                        <a href="#orderDetail" data-bs-toggle="modal"
-                                                            class="action-order tf-btn small animate-btn">
-                                                            Order Details
-                                                        </a>
-                                                    </div>
-                                                </div>
+                                            <div class="text-center py-40 my-20">
+                                                <i class="icon icon-Package fs-48 cl-text-3 mb-12 d-block"></i>
+                                                <h6 class="fw-medium mb-4">No canceled orders</h6>
+                                                <p class="text-caption-01 cl-text-2 mb-16">You have no orders under this status.</p>
+                                                <a href="shop-left-sidebar.html" class="tf-btn small animate-btn">Start Shopping</a>
                                             </div>
                                         </div>
                                     </div>
@@ -729,7 +402,7 @@
                                 <div class="tf-collapse-content">
                                     <ul class="footer-menu-list">
                                         <li><a href="about.html" class="cl-text-2 link">About Us</a></li>
-                                        <li><a href="our-store.html" class="cl-text-2 link">Our Stories</a></li>
+                                        <li><a href="wishlist.html" class="cl-text-2 link">Wishlist</a></li>
                                         <li><a href="contact.html" class="cl-text-2 link">Contact us</a></li>
                                         <li><a href="blog.html" class="cl-text-2 link">Latest New</a></li>
                                         <li><a href="account-page.html" class="cl-text-2 link">My Account</a></li>
@@ -806,7 +479,7 @@
                             </div>
                         </div>
                         <p class="text-nocopy cl-text-2">
-                            ©2026 Amerce. All Rights Reserved.
+                            ©2026 wisetrack technologies. All Rights Reserved.
                         </p>
                         <ul class="tf-list payment-list">
                             <li><img loading="lazy" width="38" height="24" src="assets/images/payment/visa.svg"
@@ -916,6 +589,7 @@
             <a href="wishlist.html">
                 <span class="toolbar-icon">
                     <i class="icon icon-HeartStraight"></i>
+                    <span class="toolbar-count" style="display: none;"></span>
                 </span>
                 <span class="toolbar-label">Wishlist</span>
             </a>
@@ -963,15 +637,11 @@
                         </div>
                         <div class="box-info">
                             <p class="info-title fw-medium cl-text-3">Shipping Address</p>
-                            <h6>2163 Phillips Gap Rd, West Jefferson, North Carolina, US</h6>
+                            <h6>N/A</h6>
                         </div>
                         <div class="box-info">
                             <p class="info-title fw-medium cl-text-3">Billing Address</p>
-                            <h6>2163 Phillips Gap Rd, West Jefferson, North Carolina, US</h6>
-                        </div>
-                        <div class="box-info">
-                            <p class="info-title fw-medium cl-text-3">Company</p>
-                            <h6>Avitex Technology</h6>
+                            <h6>N/A</h6>
                         </div>
                     </div>
                 </div>
@@ -981,72 +651,16 @@
                         <span class="icon-X2 fs-24 cs-pointer link d-md-none" data-bs-dismiss="modal"></span>
                     </div>
                     <ul class="list-order-product">
-                        <li class="order-item fw-medium">
-                            <a href="#" class="img-prd">
-                                <img loading="lazy" width="100" height="133" src="assets/images/product/product-3.jpg"
-                                    alt="Image">
-                            </a>
-                            <div class="infor-prd">
-                                <a href="#" class="prd_name fw-medium lh-24 link link-underline">
-                                    V-neck cotton T-shirt
-                                </a>
-                                <div class="text-caption-01">
-                                    <span class="cl-text-2">
-                                        Color:
-                                    </span>
-                                    Light Gray
-                                </div>
-                                <div class="text-caption-01">
-                                    <span class="cl-text-2">
-                                        Size:
-                                    </span>
-                                    Small
-                                </div>
-                            </div>
-                            <div class="quantity-price text-primary">
-                                $29.99
-                            </div>
-                        </li>
-                        <li class="order-item fw-medium">
-                            <a href="#" class="img-prd">
-                                <img loading="lazy" width="100" height="133" src="assets/images/product/product-6.jpg"
-                                    alt="Image">
-                            </a>
-                            <div class="infor-prd">
-                                <a href="#" class="prd_name fw-medium lh-24 link link-underline">
-                                    Oval shoulder bag
-                                </a>
-                                <div class="text-caption-01">
-                                    <span class="cl-text-2">
-                                        Color:
-                                    </span>
-                                    Light Gray
-                                </div>
-                                <div class="text-caption-01">
-                                    <span class="cl-text-2">
-                                        Size:
-                                    </span>
-                                    Small
-                                </div>
-                            </div>
-                            <div class="quantity-price text-primary">
-                                $69.99
-                            </div>
-                        </li>
                     </ul>
                     <ul class="list-total">
-                        <li class="total-item lh-24 fw-medium">
+                        <li class="total-item lh-24 fw-medium d-flex align-items-center justify-content-between">
                             <span>Shipping</span>
                             <span>Free</span>
                         </li>
-                        <li class="total-item lh-24 fw-medium">
-                            <span>Discounts</span>
-                            <span>-$2.00</span>
-                        </li>
                     </ul>
                     <div class="last-total h5 fw-medium d-flex align-items-center justify-content-between">
-                        <span>Subtotal</span>
-                        <span>$186,99</span>
+                        <span>Total</span>
+                        <span>₹0</span>
                     </div>
                 </div>
             </div>
@@ -1303,57 +917,6 @@
         </div>
     </div>
     <!-- /Ask -->
-    <!-- Compare -->
-    <div class="offcanvas offcanvas-bottom canvas-compare" id="compare">
-        <div class="canvas-wrapper">
-            <div class="canvas-body">
-                <div class="container">
-                    <div class="tf-compare-list main-list-clear wrap-empty_text">
-                        <div class="tf-compare-head">
-                            <h4 class="title letter-space-0">Compare products</h4>
-                        </div>
-                        <div class="tf-compare-offcanvas list-empty">
-                            <p class="box-text_empty cl-text-2">Your Compare is curently empty</p>
-                            <div class="tf-compare-item file-delete">
-                                <a href="product-detail.html">
-                                    <div class="icon remove">
-                                        <i class="icon-X2"></i>
-                                    </div>
-                                    <img class="radius-3" width="660" height="880"
-                                        src="assets/images/product/product-1.jpg" alt="Image">
-                                </a>
-                            </div>
-                            <div class="tf-compare-item file-delete">
-                                <a href="product-detail.html">
-                                    <div class="icon remove">
-                                        <i class="icon-X2"></i>
-                                    </div>
-                                    <img class="radius-3" width="660" height="880"
-                                        src="assets/images/product/product-2.jpg" alt="Image">
-                                </a>
-                            </div>
-                            <div class="tf-compare-item file-delete">
-                                <a href="product-detail.html">
-                                    <div class="icon remove">
-                                        <i class="icon-X2"></i>
-                                    </div>
-                                    <img class="radius-3" width="660" height="880"
-                                        src="assets/images/product/product-3.jpg" alt="Image">
-                                </a>
-                            </div>
-                        </div>
-                        <div class="tf-compare-buttons justify-content-center">
-                            <a href="compare.html" class="tf-btn animate-btn">Compare </a>
-                            <div class="tf-btn btn-white btn-stroke clear-list-empty tf-compare-button-clear-all">
-                                Clear All
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- /Compare -->
     <!-- Quick Add -->
     <div class="modal modalCentered fade modal-quickadd" id="quickAdd">
         <div class="modal-dialog modal-dialog-centered">
@@ -2173,13 +1736,6 @@
                                                     <span class="tooltip">Add to Wishlist</span>
                                                 </a>
                                             </li>
-                                            <li class="compare">
-                                                <a href="#compare" data-bs-toggle="offcanvas"
-                                                    class="hover-tooltip tooltip-left box-icon">
-                                                    <span class="icon icon-ArrowsLeftRight"></span>
-                                                    <span class="tooltip">Compare</span>
-                                                </a>
-                                            </li>
                                             <li>
                                                 <a href="#quickView" data-bs-toggle="offcanvas"
                                                     class="hover-tooltip tooltip-left box-icon">
@@ -2286,13 +1842,6 @@
                                                     <span class="tooltip">Add to Wishlist</span>
                                                 </a>
                                             </li>
-                                            <li class="compare">
-                                                <a href="#compare" data-bs-toggle="offcanvas"
-                                                    class="hover-tooltip tooltip-left box-icon">
-                                                    <span class="icon icon-ArrowsLeftRight"></span>
-                                                    <span class="tooltip">Compare</span>
-                                                </a>
-                                            </li>
                                             <li>
                                                 <a href="#quickView" data-bs-toggle="offcanvas"
                                                     class="hover-tooltip tooltip-left box-icon">
@@ -2360,13 +1909,6 @@
                                                 <a href="#;" class="hover-tooltip tooltip-left box-icon">
                                                     <span class="icon icon-heart"></span>
                                                     <span class="tooltip">Add to Wishlist</span>
-                                                </a>
-                                            </li>
-                                            <li class="compare">
-                                                <a href="#compare" data-bs-toggle="offcanvas"
-                                                    class="hover-tooltip tooltip-left box-icon">
-                                                    <span class="icon icon-ArrowsLeftRight"></span>
-                                                    <span class="tooltip">Compare</span>
                                                 </a>
                                             </li>
                                             <li>
@@ -2450,13 +1992,6 @@
                                                 <a href="#;" class="hover-tooltip tooltip-left box-icon">
                                                     <span class="icon icon-heart"></span>
                                                     <span class="tooltip">Add to Wishlist</span>
-                                                </a>
-                                            </li>
-                                            <li class="compare">
-                                                <a href="#compare" data-bs-toggle="offcanvas"
-                                                    class="hover-tooltip tooltip-left box-icon">
-                                                    <span class="icon icon-ArrowsLeftRight"></span>
-                                                    <span class="tooltip">Compare</span>
                                                 </a>
                                             </li>
                                             <li>

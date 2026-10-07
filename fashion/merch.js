@@ -48,7 +48,7 @@
    Fill it in and the same pages show your real catalogue instead.
    =========================================================================== */
 
-export const STOREFRONT_URL = 'https://demo.wisetracktechnologies.com/admin';
+export const STOREFRONT_URL = 'https://fashion.wisetracktechnologies.com/admin';
 
 /* ---------------------------------------------------------------------------
    WHO OWNS THE LOOK — the admin panel, or this template?
@@ -598,17 +598,29 @@ export const cart = {
   localSubtotal: () => readCart().reduce((n, l) => n + (Number(l.price) || 0) * l.qty, 0),
   onChange: (fn) => { cartListeners.add(fn); return () => cartListeners.delete(fn); },
 
-  add(product, qty = 1) {
+  add(product, qty = 1, variantLabel = '') {
     const lines = readCart();
-    const found = lines.find((l) => l.itemId === product.id);
-    if (found) found.qty = Math.min(99, found.qty + qty);
-    else lines.push({
-      itemId: product.id,
-      qty: Math.min(99, Math.max(1, qty)),
-      name: product.name,
-      price: product.price,
-      image: (product.imageUrls && product.imageUrls[0]) || '',
-    });
+    const id = String(product.id || product.itemId || product._id || '');
+    const img = (Array.isArray(product.imageUrls) ? product.imageUrls[0] : null) ||
+                product.image ||
+                product.imageUrl ||
+                (Array.isArray(product.images) ? product.images[0] : null) ||
+                product.thumbnail ||
+                '';
+    const found = lines.find((l) => l.itemId === id);
+    if (found) {
+      found.qty = Math.min(99, found.qty + qty);
+      if (!found.image && img) found.image = img;
+    } else {
+      lines.push({
+        itemId: id,
+        qty: Math.min(99, Math.max(1, qty)),
+        name: product.name,
+        price: product.price,
+        image: img,
+        variantLabel: variantLabel || product.variantLabel || '',
+      });
+    }
     writeCart(lines);
   },
   setQty(itemId, qty) {
@@ -636,9 +648,10 @@ export const cart = {
       .filter((l) => byId.has(l.itemId))
       .map((l) => {
         const p = byId.get(l.itemId);
-        return { ...l, name: p.name, price: p.price, image: (p.imageUrls && p.imageUrls[0]) || l.image, product: p };
+        const img = (Array.isArray(p.imageUrls) ? p.imageUrls[0] : null) || p.image || p.imageUrl || l.image || '';
+        return { ...l, name: p.name, price: p.price, image: img, product: p };
       });
-    if (kept.length !== lines.length) writeCart(kept.map(({ product, ...l }) => l));
+    writeCart(kept.map(({ product, ...l }) => l));
     return kept;
   },
 };
@@ -694,56 +707,93 @@ function syncWishlistCardStates(container = document) {
 const WISH_KEY = 'merch.wishlist';
 const wishListeners = new Set();
 function writeWish(ids) {
-  writeJson(WISH_KEY, ids);
-  wishListeners.forEach((fn) => { try { fn(ids); } catch (e) { warn(e); } });
+  const clean = Array.isArray(ids) ? [...new Set(ids.map((x) => String(x || '').trim()).filter(Boolean))] : [];
+  writeJson(WISH_KEY, clean);
+  wishListeners.forEach((fn) => { try { fn(clean); } catch (e) { warn(e); } });
 }
 
 export const wishlist = {
-  ids: () => readJson(WISH_KEY, []),
-  has: (id) => wishlist.ids().includes(id),
+  ids: () => {
+    const raw = readJson(WISH_KEY, []);
+    if (!Array.isArray(raw)) return [];
+    return [...new Set(raw.map((x) => String(x || '').trim()).filter(Boolean))];
+  },
+  has: (id) => wishlist.ids().includes(String(id || '').trim()),
   onChange: (fn) => { wishListeners.add(fn); return () => wishListeners.delete(fn); },
   async remove(itemId) {
     if (!itemId) return false;
-    const ids = wishlist.ids().filter((x) => x !== itemId);
+    const sId = String(itemId).trim();
+    const ids = wishlist.ids().filter((x) => x !== sId);
     writeWish(ids);
-    try {
-      await api.removeFromWishlist(itemId);
-    } catch (e) {
-      if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist api error', e);
+    if (token.get()) {
+      try {
+        await api.removeFromWishlist(sId);
+      } catch (e) {
+        if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist api error', e);
+      }
     }
     syncWishlistCardStates();
     return false;
   },
   async toggle(itemId) {
-    if (!itemId) return false;
-    const on = !wishlist.has(itemId);
-    const ids = wishlist.ids().filter((x) => x !== itemId);
-    if (on) ids.push(itemId);
+    if (!itemId || itemId === 'undefined' || itemId === 'null') return false;
+    const sId = String(itemId).trim();
+    if (!sId) return false;
+    const on = !wishlist.has(sId);
+    const ids = wishlist.ids().filter((x) => x !== sId);
+    if (on) ids.push(sId);
     writeWish(ids);
-    try {
-      if (on) {
-        await api.addToWishlist(itemId);
-      } else {
-        await api.removeFromWishlist(itemId);
+    if (token.get()) {
+      try {
+        if (on) {
+          await api.addToWishlist(sId);
+        } else {
+          await api.removeFromWishlist(sId);
+        }
+      } catch (e) {
+        if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist api error', e);
       }
-    } catch (e) {
-      if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist api error', e);
     }
     syncWishlistCardStates();
     return on;
   },
   /* After sign-in or on boot: sync local with remote store wishlist */
   async sync() {
+    if (!token.get()) return;
     try {
+      const local = wishlist.ids();
+      for (const id of local) {
+        await api.addToWishlist(id).catch(() => {});
+      }
       const remote = await api.wishlist();
       const remoteIds = extractWishlistIds(remote);
-      if (remoteIds.length) {
-        const combined = [...new Set([...wishlist.ids(), ...remoteIds])];
-        writeWish(combined);
-        syncWishlistCardStates();
-      }
+      writeWish(remoteIds);
+      syncWishlistCardStates();
     } catch (e) {
-      /* guest mode fallback */
+      if (!(e instanceof ApiError && e.isUnauthenticated)) warn('wishlist sync error', e);
+    }
+  },
+  /* Validate cached wishlist IDs against the actual store catalogue */
+  async refresh() {
+    if (token.get()) {
+      try {
+        const remote = await api.wishlist();
+        writeWish(extractWishlistIds(remote));
+      } catch {}
+    }
+    const current = wishlist.ids();
+    if (!current.length) return current;
+    try {
+      const fresh = await api.products(current);
+      const list = Array.isArray(fresh) ? fresh : (fresh?.products || fresh?.items || []);
+      const currentSet = new Set(current);
+      const valid = list.filter((p) => currentSet.has(p?.id)).map((p) => p.id);
+      if (valid.length && valid.length !== current.length) {
+        writeWish(valid);
+      }
+      return current;
+    } catch {
+      return current;
     }
   },
 };
@@ -869,6 +919,12 @@ function unitOf(card, spec, boundary = null) {
     node.parentElement !== document.body &&
     node.parentElement !== boundary &&
     node !== boundary &&
+    !matchesAny(node.parentElement, spec?.container || '') &&
+    !matchesAny(node.parentElement, RAILS) &&
+    !node.parentElement.classList.contains('wrapper-wishlist') &&
+    !node.parentElement.classList.contains('wrapper-shop') &&
+    !node.parentElement.classList.contains('tf-grid-layout') &&
+    !node.parentElement.classList.contains('tf-list-layout') &&
     realCards(spec, node.parentElement).length === 1 &&
     !swallowsAForm(card, node.parentElement)
   ) node = node.parentElement;
@@ -1086,17 +1142,17 @@ function wireAction(el, action, data, ctx) {
     case 'wishlist':
       el.addEventListener('click', async (e) => {
         stop(e);
+        if (!data?.id) return;
         const on = await wishlist.toggle(data.id);
         syncWishlistCardStates();
         notify(on ? 'Added to wishlist.' : 'Removed from wishlist.', 'success');
       });
       break;
     case 'compare':
-      el.addEventListener('click', (e) => {
-        stop(e);
-        const on = compare.toggle(data.id);
-        notify(on ? 'Added to compare.' : 'Removed from compare.', 'success');
-      });
+      if (el) {
+        const li = el.closest('li.compare') || el;
+        li.remove();
+      }
       break;
     case 'remove':
       el.addEventListener('click', (e) => { stop(e); cart.remove(data.itemId || data.id); ctx.rerender?.(); });
@@ -1354,7 +1410,7 @@ const THEMES = {
         qty:       { sel: '.quantity-edit .input', value: () => 1 },
         add:       { sel: '.cart-counter-action .rts-btn', action: 'add' },
         wish:      { sel: '.action-share-option .single-action:nth-child(1)', action: 'wishlist' },
-        compare:   { sel: '.action-share-option .single-action:nth-child(2)', action: 'compare' },
+        compare:   { sel: '.action-share-option .single-action:nth-child(2), [data-action="compare"]', dropWhen: () => true },
       },
     },
 
@@ -1662,7 +1718,7 @@ const THEMES = {
         countdown: { sel: '.product-countdown', dropWhen: () => true, all: true },
         add:    { sel: '.btn-cart', action: 'add', all: true },
         wish:   { sel: '.button-group a:nth-child(1)', action: 'wishlist', all: true },
-        compare:{ sel: '.button-group a:nth-child(2)', action: 'compare', all: true },
+        compare:{ sel: '.button-group a:nth-child(2), [data-action="compare"]', dropWhen: () => true, all: true },
       },
     },
 
@@ -1916,7 +1972,7 @@ THEMES.electronic = {
       sizes: { sel: '.size-list|.variant-box', dropWhen: (p) => !(p.variantCount > 1) },
       add:   { sel: '.btn-main-product|.btn-add-to-cart', action: 'add' },
       wish:  { sel: '.box-icon.wishlist', action: 'wishlist' },
-      compare: { sel: '.box-icon.compare', action: 'compare' },
+      compare: { sel: '.box-icon.compare, [data-action="compare"], [href*="#compare"]', dropWhen: () => true },
     },
   },
 
@@ -1986,8 +2042,9 @@ THEMES.electronic = {
       lastName: 'input[placeholder="Last Name*"]',
       email: 'input[placeholder="Email Address*"]',
       phone: 'input[placeholder="Phone Number*"]',
+      country: 'select#shipping-country-form, select[name*="country"]',
       city: 'input[placeholder="Town/City*"]',
-      state: '#merch-state, select.text-title:not([name*="country"])',
+      state: 'select#shipping-province-form, select[name*="province"], select[name*="state"], #merch-state',
       address1: 'input[placeholder="Street,..."]',
       pincode: 'input[placeholder="Postal Code*"]',
     },
@@ -2044,9 +2101,11 @@ THEMES.fashion = {
      TOPBAR's carousel first, so the promises were written over the promo bar
      and the announcement had nowhere left to go. */
   usps: { container: '.swiper-wrapper:has(.box-icon_V01)', card: '.swiper-slide:has(.box-icon_V01)', title: '.content .title', text: '.content .desc|.content p:not(.title)' },
-  /* This theme names its basket badge `.count`; the inherited `.count-box`
-     matches nothing here, so the header kept the template's "12". */
-  header: { cartCount: '.nav-icon-item .count|.toolbar-count|.count', cartTotal: '.sub-total-price|.tf-totals-total-value' },
+  header: {
+    cartCount: '.shop-cart .count, .tf-toolbar-bottom a[href*="cart"] .toolbar-count',
+    wishCount: '.nav-icon-list a[href*="wishlist"] .count, a.nav-icon-item[href*="wishlist"] .count, .tf-toolbar-bottom a[href*="wishlist"] .toolbar-count',
+    cartTotal: '.sub-total-price|.tf-totals-total-value',
+  },
 
   banners: {
     container: '.sw-slide-show .swiper-wrapper|.tf-slideshow .swiper-wrapper',
@@ -2152,7 +2211,7 @@ THEMES.fashion = {
          `.box-icon.wishlist` nor `.box-icon.compare` exists anywhere in it,
          so both controls were dead on every card. */
       wish:  { sel: '.product-action_list .wishlist a|.box-icon.wishlist', action: 'wishlist' },
-      compare: { sel: '.product-action_list .compare a|.box-icon.compare', action: 'compare' },
+      compare: { sel: '.product-action_list .compare, .compare.box-icon, [href*="#compare"], [data-action="compare"]', dropWhen: () => true },
     },
   },
 
@@ -2192,6 +2251,7 @@ THEMES.fashion = {
       add:      { sel: '.btn-action-price', action: 'add' },
       addSticky:{ sel: '.btn-add-to-cart', action: 'add' },
       buy:      { sel: 'a[href*="checkout"].tf-btn', action: 'buy' },
+      compare:  { sel: 'a[href*="#compare"], .product-extra-icon:has([href*="#compare"]), .product-extra-icon:has(.icon-ArrowsLeftRight)', dropWhen: () => true },
     },
     variants: { container: '.tf-product-variant', group: '.variant-picker-item' },
     gallery: { images: '.tf-product-media-main .item img', thumbs: '.tf-product-media-thumbs .item img' },
@@ -2228,6 +2288,41 @@ THEMES.fashion = {
     coupon: { input: 'input[placeholder*="iscount"]', button: '.ip-discount-code button' },
     checkoutBtn: 'a[href*="checkout"]',
   },
+
+  checkout: {
+    summary: {
+      container: '.box-your-order .list-order-product',
+      card: '.order-item',
+      fields: {
+        image: { sel: '.img-prd img', attr: 'src', value: (l) => mediaUrl(l.image) },
+        link:  { sel: 'a.img-prd, a.prd_name', attr: 'href', value: (l) => productHref({ id: l.itemId }) },
+        title: { sel: '.prd_name', text: (l) => l.name },
+        meta:  { sel: '.infor-prd .text-caption-01', text: (l) => l.variantLabel || (l.qty > 1 ? 'Qty ' + l.qty : '') },
+        price: { sel: '.quantity-price', text: (l) => money(l.price * l.qty) },
+      },
+    },
+    totals: {
+      subtotal: '.total-item-subtotal span:last-child|.list-total li:nth-child(1) span:last-child',
+      shipping: '.total-item-shipping span:last-child|.list-total li:nth-child(2) span:last-child',
+      discount: '.total-item-discount span:last-child|.list-total li:nth-child(3) span:last-child',
+      total: '.last-total span:last-child',
+    },
+    form: {
+      firstName: 'input[placeholder*="First Name" i]',
+      lastName:  'input[placeholder*="Last Name" i]',
+      email:     'input[placeholder*="Email" i]',
+      phone:     'input[placeholder*="Phone" i]',
+      country:   'select#shipping-country-form',
+      city:      'input[placeholder*="Town" i]|input[placeholder*="City" i]',
+      address1:  'input[placeholder*="Street" i]|input[placeholder*="Address" i]',
+      state:     'select#shipping-province-form|input[placeholder*="State" i]',
+      pincode:   'input[placeholder*="Postal" i]|input[placeholder*="Post" i]|input[placeholder*="Pin" i]|input[placeholder*="Zip" i]',
+      notes:     'textarea[placeholder*="note" i]',
+    },
+    paymentRadios: 'input[name="payment-method"]',
+    terms: null,
+    placeBtn: '.btn-place-order, .tf-checkout-cart-main a.tf-btn, .tf-checkout-cart-main button, a[href*="thank-you.html"].tf-btn',
+  },
 };
 
 /* Swiper keeps its own copy of the slide list, and in loop mode a set of
@@ -2242,7 +2337,12 @@ THEMES.fashion = {
    Fill them with something real. Hide them only if the store cannot answer,
    because an empty strip is still better than an invented one. */
 async function fillStrayStrips() {
-  const strays = productContainers().filter((el) => !hydrated.has(el) && el.offsetParent !== null);
+  if (PAGE === 'wishlist' || PAGE === 'cart' || PAGE === 'checkout' || PAGE === 'account' || PAGE === 'orders' || PAGE === 'addresses') return;
+  const strays = productContainers().filter((el) => {
+    if (hydrated.has(el)) return false;
+    if (el.closest('.wrapper-wishlist, .section-wishlist, #wrapper-wishlist')) return false;
+    return el.offsetParent !== null;
+  });
   if (!strays.length) return;
 
   let stock = [];
@@ -2582,6 +2682,11 @@ const ROLE_PATTERNS = [
 function detectRole() {
   if (CONFIG.page) return CONFIG.page;
   const file = (location.pathname.split('/').pop() || 'index.html').replace(/\.html?$/i, '').toLowerCase();
+
+  if (file === 'account-page') return 'account';
+  if (file === 'account-orders') return 'orders';
+  if (file === 'account-addresses') return 'addresses';
+  if (file === 'account-setting') return 'account';
 
   /* The theme's own table is the authority — it knows that this theme calls
      its basket `view-cart` and that one calls it `shopping-cart`. */
@@ -3049,9 +3154,6 @@ function paintHeader() {
     }
     setText(num, cartCount);
   });
-  pickAll(h.cartCount).forEach((el) => setText(el, cartCount));
-  if (h.wishCount) pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
-
   pickAll('.btn-border-only.wishlist').forEach((btn) => {
     let num = btn.querySelector('.number');
     if (!num) {
@@ -3071,7 +3173,58 @@ function paintHeader() {
     }
     setText(num, wishCount);
   });
-  pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
+
+  // Fashion desktop header wishlist count badge
+  pickAll('.nav-icon-list a[href*="wishlist"], a.nav-icon-item[href*="wishlist"]').forEach((a) => {
+    a.classList.add('nav-wishlist');
+    let num = a.querySelector('.count');
+    if (!num) {
+      num = document.createElement('span');
+      num.className = 'count';
+      a.appendChild(num);
+    }
+    if (wishCount > 0) {
+      setText(num, wishCount);
+      show(num, true);
+    } else {
+      setText(num, '');
+      show(num, false);
+    }
+  });
+
+  // Fashion mobile bottom toolbar wishlist badge
+  pickAll('.tf-toolbar-bottom a[href*="wishlist"] .toolbar-icon').forEach((wrap) => {
+    let num = wrap.querySelector('.toolbar-count');
+    if (!num) {
+      num = document.createElement('span');
+      num.className = 'toolbar-count';
+      wrap.appendChild(num);
+    }
+    if (wishCount > 0) {
+      setText(num, wishCount);
+      show(num, true);
+    } else {
+      setText(num, '');
+      show(num, false);
+    }
+  });
+
+  // Fashion mobile bottom toolbar cart badge
+  pickAll('.tf-toolbar-bottom a[href*="cart"] .toolbar-icon').forEach((wrap) => {
+    let num = wrap.querySelector('.toolbar-count');
+    if (num) setText(num, cartCount);
+  });
+
+  if (h.cartCount) pickAll(h.cartCount).forEach((el) => setText(el, cartCount));
+  if (h.wishCount) pickAll(h.wishCount).forEach((el) => {
+    if (wishCount > 0) {
+      setText(el, wishCount);
+      show(el, true);
+    } else {
+      setText(el, '');
+      show(el, false);
+    }
+  });
 
   pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
 
@@ -3498,12 +3651,12 @@ function replaceTemplateBrand(brandName) {
   /* A copyright year is a claim about the shop, and two of these themes ship
      one that is already years stale. Only inside a line that is actually a
      copyright notice — a bare year elsewhere may be a real date. */
+  /* Always ensure copyright shows "©2026 wisetrack technologies. All Rights Reserved." */
   $$('*').forEach((el) => {
     if (el.children.length) return;
     const txt = el.textContent || '';
     if (!/©|copyright/i.test(txt)) return;
-    const fixed = txt.replace(/(?:19|20)\d{2}/g, year);
-    if (fixed !== txt) el.textContent = fixed;
+    el.textContent = `©${year} wisetrack technologies. All Rights Reserved.`;
   });
 }
 
@@ -4290,14 +4443,15 @@ const COMPARE_TEMPLATE = new WeakMap();
 /* Repaint whenever a compare table could come into view: on the page that owns
    one, and on the capture phase of any compare trigger — BEFORE the theme's own
    handler opens the modal, so it is never seen holding the previous contents. */
+function removeAllCompareElements(root = document) {
+  try {
+    const list = root.querySelectorAll('li.compare, .box-icon.compare, a[href*="#compare"], .canvas-compare, #compare, a[href="compare.html"], a[href*="compare.html"], .product-extra-icon:has(.icon-ArrowsLeftRight), a[href="#compare"], [data-action="compare"]');
+    list.forEach((el) => el.remove());
+  } catch {}
+}
+
 function wireCompare() {
-  if (!THEME?.compare) return;
-  paintCompare().catch((e) => warn('compare', e));
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('[data-merch-action="compare"], .compare, [data-bs-target="#exampleModal"], a[href*="compare"]')) return;
-    /* After the toggle handler has run, so the list already includes this item. */
-    setTimeout(() => paintCompare().catch((err) => warn('compare', err)), 0);
-  }, true);
+  removeAllCompareElements();
 }
 
 const pages = {};
@@ -9391,13 +9545,24 @@ pages.checkout = async () => {
   const placeBtn = findPlaceButton(spec);
   if (!placeBtn) return warn('no place-order button found on this checkout');
 
+  const checkoutForm = pick('.tf-checkout-cart-main');
+  if (checkoutForm && !checkoutForm._merchWiredSubmit) {
+    checkoutForm._merchWiredSubmit = true;
+    checkoutForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      placeBtn.click();
+    });
+  }
+
   placeBtn.addEventListener('click', async (e) => {
     e.preventDefault();
     if (moneyCaptured) return;
     const problem = validateCustomer(spec);
     if (problem) return notify(problem, 'error');
-    const terms = pick(spec.terms);
-    if (terms && !terms.checked) return notify('Please accept the terms and conditions.', 'error');
+    if (spec.terms && THEME?.name !== 'fashion') {
+      const terms = pick(spec.terms);
+      if (terms && !terms.checked) return notify('Please accept the terms and conditions.', 'error');
+    }
 
     busy(placeBtn, true);
     try {
@@ -9432,7 +9597,16 @@ function paintCheckoutSummary(spec, lines) {
   const tt = spec.totals || {};
   pickAll(tt.subtotal).forEach((el) => setText(el, money(subtotal)));
   pickAll(tt.shipping).forEach((el) => setText(el, p.shipping == null ? 'Calculated' : (p.shipping ? money(p.shipping) : 'Free')));
-  pickAll(tt.discount).forEach((el) => setText(el, p.discount ? '-' + money(p.discount) : money(0)));
+  pickAll(tt.discount).forEach((el) => {
+    const row = el.closest('li, tr, .total-item');
+    if (p.discount && p.discount > 0) {
+      if (row) row.style.display = '';
+      setText(el, '-' + money(p.discount));
+    } else {
+      if (row) row.style.display = 'none';
+      else setText(el, money(0));
+    }
+  });
   pickAll(tt.total).forEach((el) => setText(el, money(total)));
 
   /* Themes that lay their summary out as generic label/value rows (grocery)
@@ -9584,6 +9758,13 @@ function cloneFieldAfter(source, { id, name, placeholder, label }) {
 
 function ensureCustomerFields(spec) {
   const form = spec.form || {};
+  if (THEME?.name === 'fashion') {
+    const provinceSelect = pick('#shipping-province-form, select[name*="province"], select[name*="state"]');
+    if (provinceSelect) {
+      document.querySelectorAll('#merch-state').forEach((el) => el.closest('.form-group, .field, .tf-field, .tf-grid-layout, div')?.remove());
+      return;
+    }
+  }
   if (pick(form.state)) return;                     // the template has one
 
   const source = pick(form.city) || pick(form.pincode);
@@ -9598,13 +9779,15 @@ function readCustomer(spec) {
   const f = spec.form || {};
   const v = (key) => (pick(f[key])?.value || '').trim();
   const name = [v('firstName'), v('lastName')].filter(Boolean).join(' ') || v('name');
+  const stateVal = v('state');
+  const state = (!stateVal || stateVal === 'Choose State' || stateVal === '------') ? (v('city') || 'N/A') : stateVal;
   return {
     name,
     email: v('email'),
     phone: v('phone'),
     address: [v('address1'), v('address2')].filter(Boolean).join(', '),
     city: v('city'),
-    state: v('state'),
+    state,
     pincode: v('pincode'),
   };
 }
@@ -9958,8 +10141,27 @@ function loadRazorpay() {
 function done(order) {
   try {
     sessionStorage.setItem('merch.justPaid', JSON.stringify({ id: order.id, at: Date.now(), paymentMethod: order.paymentMethod }));
-    const localOrders = readJson('merch.orders', []);
-    const items = cart.lines();
+    const rawLines = (order.items && order.items.length) ? order.items : ((order.lines && order.lines.length) ? order.lines : cart.lines());
+    const items = rawLines.map((l) => {
+      const img = l.image || l.imageUrl || (Array.isArray(l.imageUrls) ? l.imageUrls[0] : null) || (Array.isArray(l.product?.imageUrls) ? l.product.imageUrls[0] : null) || l.product?.image || l.product?.imageUrl || '';
+      return {
+        ...l,
+        name: l.name || l.title || 'Product',
+        price: Number(l.price) || 0,
+        qty: Number(l.qty || l.quantity) || 1,
+        image: img,
+        imageUrl: img,
+      };
+    });
+    const cust = (THEME?.checkout) ? readCustomer(THEME.checkout) : {};
+    const u = user.get() || STORE_ME || {};
+    const orderEmail = (cust.email || u.email || localStorage.getItem('merch.shopper_email') || '').toLowerCase().trim();
+    if (orderEmail) {
+      try { localStorage.setItem('merch.shopper_email', orderEmail); } catch {}
+    }
+
+    let localOrders = readJson('merch.orders', []);
+    if (!Array.isArray(localOrders)) localOrders = [];
     localOrders.unshift({
       id: order.id || ('ORD-' + Date.now().toString().slice(-6)),
       orderRef: order.orderRef || order.reference || ('#S' + Date.now().toString().slice(-8)),
@@ -9968,14 +10170,32 @@ function done(order) {
       total: order.total || order.totalAmount || cart.localSubtotal(),
       lines: items,
       items: items,
+      userEmail: orderEmail,
       paymentMethod: order.paymentMethod || 'Cash Delivery',
-      shippingAddress: readJson('merch.address', null),
+      shippingAddress: (cust.name || cust.email) ? {
+        name: cust.name,
+        email: cust.email || orderEmail,
+        phone: cust.phone,
+        line: cust.address,
+        city: cust.city,
+        state: cust.state,
+        pincode: cust.pincode,
+        country: 'India',
+      } : readJson('merch.address', null),
     });
     writeJson('merch.orders', localOrders);
-  } catch { /* ignore */ }
+  } catch (e) {
+    console.warn('Could not save local order:', e);
+  }
   cart.clear();
   pending.clear();
   currentKey = null;
+
+  if (THEME?.name === 'fashion') {
+    notify('Order placed successfully! Reference: ' + (order.orderRef || order.id), 'success');
+    location.href = 'account-page.html';
+    return;
+  }
 
   /* Not every template HAS an order page — one of these four ships none, and
      sending the shopper to `order.html` after they have paid lands them on a
@@ -10200,142 +10420,275 @@ function normalizeOrderStatus(status) {
   return 'pending';
 }
 
-function initSampleOrders() {
-  if (localStorage.getItem('merch.orders') !== null) return;
-  const initial = [
-    {
-      id: '54312453',
-      orderRef: 'S184989823',
-      orderStatus: 'delivery',
-      createdAt: new Date(Date.now() - 86400000).toISOString(),
-      total: 120.00,
-      paymentMethod: 'Cash Delivery',
-      items: [
-        {
-          name: 'Contrasting sheepskin sweatshirt',
-          variantLabel: 'Color: Blue / Size: XL',
-          qty: 2,
-          price: 60.00,
-          image: 'assets/images/product/square/product-1.jpg',
-        },
-      ],
-      shippingAddress: {
-        name: 'Tony Nguyen',
-        email: 'hi.avitex@gmail.com',
-        phone: '315-666-6688',
-        line: '2163 Phillips Gap Rd',
-        city: 'West Jefferson',
-        state: 'North Carolina',
-        pincode: '28694',
-        country: 'US',
-      },
-    },
-    {
-      id: '54312452',
-      orderRef: 'S184989822',
-      orderStatus: 'pending',
-      createdAt: new Date(Date.now() - 172800000).toISOString(),
-      total: 60.00,
-      paymentMethod: 'Cash Delivery',
-      items: [
-        {
-          name: 'Faux-leather trousers',
-          variantLabel: 'Color: Brown / Size: L',
-          qty: 1,
-          price: 60.00,
-          image: 'assets/images/product/square/product-4.jpg',
-        },
-      ],
-      shippingAddress: {
-        name: 'Tony Nguyen',
-        email: 'hi.avitex@gmail.com',
-        phone: '315-666-6688',
-        line: '2163 Phillips Gap Rd',
-        city: 'West Jefferson',
-        state: 'North Carolina',
-        pincode: '28694',
-        country: 'US',
-      },
-    },
-    {
-      id: '54312451',
-      orderRef: 'S184989821',
-      orderStatus: 'completed',
-      createdAt: new Date(Date.now() - 432000000).toISOString(),
-      total: 45.00,
-      paymentMethod: 'Online Payment',
-      items: [
-        {
-          name: 'V-neck knitted top',
-          variantLabel: 'Color: Olive / Size: M',
-          qty: 1,
-          price: 45.00,
-          image: 'assets/images/product/square/product-6.jpg',
-        },
-      ],
-      shippingAddress: {
-        name: 'Tony Nguyen',
-        email: 'hi.avitex@gmail.com',
-        phone: '315-666-6688',
-        line: '2163 Phillips Gap Rd',
-        city: 'West Jefferson',
-        state: 'North Carolina',
-        pincode: '28694',
-        country: 'US',
-      },
-    },
-    {
-      id: '54312450',
-      orderRef: 'S184989820',
-      orderStatus: 'canceled',
-      createdAt: new Date(Date.now() - 604800000).toISOString(),
-      total: 60.00,
-      paymentMethod: 'Cash Delivery',
-      items: [
-        {
-          name: 'Contrasting sweatshirt',
-          variantLabel: 'Color: Black / Size: S',
-          qty: 1,
-          price: 60.00,
-          image: 'assets/images/product/square/product-8.jpg',
-        },
-      ],
-      shippingAddress: {
-        name: 'Tony Nguyen',
-        email: 'hi.avitex@gmail.com',
-        phone: '315-666-6688',
-        line: '2163 Phillips Gap Rd',
-        city: 'West Jefferson',
-        state: 'North Carolina',
-        pincode: '28694',
-        country: 'US',
-      },
-    },
-  ];
-  writeJson('merch.orders', initial);
+const DUMMY_ORDER_IDS = new Set(['54312453', '54312452', '54312451', '54312450', 'S184989823', 'S184989822', 'S184989821', 'S184989820']);
+function isDummyOrder(o) {
+  if (!o) return true;
+  const id = String(o.id || '');
+  const ref = String(o.orderRef || o.reference || '');
+  if (DUMMY_ORDER_IDS.has(id) || DUMMY_ORDER_IDS.has(ref)) return true;
+  if (o.shippingAddress?.email === 'hi.avitex@gmail.com') return true;
+  return false;
+}
+
+let catalogImageCache = new Map();
+
+async function ensureCatalogImageCache(orders = []) {
+  const itemIds = [];
+  orders.forEach((o) => {
+    const list = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
+    list.forEach((item) => {
+      const id = item.itemId || item.id || item.productId || item.product?.id;
+      if (id) itemIds.push(String(id));
+    });
+  });
+
+  try {
+    const promises = [];
+    if (itemIds.length) {
+      promises.push(api.products(itemIds).catch(() => []));
+    }
+    if (catalogImageCache.size === 0) {
+      promises.push(api.catalog({ pageSize: 50 }).catch(() => []));
+    }
+    const results = await Promise.all(promises);
+    results.forEach((res) => {
+      const list = Array.isArray(res) ? res : (res?.products || res?.items || []);
+      list.forEach((p) => {
+        if (!p) return;
+        const img = (Array.isArray(p.imageUrls) ? p.imageUrls[0] : null) || p.image || p.imageUrl || (Array.isArray(p.images) ? p.images[0] : null) || '';
+        if (p.id && img) catalogImageCache.set(String(p.id), img);
+        if (p.name && img) catalogImageCache.set(p.name.toLowerCase().trim(), img);
+      });
+    });
+  } catch {}
+
+  return catalogImageCache;
+}
+
+function resolveOrderItemImage(item, cache = catalogImageCache) {
+  if (!item) return '';
+
+  let candidate =
+    item.image ||
+    item.imageUrl ||
+    item.image_url ||
+    item.productImage ||
+    item.thumbnail ||
+    (Array.isArray(item.imageUrls) ? item.imageUrls[0] : null) ||
+    (Array.isArray(item.images) ? item.images[0] : null) ||
+    item.product?.image ||
+    item.product?.imageUrl ||
+    (Array.isArray(item.product?.imageUrls) ? item.product.imageUrls[0] : null);
+
+  if (typeof candidate === 'object' && candidate !== null) {
+    candidate = candidate.url || candidate.src || candidate.path || '';
+  }
+
+  // Check if candidate is already a dynamic URL or path (not a template demo placeholder)
+  if (candidate && !String(candidate).includes('square/product-1.jpg') && !String(candidate).includes('product-3.jpg')) {
+    return mediaUrl(candidate);
+  }
+
+  // Look up in catalog image cache
+  const id = String(item.itemId || item.id || item.productId || item.product?.id || '');
+  const nameKey = (item.name || '').toLowerCase().trim();
+
+  if (cache) {
+    const cached = (id ? cache.get(id) : null) || (nameKey ? cache.get(nameKey) : null);
+    if (cached) return mediaUrl(cached);
+  }
+
+  return candidate ? mediaUrl(candidate) : '';
+}
+
+function getOrderEmail(o) {
+  if (!o) return '';
+  const shipEmail = o.shippingAddress?.email || o.customer?.email || o.email || o.userEmail;
+  if (shipEmail && typeof shipEmail === 'string' && shipEmail.includes('@')) {
+    return shipEmail.toLowerCase().trim();
+  }
+  const ref = String(o.orderRef || o.reference || o.id || '');
+  const match = ref.match(/^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}):/);
+  if (match) return match[1].toLowerCase().trim();
+  if (ref.includes('@')) {
+    const parts = ref.split(':');
+    for (const p of parts) {
+      if (p.includes('@')) return p.toLowerCase().trim();
+    }
+  }
+  return '';
+}
+
+async function getActiveShopperEmail() {
+  let u = user.get() || STORE_ME;
+  if (!u?.email && token.get()) {
+    try {
+      u = await api.me();
+      if (u) {
+        STORE_ME = u;
+        user.set(u);
+        if (u.email) {
+          try { localStorage.setItem('merch.shopper_email', u.email); } catch {}
+        }
+      }
+    } catch {}
+  }
+  return (u?.email || localStorage.getItem('merch.shopper_email') || '').toLowerCase().trim();
 }
 
 async function getAccountOrders() {
-  initSampleOrders();
+  const activeEmail = await getActiveShopperEmail();
+
   let remoteOrders = [];
   try {
     const res = await api.myOrders();
     remoteOrders = Array.isArray(res) ? res : (res?.orders || res?.items || []);
   } catch {}
 
-  const localOrders = readJson('merch.orders', []);
+  let localOrders = readJson('merch.orders', []);
+  if (Array.isArray(localOrders) && localOrders.some(isDummyOrder)) {
+    localOrders = localOrders.filter((o) => !isDummyOrder(o));
+    writeJson('merch.orders', localOrders);
+  }
+
   const map = new Map();
   for (const o of remoteOrders) {
+    if (isDummyOrder(o)) continue;
     const key = String(o.id || o.orderRef || o.reference);
     map.set(key, o);
   }
   for (const o of localOrders) {
+    if (isDummyOrder(o)) continue;
     const key = String(o.id || o.orderRef || o.reference);
-    if (!map.has(key)) map.set(key, o);
+    if (!map.has(key)) {
+      map.set(key, o);
+    } else {
+      const existing = map.get(key);
+      const localItems = o.items || o.lines;
+      const existingItems = existing.items || existing.lines;
+      if (localItems && localItems.length && (!existingItems || !existingItems.length || existingItems[0].name === 'Fashion Product')) {
+        existing.items = localItems;
+        existing.lines = localItems;
+      }
+      if (o.shippingAddress && !existing.shippingAddress) {
+        existing.shippingAddress = o.shippingAddress;
+      }
+    }
   }
 
-  const combined = Array.from(map.values());
+  let combined = Array.from(map.values());
+
+  // Strictly filter orders by currently logged-in user email
+  if (activeEmail) {
+    combined = combined.filter((o) => {
+      const orderEm = getOrderEmail(o);
+      if (orderEm) {
+        return orderEm === activeEmail;
+      }
+      const ref = String(o.orderRef || o.reference || o.id || '').toLowerCase();
+      if (ref.includes(activeEmail)) return true;
+      if (ref.includes('@')) return false; // Contains a different account's email
+      return true;
+    });
+  } else {
+    // If activeEmail not yet available, check if local orders exist for the current shopper
+    if (localOrders && localOrders.length) {
+      const lastEmail = getOrderEmail(localOrders[0]);
+      if (lastEmail) {
+        try { localStorage.setItem('merch.shopper_email', lastEmail); } catch {}
+        combined = combined.filter((o) => {
+          const em = getOrderEmail(o);
+          return em ? em === lastEmail : String(o.orderRef || o.id).toLowerCase().includes(lastEmail);
+        });
+      } else {
+        combined = localOrders.filter((o) => !isDummyOrder(o));
+      }
+    } else {
+      return [];
+    }
+  }
+
   combined.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+  let localModified = false;
+
+  // Fetch full order details for any order missing items or having dummy product
+  const ordersNeedingItems = combined.filter((o) => {
+    const it = o.items || o.lines;
+    return (!it || !it.length || !it[0].name || it[0].name === 'Fashion Product' || (it[0].image && it[0].image.includes('square/product-1.jpg')));
+  });
+
+  if (ordersNeedingItems.length > 0) {
+    await Promise.all(ordersNeedingItems.map(async (o) => {
+      if (!o.id) return;
+      try {
+        const full = await api.order(o.id);
+        const fetchedItems = full?.items || full?.order?.items || full?.order?.lines || [];
+        if (fetchedItems.length > 0) {
+          o.items = fetchedItems.map((item) => ({
+            ...item,
+            name: item.name || item.title || 'Product',
+            price: Number(item.price) || 0,
+            qty: Number(item.qty || item.quantity) || 1,
+            image: item.imageUrl || item.image || '',
+            imageUrl: item.imageUrl || item.image || '',
+          }));
+          o.lines = o.items;
+          localModified = true;
+        }
+      } catch (err) {
+        try {
+          const em = getOrderEmail(o) || activeEmail;
+          if (em && o.orderRef) {
+            const lk = await api.lookupOrder(em, o.orderRef);
+            const lkItems = lk?.items || lk?.order?.items || lk?.lines || [];
+            if (lkItems.length > 0) {
+              o.items = lkItems.map((item) => ({
+                ...item,
+                name: item.name || item.title || 'Product',
+                price: Number(item.price) || 0,
+                qty: Number(item.qty || item.quantity) || 1,
+                image: item.imageUrl || item.image || '',
+                imageUrl: item.imageUrl || item.image || '',
+              }));
+              o.lines = o.items;
+              localModified = true;
+            }
+          }
+        } catch {}
+      }
+    }));
+  }
+
+  // Pre-load dynamic catalog images
+  const cache = await ensureCatalogImageCache(combined);
+
+  // Backfill dynamic images into order items if missing
+  combined.forEach((o) => {
+    const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
+    items.forEach((item) => {
+      const dynamicImg = resolveOrderItemImage(item, cache);
+      if (dynamicImg && (!item.image || item.image.includes('square/product-1.jpg') || item.image.includes('product-3.jpg'))) {
+        item.image = dynamicImg;
+        item.imageUrl = dynamicImg;
+        localModified = true;
+      }
+    });
+  });
+
+  if (localModified) {
+    const existingLocal = readJson('merch.orders', []);
+    combined.forEach((co) => {
+      const idx = existingLocal.findIndex((x) => String(x.id) === String(co.id) || String(x.orderRef) === String(co.orderRef));
+      if (idx !== -1) {
+        existingLocal[idx] = { ...existingLocal[idx], ...co };
+      } else {
+        existingLocal.unshift(co);
+      }
+    });
+    writeJson('merch.orders', existingLocal);
+  }
+
   return combined;
 }
 
@@ -10375,17 +10728,23 @@ async function paintFashionAccountDashboard() {
     const canceledCount = orders.filter((o) => normalizeOrderStatus(o.orderStatus || o.status) === 'canceled').length;
     const totalCount = orders.length;
 
-    const boxes = pickAll('.order-box', statsWrap);
-    boxes.forEach((box) => {
-      const text = (box.textContent || '').toLowerCase();
-      const countEl = box.querySelector('.info__count');
-      if (!countEl) return;
-      if (/awaiting|pickup|pending/i.test(text)) setText(countEl, pendingCount);
-      else if (/cancel/i.test(text)) setText(countEl, canceledCount);
-      else if (/total/i.test(text)) setText(countEl, totalCount);
-      else if (/delivery|transit/i.test(text)) setText(countEl, deliveryCount);
-      else if (/complete/i.test(text)) setText(countEl, completedCount);
-    });
+    const applyStats = () => {
+      const boxes = document.querySelectorAll('.acount-order_stats .order-box');
+      boxes.forEach((box) => {
+        const text = (box.textContent || '').toLowerCase();
+        const countEl = box.querySelector('.info__count');
+        if (!countEl) return;
+        if (/awaiting|pickup|pending/i.test(text)) setText(countEl, pendingCount);
+        else if (/cancel/i.test(text)) setText(countEl, canceledCount);
+        else if (/total/i.test(text)) setText(countEl, totalCount);
+        else if (/delivery|transit/i.test(text)) setText(countEl, deliveryCount);
+        else if (/complete/i.test(text)) setText(countEl, completedCount);
+      });
+    };
+    applyStats();
+    setTimeout(applyStats, 200);
+    setTimeout(applyStats, 600);
+    setTimeout(applyStats, 1500);
   }
 
   if (recentTable) {
@@ -10403,7 +10762,7 @@ async function paintFashionAccountDashboard() {
       const statusLabel = norm.charAt(0).toUpperCase() + norm.slice(1);
       const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
       const firstItem = items[0] || {};
-      const itemImg = firstItem.image ? mediaUrl(firstItem.image) : 'assets/images/product/square/product-1.jpg';
+      const itemImg = resolveOrderItemImage(firstItem, catalogImageCache);
       const itemName = firstItem.name || 'Order Item';
       const itemType = firstItem.variantLabel || firstItem.color || firstItem.size || (items.length > 1 ? `${items.length} items` : 'Clothing');
       const orderCode = o.orderRef || o.reference || ('#' + String(o.id).slice(-8));
@@ -10417,7 +10776,7 @@ async function paintFashionAccountDashboard() {
         <td>
           <div class="tb-order_product">
             <a href="account-orders.html" class="img-prd">
-              <img loading="lazy" width="48" height="48" src="${itemImg}" alt="${escapeHtml(itemName)}" style="border-radius: 4px; object-fit: cover;">
+              <img loading="lazy" width="48" height="48" src="${itemImg}" alt="${escapeHtml(itemName)}" style="border-radius: 4px; object-fit: cover;" onerror="this.src='assets/images/product/square/product-1.jpg'">
             </a>
             <div class="infor-prd">
               <a href="account-orders.html" class="prd_name link fw-medium lh-24">${escapeHtml(itemName)}</a>
@@ -10475,27 +10834,37 @@ async function paintFashionOrdersPage() {
       const norm = normalizeOrderStatus(o.orderStatus || o.status);
       const statusLabel = norm.charAt(0).toUpperCase() + norm.slice(1);
       const orderDate = o.createdAt ? new Date(o.createdAt).toLocaleDateString() : '';
-      const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : [
-        { name: 'Fashion Product', price: o.total || 60, qty: 1, image: 'assets/images/product/square/product-1.jpg' }
-      ]);
+      const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
 
-      const itemsHtml = items.map((item) => {
-        const imgUrl = item.image ? mediaUrl(item.image) : 'assets/images/product/square/product-1.jpg';
+      const itemsHtml = items.length ? items.map((item) => {
+        const imgUrl = resolveOrderItemImage(item, catalogImageCache);
+        const variantText = item.variantLabel || item.color || item.size ||
+          (item.name && item.name.includes('—') ? item.name.split('—')[1].trim() : '');
         return `
           <div class="order_prd_item">
             <div class="prd__image">
-              <img loading="lazy" width="80" height="80" src="${imgUrl}" alt="${escapeHtml(item.name || '')}">
+              <img loading="lazy" width="80" height="80" src="${imgUrl}" alt="${escapeHtml(item.name || '')}" style="border-radius: 8px; object-fit: cover;" onerror="this.src='assets/images/product/square/product-1.jpg'">
             </div>
             <div class="prd__info">
               <p class="name fw-medium">${escapeHtml(item.name || 'Product')}</p>
-              <p class="type cl-text-2 text-caption-01">${escapeHtml(item.variantLabel || item.color || item.size || '')}</p>
+              <p class="type cl-text-2 text-caption-01">${escapeHtml(variantText)}</p>
             </div>
             <div class="prd__price fw-medium">
               <span class="quantity">${item.qty || 1}</span> x <span class="price">${money(item.price)}</span>
             </div>
           </div>
         `;
-      }).join('');
+      }).join('') : `
+        <div class="order_prd_item">
+          <div class="prd__info">
+            <p class="name fw-medium">${escapeHtml(o.orderRef || o.reference || o.id)}</p>
+            <p class="type cl-text-2 text-caption-01">Order Placed</p>
+          </div>
+          <div class="prd__price fw-medium">
+            <span class="price">${money(o.total || o.totalAmount)}</span>
+          </div>
+        </div>
+      `;
 
       const card = document.createElement('div');
       card.className = 'wg-my-order';
@@ -10561,27 +10930,72 @@ async function paintFashionOrdersPage() {
 }
 
 function showFashionOrderDetailModal(o) {
-  const modal = document.getElementById('orderDetail');
-  if (!modal) return;
+  let modal = document.getElementById('orderDetail');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal modalCentered fade modal-order_detail';
+    modal.id = 'orderDetail';
+    modal.innerHTML = `
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content tf-grid-layout md-col-2 gap-0">
+          <div class="col-left">
+            <div class="modal-heading text-center">
+              <h5 class="title-pop">Order Details</h5>
+              <span class="icon-X2 fs-24 cs-pointer link d-none d-md-block" data-bs-dismiss="modal"></span>
+            </div>
+            <div class="tf-grid-layout sm-col-2 md-col-1 lg-col-2 grid-info">
+              <div class="box-info">
+                <p class="info-title fw-medium cl-text-3">Contact Information</p>
+                <h6></h6>
+                <h6></h6>
+              </div>
+              <div class="box-info">
+                <p class="info-title fw-medium cl-text-3">Payment Method</p>
+                <h6></h6>
+              </div>
+              <div class="box-info">
+                <p class="info-title fw-medium cl-text-3">Shipping Address</p>
+                <h6></h6>
+              </div>
+              <div class="box-info">
+                <p class="info-title fw-medium cl-text-3">Billing Address</p>
+                <h6></h6>
+              </div>
+            </div>
+          </div>
+          <div class="col-right">
+            <div class="modal-heading text-center">
+              <h5 class="title-pop">Items</h5>
+              <span class="icon-X2 fs-24 cs-pointer link d-md-none" data-bs-dismiss="modal"></span>
+            </div>
+            <ul class="list-order-product"></ul>
+            <ul class="list-total"></ul>
+            <div class="last-total h5 fw-medium d-flex align-items-center justify-content-between">
+              <span>Total</span>
+              <span>₹0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  }
 
-  const addr = o.shippingAddress || readJson('merch.address', {
-    name: 'Tony Nguyen',
-    email: 'hi.avitex@gmail.com',
-    line: '2163 Phillips Gap Rd',
-    city: 'West Jefferson',
-    state: 'North Carolina',
-    pincode: '28694',
-    country: 'US',
-  });
+  const addr = o.shippingAddress || readJson('merch.address', {});
 
-  const fullAddr = [addr.line, addr.city, addr.state, addr.pincode, addr.country].filter(Boolean).join(', ') || '2163 Phillips Gap Rd, West Jefferson, North Carolina, US';
+  const fullAddr = [addr.line || addr.address1 || addr.address, addr.city, addr.state, addr.pincode, addr.country].filter(Boolean).join(', ') || 'N/A';
   const u = user.get() || STORE_ME || {};
-  const custName = addr.name || u.name || 'Tony Nguyen';
-  const custEmail = addr.email || u.email || 'hi.avitex@gmail.com';
+  const orderEmail = getOrderEmail(o);
+  const custEmail = addr.email || orderEmail || u.email || 'N/A';
+  const custName = addr.name || [addr.firstName, addr.lastName].filter(Boolean).join(' ') || u.name || (u.firstName ? (u.firstName + ' ' + (u.lastName || '')).trim() : '') || (custEmail !== 'N/A' ? custEmail.split('@')[0] : 'Customer');
 
   const boxes = pickAll('.box-info', modal);
   boxes.forEach((box) => {
     const title = (box.querySelector('.info-title')?.textContent || '').toLowerCase();
+    if (/company/i.test(title)) {
+      box.remove();
+      return;
+    }
     const h6s = box.querySelectorAll('h6');
     if (/contact/i.test(title)) {
       if (h6s[0]) setText(h6s[0], custName);
@@ -10595,32 +11009,65 @@ function showFashionOrderDetailModal(o) {
 
   const items = (o.items && o.items.length) ? o.items : ((o.lines && o.lines.length) ? o.lines : []);
   const listProd = modal.querySelector('.list-order-product');
-  if (listProd && items.length) {
+  if (listProd) {
     listProd.replaceChildren();
-    items.forEach((item) => {
-      const imgUrl = item.image ? mediaUrl(item.image) : 'assets/images/product/product-3.jpg';
-      const li = document.createElement('li');
-      li.className = 'order-item fw-medium';
-      li.innerHTML = `
-        <div class="img-prd">
-          <img loading="lazy" width="80" height="100" src="${imgUrl}" alt="${escapeHtml(item.name || '')}" style="border-radius: 4px; object-fit: cover;">
-        </div>
-        <div class="infor-prd">
-          <span class="prd_name fw-medium lh-24">${escapeHtml(item.name || 'Product')}</span>
-          <div class="text-caption-01">
-            <span class="cl-text-2">Details:</span> ${escapeHtml(item.variantLabel || item.color || item.size || `Qty: ${item.qty || 1}`)}
+    if (items.length) {
+      items.forEach((item) => {
+        const imgUrl = resolveOrderItemImage(item, catalogImageCache);
+        const variantText = item.variantLabel || item.color || item.size ||
+          (item.name && item.name.includes('—') ? item.name.split('—')[1].trim() : `Qty: ${item.qty || 1}`);
+        const li = document.createElement('li');
+        li.className = 'order-item fw-medium';
+        li.innerHTML = `
+          <div class="img-prd">
+            <img loading="lazy" width="80" height="100" src="${imgUrl}" alt="${escapeHtml(item.name || '')}" style="border-radius: 4px; object-fit: cover;" onerror="this.src='assets/images/product/product-3.jpg'">
           </div>
-        </div>
-        <div class="quantity-price text-primary">
-          ${item.qty ? `${item.qty} × ` : ''}${money(item.price)}
-        </div>
-      `;
-      listProd.appendChild(li);
-    });
+          <div class="infor-prd">
+            <span class="prd_name fw-medium lh-24">${escapeHtml(item.name || 'Product')}</span>
+            <div class="text-caption-01">
+              <span class="cl-text-2">Details:</span> ${escapeHtml(variantText)}
+            </div>
+          </div>
+          <div class="quantity-price text-primary">
+            ${item.qty ? `${item.qty} × ` : ''}${money(item.price)}
+          </div>
+        `;
+        listProd.appendChild(li);
+      });
+    }
   }
 
-  const lastTotal = modal.querySelector('.last-total span:last-child');
-  if (lastTotal) setText(lastTotal, money(o.total || o.totalAmount));
+  const itemsSubtotal = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 1), 0);
+  const totalAmount = Number(o.total || o.totalAmount) || itemsSubtotal;
+  const discountVal = Number(o.discount || o.discountAmount || o.couponDiscount || 0);
+
+  const listTotal = modal.querySelector('.list-total');
+  if (listTotal) {
+    listTotal.replaceChildren();
+
+    const subLi = document.createElement('li');
+    subLi.className = 'total-item lh-24 fw-medium d-flex align-items-center justify-content-between';
+    subLi.innerHTML = `<span>Subtotal</span><span>${money(itemsSubtotal || totalAmount)}</span>`;
+    listTotal.appendChild(subLi);
+
+    const shipFee = Number(o.shippingFee || o.shippingRate || o.shipping || 0);
+    const shipLi = document.createElement('li');
+    shipLi.className = 'total-item lh-24 fw-medium d-flex align-items-center justify-content-between';
+    shipLi.innerHTML = `<span>Shipping</span><span>${shipFee > 0 ? money(shipFee) : 'Free'}</span>`;
+    listTotal.appendChild(shipLi);
+
+    if (discountVal > 0) {
+      const discLi = document.createElement('li');
+      discLi.className = 'total-item lh-24 fw-medium d-flex align-items-center justify-content-between text-success';
+      discLi.innerHTML = `<span>Discounts</span><span>-${money(discountVal)}</span>`;
+      listTotal.appendChild(discLi);
+    }
+  }
+
+  const lastTotal = modal.querySelector('.last-total');
+  if (lastTotal) {
+    lastTotal.innerHTML = `<span>Total</span><span>${money(totalAmount)}</span>`;
+  }
 
   if (window.bootstrap?.Modal) {
     window.bootstrap.Modal.getOrCreateInstance(modal).show();
@@ -10631,17 +11078,22 @@ function wireFashionAddressesPage() {
   const form = pick('.form-account-address');
   if (!form) return;
 
+  const u = user.get() || STORE_ME || {};
+  const [uFirst, ...uRest] = String(u.name || localStorage.getItem('merch.shopper_name') || '').trim().split(/\s+/);
+  const defaultEmail = u.email || localStorage.getItem('merch.shopper_email') || '';
+  const defaultPhone = u.phone || localStorage.getItem('merch.shopper_phone') || '';
+  const defaultState = localStorage.getItem('merch.shopper_state') || '';
+
   const addr = STORE_ADDRESS || readJson('merch.address', {
-    firstName: 'Tony',
-    lastName: 'Nguyen',
-    company: '2',
-    country: '2',
-    street: '2163 Phillips Gap Rd',
-    town: 'West Jefferson',
-    state: 'North Carolina',
-    zip: '28694',
-    phone: '3156666688',
-    email: 'hi.avitex@gmail.com',
+    firstName: localStorage.getItem('merch.shopper_first_name') || uFirst || '',
+    lastName: localStorage.getItem('merch.shopper_last_name') || uRest.join(' ') || '',
+    country: 'India',
+    street: '',
+    town: '',
+    state: defaultState,
+    zip: '',
+    phone: defaultPhone,
+    email: defaultEmail,
   });
 
   const setVal = (id, val) => {
@@ -10651,26 +11103,26 @@ function wireFashionAddressesPage() {
 
   if (addr) {
     const parts = (addr.name || '').trim().split(/\s+/);
-    setVal('first-name', addr.firstName || parts[0] || '');
-    setVal('last-name', addr.lastName || parts.slice(1).join(' ') || '');
-    setVal('company', addr.company || '2');
-    setVal('country', addr.country || '2');
+    setVal('first-name', addr.firstName || parts[0] || uFirst || '');
+    setVal('last-name', addr.lastName || parts.slice(1).join(' ') || uRest.join(' ') || '');
+    setVal('country', addr.country || 'India');
     setVal('street', addr.street || addr.line || '');
     setVal('town', addr.town || addr.city || '');
-    setVal('state', addr.state || '');
+    setVal('state', addr.state || defaultState || '');
     setVal('zip', addr.zip || addr.pincode || '');
-    setVal('phone', addr.phone || '');
-    setVal('email', addr.email || '');
+    setVal('phone', addr.phone || defaultPhone || '');
+    setVal('email', addr.email || defaultEmail || '');
   }
 
   form.onsubmit = async (e) => {
     e.preventDefault();
+    const fn = form.querySelector('#first-name')?.value.trim() || '';
+    const ln = form.querySelector('#last-name')?.value.trim() || '';
     const updated = {
-      name: (form.querySelector('#first-name')?.value || '').trim() + ' ' + (form.querySelector('#last-name')?.value || '').trim(),
-      firstName: form.querySelector('#first-name')?.value.trim() || '',
-      lastName: form.querySelector('#last-name')?.value.trim() || '',
-      company: form.querySelector('#company')?.value || '',
-      country: form.querySelector('#country')?.value || '',
+      name: [fn, ln].filter(Boolean).join(' ') || fn,
+      firstName: fn,
+      lastName: ln,
+      country: form.querySelector('#country')?.value || 'India',
       street: form.querySelector('#street')?.value.trim() || '',
       line: form.querySelector('#street')?.value.trim() || '',
       town: form.querySelector('#town')?.value.trim() || '',
@@ -10683,6 +11135,9 @@ function wireFashionAddressesPage() {
     };
     writeJson('merch.address', updated);
     STORE_ADDRESS = updated;
+    if (updated.state) {
+      try { localStorage.setItem('merch.shopper_state', updated.state); } catch {}
+    }
     try { await api.addAddress(updated); } catch {}
     notify('Address updated successfully.', 'success');
   };
@@ -10752,37 +11207,57 @@ pages.account = async () => {
   wireAuthForms();
   wirePasswordChange();
   wireAccountDetailsForm();
-  if (!token.get()) { showSignedOut(); return; }
+
+  let me = user.get() || STORE_ME;
+  if (!me && token.get()) {
+    try { me = await api.me(); }
+    catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { token.clear(); } }
+  }
+
+  if (me) {
+    showSignedIn(me);
+    STORE_ME = me;
+    user.set(me);
+  } else if (!token.get()) {
+    showSignedOut();
+  }
 
   const cachedName = localStorage.getItem('merch.shopper_name');
   if (cachedName) pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, cachedName));
 
-  let me = user.get() || STORE_ME;
-  if (!me) {
-    try { me = await api.me(); }
-    catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { showSignedOut(); return; } showError(e); return; }
+  if (token.get()) {
+    api.addresses().then((list) => { STORE_ADDRESS = (list || []).find((a) => a.isDefault) || (list || [])[0] || null; }).catch(() => {});
   }
-
-  showSignedIn(me);
-  STORE_ME = me;
-  if (me) user.set(me);
-
-  api.addresses().then((list) => { STORE_ADDRESS = (list || []).find((a) => a.isDefault) || (list || [])[0] || null; }).catch(() => {});
-  initSampleOrders();
 
   if (THEME?.name === 'fashion') {
     await Promise.all([paintFashionAccountDashboard(), paintAddresses(), wishlist.sync()]);
     wireFashionAccountSetting();
     wireFashionAddressesPage();
-  } else {
-    await Promise.all([paintOrders(), paintAddresses(), wishlist.sync()]);
-    wireAddressForm();
+    wireSignOut();
+    return;
   }
+
+  if (!token.get()) { showSignedOut(); return; }
+
+  await Promise.all([paintOrders(), paintAddresses(), wishlist.sync()]);
+  wireAddressForm();
   wireSignOut();
 };
 
 pages.orders = async () => {
-  initSampleOrders();
+  let me = user.get() || STORE_ME;
+  if (!me && token.get()) {
+    try { me = await api.me(); }
+    catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { token.clear(); } }
+    if (me) {
+      STORE_ME = me;
+      user.set(me);
+      if (me.email) {
+        try { localStorage.setItem('merch.shopper_email', me.email); } catch {}
+      }
+    }
+  }
+
   if (THEME?.name === 'fashion') {
     await paintFashionOrdersPage();
   } else {
@@ -11343,16 +11818,24 @@ pages.wishlist = async () => {
   if (token.get()) {
     try {
       const remote = extractWishlistIds(await api.wishlist());
-      if (remote && remote.length) {
+      if (Array.isArray(remote)) {
         ids = remote;
-        writeWish([...new Set([...wishlist.ids(), ...remote])]);
+        writeWish(remote);
       }
     } catch { /* fall back to the local list */ }
   }
   let items = [];
   try {
     const res = await api.products(ids);
-    items = Array.isArray(res) ? res : (res?.products || res?.items || []);
+    const list = Array.isArray(res) ? res : (res?.products || res?.items || []);
+    const idSet = new Set(ids.map(String));
+    items = list.filter((p) => idSet.has(String(p?.id)));
+    if (!items.length && ids.length) {
+      try {
+        const individual = await Promise.all(ids.map((id) => api.product(id).catch(() => null)));
+        items = individual.filter(Boolean);
+      } catch {}
+    }
   } catch (e) { return showError(e); }
 
   const wishGrid = pick('.wrapper-wishlist');
@@ -11369,12 +11852,18 @@ pages.wishlist = async () => {
   };
 
   if (wishGrid) {
+    hydrated.add(wishGrid);
+    if (wishGrid.parentElement) hydrated.add(wishGrid.parentElement);
+    const wishSec = wishGrid.closest('section, .section-wishlist');
+    if (wishSec) hydrated.add(wishSec);
+
     if (!items.length) {
       renderWishlistGridEmpty();
       return;
     }
     renderProducts(items, THEME.listing, wishGrid);
     wireQuickView();
+    removeAllCompareElements(wishGrid);
     const cards = pickAll('.card-product', wishGrid);
     cards.forEach((card) => {
       const id = card.dataset.merchId;
@@ -11570,10 +12059,7 @@ document.addEventListener('click', async (e) => {
 });
 
 pages.compare = async () => {
-  let items = [];
-  try { items = await api.products(compare.ids()); } catch (e) { return showError(e); }
-  if (!items.length) return;
-  renderProducts(items);
+  location.replace('shop-left-sidebar.html');
 };
 
 pages.blog = async () => {
@@ -12084,6 +12570,7 @@ async function boot() {
   cart.onChange(() => { paintHeader(); paintFashionMiniCart(); });
   wishlist.onChange(() => { paintHeader(); syncWishlistCardStates(); });
   wishlist.sync().catch(() => {});
+  wishlist.refresh().catch(() => {});
   paintFashionMiniCart();
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
@@ -12129,6 +12616,7 @@ async function boot() {
   /* Only needed on path A; on path B the theme has just initialised over the
      finished DOM and there is nothing to refresh. */
   if (!deferredThemeScripts().length) { try { THEME.reinit?.(); } catch (e) { warn(e); } }
+  try { removeAllCompareElements(); } catch {}
   runAfterTheme();
 }
 
