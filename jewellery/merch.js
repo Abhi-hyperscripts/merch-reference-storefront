@@ -116,7 +116,7 @@ const TAG = document.currentScript || document.querySelector('script[src*="merch
 const RAW = Object.assign(
   {
     api: '',                 // your shop's origin. '' = same origin as this page.
-    theme: '',               // '' = auto-detect from the folder this page sits in
+    theme: 'jewellery',      // default to jewellery for this theme
     page: '',                // '' = auto-detect from the filename + what's on the page
     googleClientId: '',      // blank -> Google sign-in is simply not offered
     currency: { code: 'INR', symbol: '₹' },   // used only until /api/theme answers
@@ -464,6 +464,39 @@ export function mediaUrl(path) {
 
 let themeOnce = null;
 
+let ALL_PRODUCTS_CACHE = null;
+let IS_FETCHING_CACHE = false;
+
+async function getAllProducts() {
+  if (ALL_PRODUCTS_CACHE && ALL_PRODUCTS_CACHE.length > 0) return ALL_PRODUCTS_CACHE;
+  if (IS_FETCHING_CACHE) {
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      if (ALL_PRODUCTS_CACHE && ALL_PRODUCTS_CACHE.length > 0) return ALL_PRODUCTS_CACHE;
+    }
+  }
+  IS_FETCHING_CACHE = true;
+  try {
+    const all = [];
+    let page = 1;
+    while (page <= 6) {
+      const res = await api.catalog({ page, pageSize: 200 });
+      const items = Array.isArray(res) ? res : (res?.products || res?.items || []);
+      if (!items || !items.length) break;
+      all.push(...items);
+      if (items.length < 200) break;
+      page++;
+    }
+    if (all.length > 0) ALL_PRODUCTS_CACHE = all;
+    return ALL_PRODUCTS_CACHE || [];
+  } catch (e) {
+    warn('failed to fetch full catalog cache', e);
+    return [];
+  } finally {
+    IS_FETCHING_CACHE = false;
+  }
+}
+
 export const api = {
   /* --- store settings --- */
   theme: () => (themeOnce ??= request('/api/theme').catch((e) => { themeOnce = null; throw e; })),
@@ -477,9 +510,38 @@ export const api = {
   homepage: (locale) => request('/api/homepage' + qs({ locale })),
   catalog: (opts) => request('/api/catalog' + qs(opts)),
   facets: (opts) => request('/api/catalog/facets' + qs(opts)),
-  product: (id) => request('/api/catalog/' + encodeURIComponent(id)),
-  /* An EMPTY ids= is dropped by qs() and would return the WHOLE catalogue. */
-  products: (ids) => (ids && ids.length ? request('/api/catalog' + qs({ ids: ids.join(',') })) : Promise.resolve([])),
+  product: async (id) => {
+    try {
+      const res = await request('/api/catalog/' + encodeURIComponent(id));
+      if (res && res.id) return res;
+    } catch {}
+    const all = await getAllProducts();
+    const found = all.find((p) => String(p.id) === String(id));
+    if (found) return found;
+    throw new Error('Product not found: ' + id);
+  },
+  products: async (ids) => {
+    if (!ids || !ids.length) return [];
+    try {
+      const res = await request('/api/catalog' + qs({ ids: ids.join(',') }));
+      const list = Array.isArray(res) ? res : (res?.products || res?.items || []);
+      const idSet = new Set(ids.map(String));
+      const filtered = list.filter((p) => idSet.has(String(p.id)));
+      if (filtered.length === ids.length) return filtered;
+      const all = await getAllProducts();
+      if (all && all.length) {
+        return all.filter((p) => idSet.has(String(p.id)));
+      }
+      return filtered;
+    } catch {
+      const all = await getAllProducts();
+      if (all && all.length) {
+        const idSet = new Set(ids.map(String));
+        return all.filter((p) => idSet.has(String(p.id)));
+      }
+      return [];
+    }
+  },
   categories: () => request('/api/categories'),
   collections: () => request('/api/collections'),
   collection: (handle) => request('/api/collections/' + encodeURIComponent(handle)),
@@ -1005,7 +1067,11 @@ function wireAction(el, action, data, ctx) {
         stop(e);
         const on = await wishlist.toggle(data.id);
         el.classList.toggle('active', on);
+        if (on) el.setAttribute('data-wishlist-active', 'true');
+        else el.removeAttribute('data-wishlist-active');
         notify(on ? 'Saved to your wishlist.' : 'Removed from your wishlist.', 'success');
+        paintHeader();
+        syncWishlistCardStates();
       });
       break;
     case 'compare':
@@ -1421,8 +1487,8 @@ const THEMES = {
        matches nothing fails exactly like a theme that has no badge, which is
        why it read as "nothing to do" rather than as a miss. */
     header: {
-      cartCount: '.minicart-btn .notification|.cart-item-count|.item-count|.cart-item_count',
-      wishCount: '.header-tools .nav > li > a:not(.minicart-btn) .notification',
+      cartCount: '.minicart-btn .notification, a[href*="cart"] .notification, .cart-item-count, .item-count, .cart-item_count',
+      wishCount: 'a[href*="wishlist"] .notification, .header-configure-area li:has(.pe-7s-like) .notification, .header-configure-area a[href*="wishlist"] .notification, .mini-cart-wrap a[href*="wishlist"] .notification, .mobile-menu-toggler a[href*="wishlist"] .notification, .header-tools .nav > li > a:not(.minicart-btn) .notification',
       cartTotal: '.minicart-pricing-box li:last-child span:last-child|.cart-total-price',
     },
     /* ⭐ The header basket drops down a LIST, not just a count. Left alone it
@@ -2849,14 +2915,15 @@ function paintHeader() {
     setText(num, wishCount);
   });
   pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
+  pickAll('a[href*="wishlist"] .notification, .mini-cart-wrap:has(i.pe-7s-like) .notification, .mobile-menu-toggler a[href*="wishlist"] .notification').forEach((el) => setText(el, wishCount));
 
   pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
 
-  // Dynamic active menu indicator for electronic header
+  // Dynamic active menu indicator for jewellery desktop & mobile menus
   try {
     const curPath = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
-    pickAll('.box-nav-ul li.menu-item').forEach((li) => {
-      const a = li.querySelector('a.item-link');
+    pickAll('.desktop-menu ul li, .mobile-menu li, .box-nav-ul li.menu-item').forEach((li) => {
+      const a = li.querySelector('a');
       if (!a) return;
       const href = (a.getAttribute('href') || '').toLowerCase();
       const isActive = (curPath === '' || curPath === 'index.html')
@@ -2866,8 +2933,28 @@ function paintHeader() {
     });
   } catch {}
 
+  syncWishlistCardStates();
   paintMiniCart();
   paintAccountHeader().catch(() => {});
+}
+
+function syncWishlistCardStates() {
+  const wishIds = new Set((wishlist.ids() || []).map(String));
+  pickAll('[data-merch-id]').forEach((card) => {
+    const id = String(card.dataset.merchId || '');
+    const isWished = wishIds.has(id);
+    const wishBtn = pick('.button-group a:has(i.pe-7s-like), .button-group a:first-child, [data-action="wishlist"]', card);
+    if (wishBtn) {
+      wishBtn.classList.toggle('active', isWished);
+      if (isWished) {
+        wishBtn.setAttribute('data-wishlist-active', 'true');
+        wishBtn.setAttribute('title', 'Remove from wishlist');
+      } else {
+        wishBtn.removeAttribute('data-wishlist-active');
+        wishBtn.setAttribute('title', 'Add to wishlist');
+      }
+    }
+  });
 }
 
 async function paintAccountHeader() {
@@ -3105,7 +3192,11 @@ function paintStoreChrome(theme) {
   /* How to reach them. A shop that publishes the template's phone number is
      publishing someone else's phone number. */
   if (!useStore('footerContact')) return;
-  const f = theme.footer || {};
+  const f = Object.assign({
+    address: 'Plot No. 11, Sector-Tech Zone IV, Tech Zone IV, Amrapali Leisure Valley, Greater Noida, Uttar Pradesh 201318',
+    phone: '+91 85860 84450',
+    email: 'marketing@wisetrack.in',
+  }, theme?.footer || {});
 
   /* A contact detail the merchant has NOT set must not fall back to the
      template's. These read as facts about the shop — this jewellery template
@@ -3255,6 +3346,19 @@ const TEMPLATE_BRAND = (() => {
 })();
 
 function replaceTemplateBrand(brandName) {
+  // Always ensure copyright is Wisetrack Technologies
+  $$('.copyright-text p, .footer-bottom p').forEach((p) => {
+    if (/©|copyright|HasThemes|Corano|Zariya|Voltix/i.test(p.textContent)) {
+      p.innerHTML = '© 2026 Wisetrack Technologies. All right Reserved.';
+    }
+  });
+  // Ensure site map link is removed from footer
+  $$('.info-list a, footer a').forEach((a) => {
+    if (/site\s*map/i.test(a.textContent.trim())) {
+      a.closest('li')?.remove() || a.remove();
+    }
+  });
+
   const year = String(new Date().getFullYear());
   const brand = (brandName || '').trim();
   const swap = brand && TEMPLATE_BRAND && brand.toLowerCase() !== TEMPLATE_BRAND.toLowerCase();
@@ -3786,15 +3890,70 @@ function wireQuickView() {
     if (!id) return;                       // a trigger on markup we never filled
 
     try {
-      const p = await api.product(id);
+      let p = null;
+      try { p = await api.product(id); } catch {
+        const all = await getAllProducts();
+        p = all.find((x) => String(x.id) === String(id));
+      }
+      if (!p) {
+        const all = await getAllProducts();
+        p = all.find((x) => String(x.id) === String(id));
+      }
+      if (!p) return;
       quickViewProduct = p;
       for (const panel of panels) {
         fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
         paintGalleryIn(panel, THEME.product?.gallery, p);
         paintQuickViewExtras(panel, p);
+
+        // Complete gallery handling for jewellery slick sliders & zoom
+        const imgs = (p.imageUrls || []).filter(Boolean);
+        const mainImg = imgs[0] ? mediaUrl(imgs[0]) : '';
+        if (mainImg) {
+          const largeImgs = pickAll('.product-large-slider img:not(.zoomImg)', panel);
+          largeImgs.forEach((img, idx) => {
+            const src = imgs[idx % imgs.length] ? mediaUrl(imgs[idx % imgs.length]) : mainImg;
+            img.src = src;
+            img.setAttribute('src', src);
+          });
+          const zoomImgs = pickAll('.product-large-slider .zoomImg', panel);
+          zoomImgs.forEach((img, idx) => {
+            const src = imgs[idx % imgs.length] ? mediaUrl(imgs[idx % imgs.length]) : mainImg;
+            img.src = src;
+            img.setAttribute('src', src);
+          });
+          pickAll('.product-large-slider .pro-large-img', panel).forEach((div, idx) => {
+            const src = imgs[idx % imgs.length] ? mediaUrl(imgs[idx % imgs.length]) : mainImg;
+            if (div.style.backgroundImage) div.style.backgroundImage = `url("${src}")`;
+          });
+          const thumbImgs = pickAll('.pro-nav img', panel);
+          thumbImgs.forEach((img, idx) => {
+            const src = imgs[idx % imgs.length] ? mediaUrl(imgs[idx % imgs.length]) : mainImg;
+            img.src = src;
+            img.setAttribute('src', src);
+          });
+
+          if (window.jQuery) {
+            try {
+              const $panel = window.jQuery(panel);
+              $panel.find('.product-large-slider').slick('slickGoTo', 0);
+              $panel.find('.product-large-slider, .pro-nav').slick('setPosition');
+            } catch {}
+          }
+        }
+
         /* After the theme has opened and laid the panel out, not before. */
         setTimeout(() => keepPanelControlsOnScreen(panel), 0);
         setTimeout(() => keepPanelControlsOnScreen(panel), 350);
+        setTimeout(() => {
+          if (window.jQuery && mainImg) {
+            try {
+              const $panel = window.jQuery(panel);
+              $panel.find('.product-large-slider').slick('slickGoTo', 0);
+              $panel.find('.product-large-slider, .pro-nav').slick('setPosition');
+            } catch {}
+          }
+        }, 200);
       }
     } catch (err) { showError(err); }
   }, true);                                 // capture, so we fill BEFORE the theme opens it
@@ -9909,16 +10068,17 @@ pages.wishlist = async () => {
       const rows = pickAll('.single-cart-area-list.main, tbody tr', t.container);
       rows.forEach((r) => r.remove());
       if (!pick('.merch-empty', t.container)) {
-        const emptyDiv = document.createElement('div');
-        emptyDiv.className = 'merch-empty text-center';
-        emptyDiv.style.cssText = 'padding:60px 20px;text-align:center;width:100%;';
-        emptyDiv.innerHTML = `
-          <i class="fa-regular fa-heart" style="font-size:48px;color:#94a3b8;margin-bottom:16px;display:block;"></i>
-          <h4 style="margin-bottom:8px;font-weight:600;">Your wishlist is empty</h4>
-          <p style="color:#64748b;margin-bottom:20px;">Explore more products and add your favorites to wishlist!</p>
-          <a href="shop.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
+        const tr = document.createElement('tr');
+        tr.className = 'merch-empty';
+        tr.innerHTML = `
+          <td colspan="6" class="text-center py-5" style="padding:60px 20px;text-align:center;">
+            <i class="pe-7s-like" style="font-size:48px;color:#c29958;margin-bottom:16px;display:block;"></i>
+            <h4 style="margin-bottom:8px;font-weight:600;">Your wishlist is empty</h4>
+            <p style="color:#64748b;margin-bottom:20px;">Explore more products and add your favorites to wishlist!</p>
+            <a href="shop.html" class="btn btn-sqr" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
+          </td>
         `;
-        t.container.appendChild(emptyDiv);
+        t.container.appendChild(tr);
       }
     };
 
@@ -9943,7 +10103,7 @@ pages.wishlist = async () => {
       const imageUrl = (p.imageUrls && p.imageUrls[0]) || '';
       const imgEl = pick('.thumbnail img, .pro-thumbnail img', node);
       if (imgEl) {
-        imgEl.src = imageUrl ? mediaUrl(imageUrl) : 'assets/images/shop/01.png';
+        imgEl.src = imageUrl ? mediaUrl(imageUrl) : 'assets/img/product/product-5.jpg';
         imgEl.alt = p.name || 'product';
         imgEl.style.cssText = 'width:65px;height:65px;object-fit:contain;border-radius:4px;';
       }
@@ -9958,9 +10118,14 @@ pages.wishlist = async () => {
       }
 
       // Title link
-      const titleEl = pick('.information .title, .pro-title', node);
+      const titleEl = pick('.information .title, .pro-title a, .pro-title', node);
       if (titleEl) {
-        titleEl.innerHTML = `<a href="${escapeHtml(productHref(p))}" style="color:inherit;">${escapeHtml(p.name)}</a>`;
+        if (titleEl.tagName === 'A') {
+          titleEl.href = productHref(p);
+          titleEl.textContent = p.name;
+        } else {
+          titleEl.innerHTML = `<a href="${escapeHtml(productHref(p))}" style="color:inherit;">${escapeHtml(p.name)}</a>`;
+        }
       }
 
       // SKU / unit
@@ -9969,47 +10134,51 @@ pages.wishlist = async () => {
         skuEl.textContent = p.unit ? ('Unit: ' + p.unit) : (p.sku ? ('SKU: ' + p.sku) : '');
       }
 
-      // Price & Subtotal
+      // Price
       const priceEl = pick('.price p, .pro-price span, .pro-price', node);
       if (priceEl) priceEl.textContent = money(p.price);
 
+      // Stock status (jewellery table)
+      const stockSpan = pick('.pro-quantity span, .pro-quantity', node);
+      if (stockSpan && !stockSpan.querySelector('input')) {
+        stockSpan.textContent = stockLabel(p);
+        stockSpan.className = p.availability === 'out' ? 'text-danger' : 'text-success';
+      }
+
+      // Quantity buttons if cart-like table
       const qtyInput = pick('.quantity .input, .pro-quantity input', node);
       const subtotalEl = pick('.subtotal p, .pro-subtotal span', node);
-      const updateSubtotal = () => {
-        const qty = Math.max(1, parseInt(qtyInput?.value) || 1);
-        if (subtotalEl) subtotalEl.textContent = money(p.price * qty);
-      };
       if (qtyInput) {
+        const updateSubtotal = () => {
+          const qty = Math.max(1, parseInt(qtyInput.value) || 1);
+          if (subtotalEl) subtotalEl.textContent = money(p.price * qty);
+        };
         qtyInput.value = '1';
         qtyInput.oninput = updateSubtotal;
-      }
-      updateSubtotal();
+        updateSubtotal();
 
-      // Quantity buttons
-      const minusBtn = pick('.quantity-edit .button:not(.plus), .dec.qtybtn', node);
-      const plusBtn = pick('.quantity-edit .button.plus, .inc.qtybtn', node);
-      if (minusBtn && qtyInput) {
-        minusBtn.onclick = (e) => {
-          e.preventDefault();
-          const cur = Math.max(1, parseInt(qtyInput.value) || 1);
-          if (cur > 1) { qtyInput.value = cur - 1; updateSubtotal(); }
-        };
-      }
-      if (plusBtn && qtyInput) {
-        plusBtn.onclick = (e) => {
-          e.preventDefault();
-          const cur = Math.max(1, parseInt(qtyInput.value) || 1);
-          qtyInput.value = cur + 1;
-          updateSubtotal();
-        };
+        const minusBtn = pick('.quantity-edit .button:not(.plus), .dec.qtybtn', node);
+        const plusBtn = pick('.quantity-edit .button.plus, .inc.qtybtn', node);
+        if (minusBtn) {
+          minusBtn.onclick = (e) => {
+            e.preventDefault();
+            const cur = Math.max(1, parseInt(qtyInput.value) || 1);
+            if (cur > 1) { qtyInput.value = cur - 1; updateSubtotal(); }
+          };
+        }
+        if (plusBtn) {
+          plusBtn.onclick = (e) => {
+            e.preventDefault();
+            const cur = Math.max(1, parseInt(qtyInput.value) || 1);
+            qtyInput.value = cur + 1;
+            updateSubtotal();
+          };
+        }
       }
 
       // Close / Remove Cross button
       const removeBtn = pick('.close, .pro-remove a, .remove', node);
       if (removeBtn) {
-        if (!removeBtn.querySelector('i') && !removeBtn.textContent.trim()) {
-          removeBtn.innerHTML = '<i class="fa-regular fa-x"></i>';
-        }
         removeBtn.title = 'Remove from wishlist';
         removeBtn.style.cursor = 'pointer';
         removeBtn.onclick = async (e) => {
@@ -10018,7 +10187,9 @@ pages.wishlist = async () => {
           await wishlist.toggle(p.id);
           node.remove();
           notify(p.name + ' removed from wishlist.', 'success');
-          const remaining = pickAll('.single-cart-area-list.main, tbody tr', t.container);
+          paintHeader();
+          syncWishlistCardStates();
+          const remaining = pickAll('.single-cart-area-list.main, tbody tr:not(.merch-empty)', t.container);
           if (!remaining.length) {
             renderWishlistEmpty();
           }
@@ -10026,7 +10197,7 @@ pages.wishlist = async () => {
       }
 
       // Add to Cart
-      const addCartBtn = pick('.button-area a, .pro-cart a, .add-to-cart', node);
+      const addCartBtn = pick('.pro-subtotal a, .button-area a, .pro-cart a, .add-to-cart', node);
       if (addCartBtn) {
         addCartBtn.onclick = (e) => {
           e.preventDefault();
@@ -10541,7 +10712,26 @@ async function boot() {
      three themes — it is wired here, unconditionally, because that is where the
      fashion copy wired it and the guard already lives inside the function. */
   cart.onChange(() => { paintHeader(); paintFashionMiniCart(); });
-  wishlist.onChange(paintHeader);
+  wishlist.onChange(() => { paintHeader(); syncWishlistCardStates(); });
+
+  // Delegated wishlist toggle for jewellery product cards
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.button-group a:has(i.pe-7s-like), .button-group a:first-child');
+    if (!btn) return;
+    const card = btn.closest('[data-merch-id]');
+    if (!card || !card.dataset.merchId) return;
+    if (btn.dataset.merchActionWired) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const id = card.dataset.merchId;
+    const on = await wishlist.toggle(id);
+    btn.classList.toggle('active', on);
+    if (on) btn.setAttribute('data-wishlist-active', 'true');
+    else btn.removeAttribute('data-wishlist-active');
+    notify(on ? 'Saved to your wishlist.' : 'Removed from your wishlist.', 'success');
+    paintHeader();
+    syncWishlistCardStates();
+  }, true);
   paintFashionMiniCart();
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }

@@ -3272,6 +3272,21 @@ textarea:focus {
 .button-group a:hover {
   color: #c29958;
 }
+.button-group a.active,
+.button-group a[data-wishlist-active="true"] {
+  background-color: #181818 !important;
+  color: #ffffff !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  -webkit-transform: scale(1) !important;
+      -ms-transform: scale(1) !important;
+          transform: scale(1) !important;
+}
+.button-group a.active i,
+.button-group a[data-wishlist-active="true"] i {
+  color: #ffffff !important;
+}
+
 
 .cart-hover {
   bottom: 0;
