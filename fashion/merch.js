@@ -48,7 +48,7 @@
    Fill it in and the same pages show your real catalogue instead.
    =========================================================================== */
 
-export const STOREFRONT_URL = 'https://demo.wisetracktechnologies.com/admin';
+export const STOREFRONT_URL = 'https://fashion.wisetracktechnologies.com/admin';
 
 /* ---------------------------------------------------------------------------
    WHO OWNS THE LOOK — the admin panel, or this template?
@@ -2076,7 +2076,7 @@ THEMES.fashion = {
   name: 'fashion',
   pages: {
     home: 'index.html', listing: 'shop-left-sidebar.html', product: 'product-detail.html',
-    cart: 'view-cart.html', checkout: 'checkout.html', order: 'account-page.html',
+    cart: 'view-cart.html', checkout: 'checkout.html', order: 'thank-you.html',
     track: 'track-order.html', account: 'account-page.html', orders: 'account-orders.html',
     addresses: 'account-addresses.html', login: 'login.html', register: 'register.html',
     wishlist: 'wishlist.html', forgot: 'forget-password.html', invoice: 'invoice.html',
@@ -2667,6 +2667,11 @@ const ROLE_PATTERNS = [
 function detectRole() {
   if (CONFIG.page) return CONFIG.page;
   const file = (location.pathname.split('/').pop() || 'index.html').replace(/\.html?$/i, '').toLowerCase();
+
+  if (file === 'account-page') return 'account';
+  if (file === 'account-orders') return 'orders';
+  if (file === 'account-addresses') return 'addresses';
+  if (file === 'account-setting') return 'account';
 
   /* The theme's own table is the authority — it knows that this theme calls
      its basket `view-cart` and that one calls it `shopping-cart`. */
@@ -3631,12 +3636,12 @@ function replaceTemplateBrand(brandName) {
   /* A copyright year is a claim about the shop, and two of these themes ship
      one that is already years stale. Only inside a line that is actually a
      copyright notice — a bare year elsewhere may be a real date. */
+  /* Always ensure copyright shows "©2026 wisetrack technologies. All Rights Reserved." */
   $$('*').forEach((el) => {
     if (el.children.length) return;
     const txt = el.textContent || '';
     if (!/©|copyright/i.test(txt)) return;
-    const fixed = txt.replace(/(?:19|20)\d{2}/g, year);
-    if (fixed !== txt) el.textContent = fixed;
+    el.textContent = `©${year} wisetrack technologies. All Rights Reserved.`;
   });
 }
 
@@ -10135,6 +10140,9 @@ function done(order) {
     const cust = (THEME?.checkout) ? readCustomer(THEME.checkout) : {};
     const u = user.get() || STORE_ME || {};
     const orderEmail = (cust.email || u.email || localStorage.getItem('merch.shopper_email') || '').toLowerCase().trim();
+    if (orderEmail) {
+      try { localStorage.setItem('merch.shopper_email', orderEmail); } catch {}
+    }
 
     let localOrders = readJson('merch.orders', []);
     if (!Array.isArray(localOrders)) localOrders = [];
@@ -10567,8 +10575,21 @@ async function getAccountOrders() {
       return true;
     });
   } else {
-    // If not logged in at all, do not show any account orders
-    return [];
+    // If activeEmail not yet available, check if local orders exist for the current shopper
+    if (localOrders && localOrders.length) {
+      const lastEmail = getOrderEmail(localOrders[0]);
+      if (lastEmail) {
+        try { localStorage.setItem('merch.shopper_email', lastEmail); } catch {}
+        combined = combined.filter((o) => {
+          const em = getOrderEmail(o);
+          return em ? em === lastEmail : String(o.orderRef || o.id).toLowerCase().includes(lastEmail);
+        });
+      } else {
+        combined = localOrders.filter((o) => !isDummyOrder(o));
+      }
+    } else {
+      return [];
+    }
   }
 
   combined.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
@@ -10691,17 +10712,23 @@ async function paintFashionAccountDashboard() {
     const canceledCount = orders.filter((o) => normalizeOrderStatus(o.orderStatus || o.status) === 'canceled').length;
     const totalCount = orders.length;
 
-    const boxes = pickAll('.order-box', statsWrap);
-    boxes.forEach((box) => {
-      const text = (box.textContent || '').toLowerCase();
-      const countEl = box.querySelector('.info__count');
-      if (!countEl) return;
-      if (/awaiting|pickup|pending/i.test(text)) setText(countEl, pendingCount);
-      else if (/cancel/i.test(text)) setText(countEl, canceledCount);
-      else if (/total/i.test(text)) setText(countEl, totalCount);
-      else if (/delivery|transit/i.test(text)) setText(countEl, deliveryCount);
-      else if (/complete/i.test(text)) setText(countEl, completedCount);
-    });
+    const applyStats = () => {
+      const boxes = document.querySelectorAll('.acount-order_stats .order-box');
+      boxes.forEach((box) => {
+        const text = (box.textContent || '').toLowerCase();
+        const countEl = box.querySelector('.info__count');
+        if (!countEl) return;
+        if (/awaiting|pickup|pending/i.test(text)) setText(countEl, pendingCount);
+        else if (/cancel/i.test(text)) setText(countEl, canceledCount);
+        else if (/total/i.test(text)) setText(countEl, totalCount);
+        else if (/delivery|transit/i.test(text)) setText(countEl, deliveryCount);
+        else if (/complete/i.test(text)) setText(countEl, completedCount);
+      });
+    };
+    applyStats();
+    setTimeout(applyStats, 200);
+    setTimeout(applyStats, 600);
+    setTimeout(applyStats, 1500);
   }
 
   if (recentTable) {
