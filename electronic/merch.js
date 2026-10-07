@@ -116,7 +116,7 @@ const TAG = document.currentScript || document.querySelector('script[src*="merch
 const RAW = Object.assign(
   {
     api: '',                 // your shop's origin. '' = same origin as this page.
-    theme: '',               // '' = auto-detect from the folder this page sits in
+    theme: 'electronic',     // default to electronic storefront
     page: '',                // '' = auto-detect from the filename + what's on the page
     googleClientId: '',      // blank -> Google sign-in is simply not offered
     currency: { code: 'INR', symbol: '₹' },   // used only until /api/theme answers
@@ -479,7 +479,26 @@ export const api = {
   facets: (opts) => request('/api/catalog/facets' + qs(opts)),
   product: (id) => request('/api/catalog/' + encodeURIComponent(id)),
   /* An EMPTY ids= is dropped by qs() and would return the WHOLE catalogue. */
-  products: (ids) => (ids && ids.length ? request('/api/catalog' + qs({ ids: ids.join(',') })) : Promise.resolve([])),
+  products: async (ids) => {
+    if (!ids || !ids.length) return [];
+    try {
+      const res = await request('/api/catalog' + qs({ ids: ids.join(',') }));
+      const list = Array.isArray(res) ? res : (res?.products || res?.items || []);
+      const idSet = new Set(ids.map(String));
+      const filtered = list.filter((p) => idSet.has(String(p.id)));
+      if (filtered.length === ids.length) return filtered;
+      const all = await getAllProducts();
+      if (all && all.length) {
+        const fromCatalog = all.filter((p) => idSet.has(String(p.id)));
+        if (fromCatalog.length) return fromCatalog;
+      }
+      return filtered.length ? filtered : list;
+    } catch {
+      const all = await getAllProducts();
+      const idSet = new Set(ids.map(String));
+      return (all || []).filter((p) => idSet.has(String(p.id)));
+    }
+  },
   categories: () => request('/api/categories'),
   collections: () => request('/api/collections'),
   collection: (handle) => request('/api/collections/' + encodeURIComponent(handle)),
@@ -3298,6 +3317,32 @@ function paintStoreChrome(theme) {
   /* The "about us" blurb is marketing copy rather than a fact a customer acts
      on, so an unset one keeps the template's. */
   if (f.about) pickAll('[data-store-about]').forEach((el) => setText(el, f.about));
+
+  // Remove "Our Store" from topbar
+  pickAll('.topbar-left a[href*="store-list"], a.text-decoration-underline[href*="store-list"]').forEach((a) => {
+    a.closest('li')?.remove();
+  });
+
+  // Ensure exact footer copyright
+  $$('.footer p, footer p, [class*="footer"] p, .text-caption-1').forEach((p) => {
+    if (/©|copyright|all rights reserved/i.test(p.textContent || '')) {
+      p.textContent = '©2026 Wisetrack Technologies. All Rights Reserved.';
+    }
+  });
+
+  // Ensure Contact link in mobile hamburger menu below Blog
+  const mbNav = pick('#wrapper-menu-navigation');
+  if (mbNav && !mbNav.querySelector('a[href*="contact"]')) {
+    const contactLi = document.createElement('li');
+    contactLi.className = 'nav-mb-item';
+    contactLi.innerHTML = `<a href="contact.html" class="mb-menu-link"><span>Contact</span></a>`;
+    const blogLi = mbNav.querySelector('a[href*="blog"]')?.closest('li');
+    if (blogLi && blogLi.nextElementSibling) {
+      mbNav.insertBefore(contactLi, blogLi.nextElementSibling);
+    } else {
+      mbNav.appendChild(contactLi);
+    }
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -3369,28 +3414,27 @@ function replaceTemplateBrand(brandName) {
   const year = String(new Date().getFullYear());
   const brand = (brandName || '').trim();
   const swap = brand && TEMPLATE_BRAND && brand.toLowerCase() !== TEMPLATE_BRAND.toLowerCase();
-  if (!swap) return;
-  const re = new RegExp('\\b' + TEMPLATE_BRAND.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g');
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-    acceptNode(n) {
-      const t = n.parentElement && n.parentElement.tagName;
-      if (t === 'SCRIPT' || t === 'STYLE' || t === 'TEXTAREA') return NodeFilter.FILTER_REJECT;
-      return re.test(n.nodeValue || '') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-    },
-  });
-  const hits = [];
-  for (let n = walker.nextNode(); n; n = walker.nextNode()) hits.push(n);
-  hits.forEach((n) => { n.nodeValue = n.nodeValue.replace(re, brand); });
+  if (swap) {
+    const re = new RegExp('\\b' + TEMPLATE_BRAND.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g');
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        const t = n.parentElement && n.parentElement.tagName;
+        if (t === 'SCRIPT' || t === 'STYLE' || t === 'TEXTAREA') return NodeFilter.FILTER_REJECT;
+        if (/wisetrack/i.test(n.nodeValue || '')) return NodeFilter.FILTER_REJECT;
+        return re.test(n.nodeValue || '') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      },
+    });
+    const hits = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) hits.push(n);
+    hits.forEach((n) => { n.nodeValue = n.nodeValue.replace(re, brand); });
+  }
 
-  /* A copyright year is a claim about the shop, and two of these themes ship
-     one that is already years stale. Only inside a line that is actually a
-     copyright notice — a bare year elsewhere may be a real date. */
-  $$('*').forEach((el) => {
-    if (el.children.length) return;
+  /* Force footer copyright to Wisetrack Technologies */
+  $$('.footer p, footer p, [class*="footer"] p, .text-caption-1, p').forEach((el) => {
+    if (!el || el.children?.length > 1) return;
     const txt = el.textContent || '';
-    if (!/©|copyright/i.test(txt)) return;
-    const fixed = txt.replace(/(?:19|20)\d{2}/g, year);
-    if (fixed !== txt) el.textContent = fixed;
+    if (!/©|copyright|all rights reserved/i.test(txt)) return;
+    el.textContent = '©2026 Wisetrack Technologies. All Rights Reserved.';
   });
 }
 
@@ -6114,11 +6158,73 @@ function renderModalProducts(modal, items, query = '') {
     for (const p of items) {
       const node = modalGridTemplate.cloneNode(true);
       node.dataset.merchId = p.id;
+      node.classList.remove('fl-item');
+      node.style.display = 'block';
+      node.style.visibility = 'visible';
+      node.style.opacity = '1';
+
       pickAll('.compare, .box-icon.compare, [data-bs-target="#compare"], [href="#compare"]', node).forEach((el) => el.remove());
+      pickAll('.list-color-product, .variant-wrap, .size-list', node).forEach((el) => el.remove());
+
       fillFields(node, THEME.listing.fields, p, { node, qtyEl: pick(THEME.qtyInput, node) });
+
+      const mainImg = (p.imageUrls && p.imageUrls[0]) || p.imageUrl || p.image || '';
+      const hoverImg = (p.imageUrls && p.imageUrls[1]) || mainImg;
+      const imgProduct = node.querySelector('img.img-product, .product-img img:first-child');
+      const imgHover = node.querySelector('img.img-hover, .product-img img:nth-child(2)');
+
+      if (imgProduct) {
+        const fullUrl = mainImg ? mediaUrl(mainImg) : '';
+        if (fullUrl) {
+          imgProduct.src = fullUrl;
+          imgProduct.setAttribute('data-src', fullUrl);
+          imgProduct.removeAttribute('srcset');
+          imgProduct.removeAttribute('data-srcset');
+          imgProduct.classList.remove('lazyload', 'lazyloading');
+          imgProduct.classList.add('lazyloaded');
+          imgProduct.style.display = 'block';
+          imgProduct.style.opacity = '1';
+          imgProduct.style.visibility = 'visible';
+        }
+      }
+
+      if (imgHover) {
+        if (hoverImg && hoverImg !== mainImg) {
+          const fullHoverUrl = mediaUrl(hoverImg);
+          imgHover.src = fullHoverUrl;
+          imgHover.setAttribute('data-src', fullHoverUrl);
+          imgHover.removeAttribute('srcset');
+          imgHover.removeAttribute('data-srcset');
+          imgHover.classList.remove('lazyload', 'lazyloading');
+          imgHover.classList.add('lazyloaded');
+          imgHover.style.display = 'block';
+          imgHover.style.opacity = '1';
+          imgHover.style.visibility = 'visible';
+        } else {
+          imgHover.remove();
+        }
+      }
+
+      const wrapper = node.querySelector('.card-product-wrapper');
+      if (wrapper) {
+        wrapper.style.display = 'block';
+        wrapper.style.aspectRatio = '1 / 1';
+        wrapper.style.height = 'auto';
+        wrapper.style.overflow = 'hidden';
+      }
+
       if (p.availability === 'out') node.classList.add('out-of-stock');
       gridContainer.appendChild(node);
     }
+  }
+
+  gridContainer.classList.remove('loadmore-item');
+  gridContainer.style.height = 'auto';
+  gridContainer.style.maxHeight = '65vh';
+  gridContainer.style.overflowY = 'auto';
+
+  if (window.lazySizes && window.lazySizes.loader && window.lazySizes.loader.checkElems) {
+    try { window.lazySizes.loader.checkElems(); } catch {}
   }
 
   wireQuickView();
@@ -6128,6 +6234,14 @@ function renderModalProducts(modal, items, query = '') {
 async function wireSearchModal() {
   const modal = $('#search');
   if (!modal) return;
+
+  const loadmoreEl = modal.querySelector('.loadmore-item');
+  if (loadmoreEl) {
+    loadmoreEl.classList.remove('loadmore-item');
+    loadmoreEl.removeAttribute('data-display');
+    loadmoreEl.removeAttribute('data-count');
+    loadmoreEl.style.height = 'auto';
+  }
 
   const headingH5 = modal.querySelector('h5');
   if (headingH5 && !headingH5.closest('.list-tags, .search-feature')) {
@@ -10062,6 +10176,11 @@ function done(order) {
 /* --- ORDER ---------------------------------------------------------------
    The confirmation page, and the same page reached later from an email. */
 pages.order = async () => {
+  if (token.get()) {
+    showSignedIn(null);
+    api.me().then((me) => { showSignedIn(me); wireSignOut(); }).catch(() => {});
+    wireSignOut();
+  }
   const id = param('id') || readJustPaid()?.id;
 
   /* One template serves BOTH roles from one file (`trackorder.html` is its
@@ -10279,9 +10398,21 @@ pages.account = async () => {
   wireAddressForm();
   wireSignOut();
 };
-pages.orders = async () => { if (token.get()) await paintOrders(); else showSignedOut(); };
+pages.orders = async () => {
+  if (token.get()) {
+    showSignedIn(null);
+    api.me().then((me) => { showSignedIn(me); wireSignOut(); }).catch(() => {});
+    wireSignOut();
+    await paintOrders();
+  } else {
+    showSignedOut();
+  }
+};
 pages.addresses = async () => {
   if (!token.get()) return showSignedOut();
+  showSignedIn(null);
+  api.me().then((me) => { showSignedIn(me); wireSignOut(); }).catch(() => {});
+  wireSignOut();
   wireAddressForm();
   await paintAddresses();
   const editId = new URLSearchParams(location.search).get('edit');
@@ -10798,18 +10929,47 @@ async function mountGoogleButton() {
 /* --- WISHLIST, COMPARE, BLOG --------------------------------------------- */
 
 pages.wishlist = async () => {
-  let ids = wishlist.ids();
-  if (token.get()) {
-    /* An array of item-id STRINGS, not objects. `.map(x => x.itemId)` on it
-       yields a list of undefineds, and `api.products` on those returns the
-       whole catalogue as "your wishlist". */
-    try { ids = (await api.wishlist()) || []; } catch { /* fall back to the local list */ }
-  }
-  let items = [];
-  try { items = await api.products(ids); } catch (e) { return showError(e); }
-  /* A wishlist page is a product grid, and several themes render it as a cart
-     table instead — try the grid first, then the table. */
-  if (!renderProducts(items)) {
+  let curPage = 1;
+  const pageSize = 8;
+
+  const loadAndRender = async () => {
+    let ids = wishlist.ids();
+    if (token.get()) {
+      try { ids = (await api.wishlist()) || []; } catch { /* fall back to local */ }
+    }
+    let items = [];
+    try { items = await api.products(ids); } catch (e) { return showError(e); }
+
+    // Strict filter to only wishlisted item IDs
+    const idSet = new Set((ids || []).map(String));
+    items = (items || []).filter((p) => idSet.has(String(p.id)));
+
+    const total = items.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    if (curPage > totalPages) curPage = totalPages;
+
+    const startIdx = (curPage - 1) * pageSize;
+    const pagedItems = items.slice(startIdx, startIdx + pageSize);
+
+    const grid = renderProducts(pagedItems);
+    const pagers = document.querySelectorAll('ul.wg-pagination, .pagination-area-main-wrappper, .pagination-area, .pagination');
+
+    if (grid) {
+      syncWishlistCardStates();
+      if (total <= pageSize) {
+        pagers.forEach((p) => { p.innerHTML = ''; });
+      } else {
+        const state = { page: curPage };
+        renderPagination(total, state, () => {
+          curPage = state.page || 1;
+          loadAndRender();
+          const topEl = document.querySelector('.tf-grid-layout, .wrapper-shop') || document.body;
+          topEl.scrollIntoView({ behavior: 'smooth' });
+        }, pageSize);
+      }
+      return;
+    }
+
     const spec = THEME.cart;
     const t = takeTemplate(spec);
     if (!t) return;
@@ -10827,7 +10987,7 @@ pages.wishlist = async () => {
           <i class="fa-regular fa-heart" style="font-size:48px;color:#94a3b8;margin-bottom:16px;display:block;"></i>
           <h4 style="margin-bottom:8px;font-weight:600;">Your wishlist is empty</h4>
           <p style="color:#64748b;margin-bottom:20px;">Explore more products and add your favorites to wishlist!</p>
-          <a href="shop.html" class="rts-btn btn-primary" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
+          <a href="shop-left-sidebar.html" class="tf-btn btn-fill" style="display:inline-block;padding:12px 28px;border-radius:4px;">Continue Shopping</a>
         `;
         t.container.appendChild(emptyDiv);
       }
@@ -10835,6 +10995,7 @@ pages.wishlist = async () => {
 
     if (!items.length) {
       renderWishlistEmpty();
+      pagers.forEach((p) => { p.innerHTML = ''; });
       return;
     }
 
@@ -10845,7 +11006,7 @@ pages.wishlist = async () => {
     const wishFields = { ...(spec.fields || {}) };
     delete wishFields.remove;
 
-    repeat(t, items, (node, p) => {
+    repeat(t, pagedItems, (node, p) => {
       node.dataset.merchId = p.id;
       fillFields(node, wishFields,
         { itemId: p.id, name: p.name, price: p.price, qty: 1, image: (p.imageUrls || [])[0] }, { node });
@@ -10947,7 +11108,23 @@ pages.wishlist = async () => {
         };
       }
     });
-  }
+
+    if (total <= pageSize) {
+      pagers.forEach((p) => { p.innerHTML = ''; });
+    } else {
+      const state = { page: curPage };
+      renderPagination(total, state, () => {
+        curPage = state.page || 1;
+        loadAndRender();
+      }, pageSize);
+    }
+  };
+
+  await loadAndRender();
+
+  wishlist.onChange(() => {
+    loadAndRender().catch(() => {});
+  });
 };
 
 pages.compare = async () => {
