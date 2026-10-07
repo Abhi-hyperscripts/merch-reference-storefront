@@ -8222,31 +8222,35 @@ input.style-line-bottom::placeholder {
   width: 100%;
   height: 100%;
   position: relative;
-  align-items: stretch;
+  align-items: center;
+  justify-content: center;
 }
 .card-product .card-product-wrapper {
   position: relative;
   border-radius: 8px;
   overflow: hidden;
-  z-index: 20;
 }
 .card-product .card-product-wrapper img {
   display: block;
   height: 100%;
   width: 100%;
-  object-fit: cover;
+  object-fit: contain;
   object-position: center;
-  transition-duration: 700ms;
+  transition-duration: 400ms;
 }
 .card-product .card-product-wrapper .img-hover {
   position: absolute;
   inset: 0;
   opacity: 0;
+  pointer-events: none;
 }
 .card-product .card-product-wrapper:hover .product-img .img-product {
+  opacity: 1;
+}
+.card-product .card-product-wrapper:hover .product-img:has(.img-hover[src]:not([src=""]):not([src*="undefined"])) .img-product {
   opacity: 0;
 }
-.card-product .card-product-wrapper:hover .product-img .img-hover {
+.card-product .card-product-wrapper:hover .product-img:has(.img-hover[src]:not([src=""]):not([src*="undefined"])) .img-hover {
   display: block;
   z-index: 1;
   opacity: 1;
@@ -8830,7 +8834,7 @@ input.style-line-bottom::placeholder {
   font-weight: 500;
 }
 .card-product:not(.list-st-3, .list-st-2, .style-list) .card-product-wrapper {
-  aspect-ratio: 1/1.33;
+  aspect-ratio: 1 / 1 !important;
 }
 
 .loadItem.hidden {
@@ -18173,6 +18177,534 @@ ul.list-text.type-number {
   100% {
     transform: translateX(100%);
   }
+}
+
+/* ==========================================================================
+   Electronic Store Custom Styles & Fixes
+   ========================================================================== */
+
+/* 1. Hide Slider Shop Now button and Description on banner */
+.slider-electronic .subheading,
+.tf-slideshow .subheading,
+.slider-electronic .box-btn-slider,
+.tf-slideshow .box-btn-slider {
+  display: none !important;
+}
+
+/* ==========================================================================
+   Electronic Store Custom Styles & Fixes
+   ========================================================================== */
+
+/* 1. Prevent Horizontal Scrollbar & Ensure Responsiveness */
+html,
+body {
+  max-width: 100% !important;
+  overflow-x: clip !important;
+  overflow-x: hidden !important;
+}
+
+#wrapper {
+  max-width: 100% !important;
+  width: 100% !important;
+  overflow-x: clip !important;
+  overflow-x: hidden !important;
+}
+
+body.page-home-electronic .container,
+body.page-home-electronic .container-full,
+.home-page-fullwidth .container,
+.home-fullscreen-section .container {
+  max-width: 100% !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  padding-left: clamp(16px, 3.5vw, 48px) !important;
+  padding-right: clamp(16px, 3.5vw, 48px) !important;
+}
+
+.row {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.swiper,
+.swiper-container,
+.tf-sw-latest,
+.tf-sw-recent,
+.tf-sw-slideshow {
+  max-width: 100% !important;
+  overflow: hidden !important;
+}
+
+/* 2. Equal Product Card Image Sizing in Sliders & Grids */
+.card-product:not(.list-st-2, .list-st-3, .style-list) .card-product-wrapper {
+  position: relative !important;
+  display: block !important;
+  width: 100% !important;
+  aspect-ratio: 1 / 1 !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  background-color: #f8fafc !important;
+  box-sizing: border-box !important;
+}
+
+.card-product:not(.list-st-2, .list-st-3, .style-list) .card-product-wrapper .product-img {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  z-index: 1 !important;
+}
+
+.card-product:not(.list-st-2, .list-st-3, .style-list) .card-product-wrapper .product-img img,
+.card-product:not(.list-st-2, .list-st-3, .style-list) .card-product-wrapper .img-product,
+.card-product:not(.list-st-2, .list-st-3, .style-list) .card-product-wrapper .img-hover {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  object-fit: contain !important;
+  object-position: center !important;
+  padding: 12px !important;
+  background-color: transparent !important;
+  box-sizing: border-box !important;
+  display: block !important;
+  transition: transform 0.4s ease, opacity 0.4s ease !important;
+}
+
+/* 3. Image Hover Behavior - Image Never Disappears on Hover */
+.card-product .product-img .img-product {
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+.card-product .product-img .img-hover {
+  position: absolute !important;
+  inset: 0 !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.card-product:hover .product-img:has(.img-hover[src]:not([src=""]):not([src*="undefined"])) .img-product {
+  opacity: 0 !important;
+}
+
+.card-product:hover .product-img:has(.img-hover[src]:not([src=""]):not([src*="undefined"])) .img-hover {
+  opacity: 1 !important;
+  visibility: visible !important;
+  transform: scale(1.05) !important;
+}
+
+.card-product:hover .product-img .img-product {
+  transform: scale(1.03) !important;
+}
+
+.card-product:hover .product-img:has(.img-hover[src]:not([src=""]):not([src*="undefined"])) .img-product {
+  transform: none !important;
+}
+
+/* Featured Products (list-st-2) Layout & Hover Stability */
+.card-product.list-st-2 {
+  display: flex !important;
+  align-items: center !important;
+  gap: 15px !important;
+}
+
+.card-product.list-st-2 .card-product-wrapper {
+  width: 32% !important;
+  max-width: 140px !important;
+  aspect-ratio: 1 / 1 !important;
+  position: relative !important;
+  border-radius: 6px !important;
+  overflow: hidden !important;
+  flex-shrink: 0 !important;
+  background-color: #f8fafc !important;
+}
+
+.card-product.list-st-2 .card-product-wrapper .product-img {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.card-product.list-st-2 .card-product-wrapper img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  padding: 6px !important;
+}
+
+.card-product.list-st-2 .card-product-info {
+  flex: 1 1 auto !important;
+  max-width: 68% !important;
+}
+
+/* 4. Action Buttons (Wishlist, Compare, Quick View, Add to Cart) on Hover for Grid Cards */
+.card-product:not(.style-list, .list-st-2, .list-st-3) .list-product-btn {
+  position: absolute !important;
+  top: 10px !important;
+  right: 10px !important;
+  z-index: 15 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  pointer-events: auto !important;
+}
+
+.card-product:not(.style-list, .list-st-2, .list-st-3) .list-btn-main {
+  position: absolute !important;
+  bottom: 10px !important;
+  left: 10px !important;
+  right: 10px !important;
+  z-index: 15 !important;
+  display: flex !important;
+  align-items: center !important;
+  pointer-events: auto !important;
+}
+
+.card-product:not(.style-list, .list-st-2, .list-st-3) .box-icon {
+  transform: translate(20px);
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.3s ease !important;
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 50% !important;
+  background-color: #ffffff !important;
+  color: #181818 !important;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+}
+
+.card-product:not(.style-list, .list-st-2, .list-st-3) .list-btn-main {
+  transform: translateY(100%);
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.3s ease !important;
+}
+
+.card-product:hover:not(.style-list, .list-st-2, .list-st-3) .box-icon,
+.card-product:hover:not(.style-list, .list-st-2, .list-st-3) .list-product-btn .box-icon,
+.card-product:hover:not(.style-list, .list-st-2, .list-st-3) .list-btn-main {
+  opacity: 1 !important;
+  visibility: visible !important;
+  transform: translate(0) !important;
+  pointer-events: auto !important;
+}
+
+.card-product:not(.style-list, .list-st-2, .list-st-3) .btn-main-product {
+  width: 100% !important;
+  background-color: #ffffff !important;
+  color: #181818 !important;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1) !important;
+  border-radius: 24px !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  padding: 8px 16px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  transition: all 0.3s ease !important;
+}
+
+.card-product:not(.style-list, .list-st-2, .list-st-3) .btn-main-product:hover {
+  background-color: var(--primary, #e43131) !important;
+  color: #ffffff !important;
+}
+
+/* 4b. Card Product List View (.style-list) matching image.png */
+.card-product.style-list {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 32px !important;
+  width: 100% !important;
+  margin-bottom: 30px !important;
+  background: #ffffff !important;
+}
+
+.card-product.style-list .card-product-wrapper {
+  width: 280px !important;
+  max-width: 280px !important;
+  aspect-ratio: 1 / 1 !important;
+  flex-shrink: 0 !important;
+  position: relative !important;
+  overflow: hidden !important;
+  border-radius: 12px !important;
+  background-color: #ffffff !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.card-product.style-list .card-product-wrapper a.product-img {
+  width: 100% !important;
+  height: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.card-product.style-list .card-product-wrapper img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  padding: 12px !important;
+}
+
+.card-product.style-list .card-product-info {
+  flex: 1 1 auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  justify-content: center !important;
+  max-width: 100% !important;
+  padding: 0 !important;
+}
+
+.card-product.style-list .card-product-info .title {
+  font-size: 20px !important;
+  font-weight: 500 !important;
+  color: #181818 !important;
+  margin-bottom: 8px !important;
+  line-height: 1.4 !important;
+}
+
+.card-product.style-list .card-product-info .price {
+  font-size: 18px !important;
+  font-weight: 600 !important;
+  color: #181818 !important;
+  margin-bottom: 10px !important;
+}
+
+.card-product.style-list .card-product-info .description {
+  font-size: 14px !important;
+  color: #717171 !important;
+  line-height: 1.5 !important;
+  margin-bottom: 16px !important;
+}
+
+.card-product.style-list .variant-wrap-list {
+  width: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+}
+
+.card-product.style-list .list-product-btn {
+  position: static !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+  transform: none !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 12px !important;
+  width: 100% !important;
+  margin-top: 14px !important;
+  pointer-events: auto !important;
+}
+
+.card-product.style-list .list-product-btn .btn-main-product {
+  position: static !important;
+  width: auto !important;
+  min-width: 200px !important;
+  max-width: 260px !important;
+  height: 48px !important;
+  line-height: 48px !important;
+  padding: 0 28px !important;
+  border-radius: 44px !important;
+  background-color: #ffffff !important;
+  border: 1px solid #181818 !important;
+  color: #181818 !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  letter-spacing: 0.5px !important;
+  text-transform: uppercase !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-shadow: none !important;
+  transition: all 0.25s ease !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  transform: none !important;
+  cursor: pointer !important;
+}
+
+.card-product.style-list .list-product-btn .btn-main-product:hover {
+  background-color: var(--primary, #e43131) !important;
+  border-color: var(--primary, #e43131) !important;
+  color: #ffffff !important;
+}
+
+.card-product.style-list .list-product-btn .box-icon {
+  position: static !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  transform: none !important;
+  width: 48px !important;
+  height: 48px !important;
+  min-width: 48px !important;
+  border-radius: 50% !important;
+  border: 1px solid #e9e9e9 !important;
+  background-color: #ffffff !important;
+  color: #181818 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  transition: all 0.25s ease !important;
+  box-shadow: none !important;
+}
+
+.card-product.style-list .list-product-btn .box-icon:hover {
+  border-color: #181818 !important;
+  color: #181818 !important;
+}
+
+/* 5. Wishlist Active State - Solid Red Filled Icon */
+.box-icon.wishlist.active,
+.tf-product-btn-wishlist.active,
+.btn-icon-action.wishlist.active {
+  background-color: #ffffff !important;
+  color: #e43131 !important;
+  border: 1px solid #e43131 !important;
+}
+
+.box-icon.wishlist.active .icon-heart,
+.tf-product-btn-wishlist.active .icon-heart {
+  display: inline-block !important;
+  width: 18px !important;
+  height: 18px !important;
+  background-color: #e43131 !important;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z'/%3E%3C/svg%3E") no-repeat center / contain !important;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z'/%3E%3C/svg%3E") no-repeat center / contain !important;
+}
+
+.box-icon.wishlist.active .icon-heart:before,
+.tf-product-btn-wishlist.active .icon-heart:before {
+  content: "" !important;
+}
+
+.box-icon.wishlist.active svg path,
+.tf-product-btn-wishlist.active svg path {
+  fill: #e43131 !important;
+  stroke: #e43131 !important;
+}
+
+.box-icon.wishlist.active:hover {
+  background-color: #fef2f2 !important;
+  border-color: #e43131 !important;
+}
+
+/* 6. Product Detail Gallery & Thumbs */
+@media (min-width: 768px) {
+  .thumbs-slider {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 15px !important;
+  }
+  .tf-product-media-thumbs {
+    width: 80px !important;
+    flex-shrink: 0 !important;
+    max-height: 650px !important;
+  }
+  .tf-product-media-thumbs .swiper-slide .item {
+    max-height: 107px !important;
+    max-width: 80px !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .thumbs-slider {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px !important;
+  }
+  .tf-product-media-thumbs {
+    width: 100% !important;
+    order: 2 !important;
+  }
+  .tf-product-media-main {
+    width: 100% !important;
+    order: 1 !important;
+  }
+  .tf-product-media-thumbs .swiper-slide {
+    width: 70px !important;
+    height: 70px !important;
+  }
+}
+
+.tf-product-media-thumbs .swiper-slide {
+  cursor: pointer !important;
+  opacity: 0.6 !important;
+  transition: opacity 0.3s ease !important;
+}
+
+.tf-product-media-thumbs .swiper-slide.swiper-slide-thumb-active,
+.tf-product-media-thumbs .swiper-slide:hover {
+  opacity: 1 !important;
+}
+
+.tf-product-media-thumbs .swiper-slide .item {
+  position: relative !important;
+  border-radius: 6px !important;
+  overflow: hidden !important;
+}
+
+.tf-product-media-thumbs .swiper-slide .item img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  border-radius: 6px !important;
+}
+
+.tf-product-media-main {
+  flex: 1 1 auto !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+  background-color: #f8fafc !important;
+}
+
+.tf-product-media-main .item {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 380px !important;
+  max-height: 650px !important;
+}
+
+.tf-product-media-main .item img {
+  width: 100% !important;
+  height: auto !important;
+  max-height: 650px !important;
+  object-fit: contain !important;
+  border-radius: 12px !important;
+}
+
+/* Deal tab styling consistency */
+.tab-product-v3 .nav-tab-item a.active {
+  color: var(--primary) !important;
+  font-weight: 600 !important;
+  border-bottom: 2px solid var(--primary) !important;
 }
 
 /*# sourceMappingURL=styles.css.map */

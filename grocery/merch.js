@@ -1314,8 +1314,6 @@ const THEMES = {
        is no countdown to show. */
     unbacked: [
       '.countdown',
-      /* "Get 30% Discount Now" in the navigation bar: a sale nobody set. */
-      '.right-btn-area',
       /* "Download App" with App Store and Google Play badges, both href="#".
          There is no app. */
       '.playstore-app-area',
@@ -7140,6 +7138,19 @@ function remapDeadLinks() {
       a.setAttribute('href', 'terms-conditions.html');
     } else if (cleanHref === 'shipping') {
       a.setAttribute('href', 'shipping.html');
+    }
+  });
+
+  pickAll('.right-btn-area a, .right-btn-area button').forEach((el) => {
+    if (el.tagName === 'A') {
+      const h = el.getAttribute('href');
+      if (!h || h === '#' || h === '') el.setAttribute('href', pageUrl('listing') || 'shop-grid-sidebar.html');
+    } else if (el.tagName === 'BUTTON' && !el.dataset.wiredNavBtn) {
+      el.dataset.wiredNavBtn = '1';
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        location.href = pageUrl('listing') || 'shop-grid-sidebar.html';
+      });
     }
   });
 }

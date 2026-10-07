@@ -48,7 +48,7 @@
    Fill it in and the same pages show your real catalogue instead.
    =========================================================================== */
 
-export const STOREFRONT_URL = 'https://demo.wisetracktechnologies.com/admin';
+export const STOREFRONT_URL = 'https://electronic.wisetracktechnologies.com/admin';
 
 /* ---------------------------------------------------------------------------
    WHO OWNS THE LOOK — the admin panel, or this template?
@@ -648,6 +648,7 @@ export const wishlist = {
     const ids = wishlist.ids().filter((x) => x !== itemId);
     if (on) ids.push(itemId);
     writeWish(ids);
+    syncWishlistCardStates();
     if (token.get()) {
       try { on ? await api.addToWishlist(itemId) : await api.removeFromWishlist(itemId); }
       catch (e) { if (!(e instanceof ApiError && e.isUnauthenticated)) warn(e); }
@@ -661,9 +662,34 @@ export const wishlist = {
     try {
       for (const id of local) await api.addToWishlist(id).catch(() => {});
       writeWish((await api.wishlist()) || []);
+      syncWishlistCardStates();
     } catch (e) { warn(e); }
   },
 };
+
+function syncWishlistCardStates(container = document) {
+  const wishIds = new Set(wishlist.ids());
+  container.querySelectorAll('.card-product[data-merch-id]').forEach((card) => {
+    const id = card.dataset.merchId;
+    if (!id) return;
+    const isWished = wishIds.has(id);
+    const wishBtn = card.querySelector('.box-icon.wishlist, .tf-product-btn-wishlist, a.wishlist, [data-action="wishlist"]');
+    if (!wishBtn) return;
+    wishBtn.classList.toggle('active', isWished);
+    const tip = wishBtn.querySelector('.tooltip');
+    if (tip) tip.textContent = isWished ? 'Remove from Wishlist' : 'Wishlist';
+  });
+
+  const pdpWishBtns = container.querySelectorAll('.tf-product-info-by-btn .wishlist, .tf-product-btn-wishlist, .tf-product-info-wrap .wishlist');
+  if (pdpWishBtns.length && window.currentProductDetailId) {
+    const isWished = wishIds.has(window.currentProductDetailId);
+    pdpWishBtns.forEach((pdpWishBtn) => {
+      pdpWishBtn.classList.toggle('active', isWished);
+      const tip = pdpWishBtn.querySelector('.tooltip');
+      if (tip) tip.textContent = isWished ? 'Remove from Wishlist' : 'Wishlist';
+    });
+  }
+}
 
 /* A compare list. There is no compare endpoint — this is entirely local, which
    is all the themes' compare pages ever needed. */
@@ -1001,10 +1027,15 @@ function wireAction(el, action, data, ctx) {
       });
       break;
     case 'wishlist':
+      const isWished = wishlist.has(data.id);
+      el.classList.toggle('active', isWished);
+      const wishTip = el.querySelector('.tooltip');
+      if (wishTip) wishTip.textContent = isWished ? 'Remove from Wishlist' : 'Wishlist';
       el.addEventListener('click', async (e) => {
         stop(e);
         const on = await wishlist.toggle(data.id);
         el.classList.toggle('active', on);
+        syncWishlistCardStates();
         notify(on ? 'Saved to your wishlist.' : 'Removed from your wishlist.', 'success');
       });
       break;
@@ -1013,6 +1044,17 @@ function wireAction(el, action, data, ctx) {
         stop(e);
         const on = compare.toggle(data.id);
         notify(on ? 'Added to compare.' : 'Removed from compare.', 'success');
+        paintCompareDrawer().catch(() => {});
+        paintCompare().catch(() => {});
+        const drawer = document.getElementById('compare');
+        if (drawer && on) {
+          try {
+            if (window.bootstrap?.Offcanvas) {
+              const bsOff = window.bootstrap.Offcanvas.getOrCreateInstance(drawer);
+              bsOff.show();
+            }
+          } catch (err) {}
+        }
       });
       break;
     case 'remove':
@@ -1715,6 +1757,8 @@ THEMES.electronic = {
     wishlist: 'wish-list.html', forgot: 'forget-password.html',
     blog: 'blog-grid.html', post: 'blog-detail.html',
     returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
+    about: 'about-us.html', shipping: 'shipping.html', privacy: 'privacy-policy.html',
+    terms: 'term-of-use.html', faqs: 'FAQs.html', contact: 'contact.html',
   },
 
   /* ⭐ BRAND LOGOS THIS SHOP DOES NOT HAVE. The strip ships 27 of the theme's
@@ -1834,6 +1878,45 @@ THEMES.electronic = {
       add:   { sel: '.btn-main-product|.btn-add-to-cart', action: 'add' },
       wish:  { sel: '.box-icon.wishlist', action: 'wishlist' },
       compare: { sel: '.box-icon.compare', action: 'compare' },
+    },
+  },
+
+  compare: {
+    container: '.tf-compare-table',
+    row: '.tf-compare-row',
+    label: '.tf-compare-col:first-child h6, .tf-compare-col:first-child',
+    cell: '.tf-compare-col:not(:first-child)',
+    fields: {
+      '': {
+        sel: '.tf-compare-image img',
+        value: (p) => mediaUrl((p.imageUrls || [])[0] || ''),
+        attr: 'src',
+        each: (cell, p) => {
+          const title = cell.querySelector('.tf-compare-content .link');
+          if (title) { setText(title, p.name); setAttr(title, 'href', productHref(p)); }
+          const desc = cell.querySelector('.tf-compare-content .desc');
+          if (desc) setText(desc, p.category || '');
+          const imgLink = cell.querySelector('a.tf-compare-image');
+          if (imgLink) setAttr(imgLink, 'href', productHref(p));
+        },
+      },
+      'price': { sel: '.price', text: (p) => money(p.price) },
+      'availability': { sel: 'p, span', text: (p) => p.availability === 'out' ? 'Out of stock' : 'In stock' },
+      'color': {
+        sel: 'p, span',
+        text: (p) => {
+          const colors = (p.optionValues || p.attributes || []).filter(o => (o.key || '').toLowerCase() === 'color').map(c => c.value);
+          return colors.join(', ') || 'Standard';
+        },
+      },
+      'size': {
+        sel: 'p, span',
+        text: (p) => {
+          const sizes = (p.optionValues || p.attributes || []).filter(o => (o.key || '').toLowerCase() === 'size').map(s => s.value);
+          return sizes.join(', ') || 'Standard';
+        },
+      },
+      'description': { sel: 'p', text: (p) => clamp(p.description || '', 180) },
     },
   },
 
@@ -2395,7 +2478,26 @@ function rewireClones() {
 
 function refreshSwipers() {
   for (const el of $$('.swiper, .swiper-container')) {
-    const sw = el.swiper;
+    let sw = el.swiper;
+    if (!sw && window.Swiper && el.querySelectorAll('.swiper-slide').length > 0) {
+      try {
+        const preview = parseInt(el.getAttribute('data-preview') || '5', 10);
+        const space = parseInt(el.getAttribute('data-space-lg') || '30', 10);
+        sw = new window.Swiper(el, {
+          slidesPerView: 2,
+          spaceBetween: 15,
+          breakpoints: {
+            640: { slidesPerView: 3, spaceBetween: 20 },
+            768: { slidesPerView: 4, spaceBetween: 25 },
+            1024: { slidesPerView: preview, spaceBetween: space },
+          },
+          pagination: {
+            el: el.querySelector('.sw-pagination-latest, .sw-dots') || el.parentElement?.querySelector('.sw-pagination-latest, .sw-dots'),
+            clickable: true,
+          },
+        });
+      } catch { /* ignore */ }
+    }
     if (!sw) continue;
     try {
       if (sw.params?.loop && typeof sw.loopDestroy === 'function') {
@@ -3666,8 +3768,39 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
       node.dataset.merchId = p.id;
       fillFields(node, spec.fields, p, { node, qtyEl: pick(THEME.qtyInput, node) });
       if (p.availability === 'out') node.classList.add('out-of-stock');
+
+      // Dynamic colors: show if product has colors, otherwise hide
+      const colorList = node.querySelector('.list-color-product');
+      if (colorList) {
+        const pColors = (p.optionValues || p.attributes || []).filter((o) => (o.key || '').toLowerCase() === 'color');
+        if (pColors.length > 0) {
+          colorList.innerHTML = pColors.map((c) => `
+            <li class="list-color-item color-swatch" title="${escapeHtml(c.value)}">
+              <span class="swatch-value" style="background-color: ${c.color_code || resolveColorSwatch(c.value) || '#ccc'}"></span>
+            </li>
+          `).join('');
+          show(colorList, true);
+        } else {
+          show(colorList, false);
+        }
+      }
+
+      // Dynamic sizes: show if product has sizes, otherwise hide
+      const sizeBox = node.querySelector('.size-box, .size-list, .variant-box');
+      if (sizeBox) {
+        const pSizes = (p.optionValues || p.attributes || []).filter((o) => (o.key || '').toLowerCase() === 'size');
+        if (pSizes.length > 0) {
+          sizeBox.innerHTML = pSizes.map((s) => `
+            <span class="size-item box-icon">${escapeHtml(s.value)}</span>
+          `).join('');
+          show(sizeBox, true);
+        } else {
+          show(sizeBox, false);
+        }
+      }
     });
   }
+  syncWishlistCardStates();
   return containers[0];
 }
 
@@ -3687,23 +3820,26 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
    the product; the pickers are the template's clothing demo and come off. */
 function paintQuickViewExtras(panel, p) {
   const imgs = (p.imageUrls || []).filter(Boolean);
-  const items = pickAll('.quickView-item|.tf-quick-view-image .item|.tf-quick-view-image .swiper-slide', panel);
-  if (items.length && imgs.length) {
-    items.forEach((item, i) => {
-      if (i >= imgs.length) { remove(item); return; }     // six slots, two photos
-      const img = pick('img', item);
-      if (!img) return;
-      const url = mediaUrl(imgs[i]);
-      setAttr(img, 'src', url);
-      if (img.hasAttribute('data-src')) setAttr(img, 'data-src', url);
-      img.removeAttribute('srcset');
-      img.classList.remove('lazyload', 'lazyloading');
-      img.classList.add('lazyloaded');
-    });
+  const wrap = pick('.wrap-quick-view, .wrapper-scroll-quickview, .tf-quick-view-image', panel);
+  if (wrap && imgs.length) {
+    wrap.innerHTML = imgs.map((imgUrl, i) => `
+      <div class="quickView-item item-scroll-quickview" style="display:flex;align-items:center;justify-content:center;margin-bottom:15px;background:#f8fafc;border-radius:8px;overflow:hidden;padding:10px;">
+        <img src="${mediaUrl(imgUrl)}" alt="${escapeHtml(p.name)}" style="width:100%;height:auto;max-height:420px;object-fit:contain;border-radius:8px;">
+      </div>
+    `).join('');
   }
-  /* Static swatches and sizes, hard-coded by the template. They describe a
-     dress, and nothing in the store backs them. */
-  pickAll('.tf-product-info-choose-option|.tf-product-info-variant-picker', panel).forEach(remove);
+
+  /* Static clothing options: hide completely if product has no color or size attributes */
+  const optContainer = pick('.tf-product-info-choose-option, .tf-product-info-variant-picker', panel);
+  if (optContainer) {
+    const pColors = (p.optionValues || p.attributes || []).filter((o) => (o.key || '').toLowerCase() === 'color');
+    const pSizes = (p.optionValues || p.attributes || []).filter((o) => (o.key || '').toLowerCase() === 'size');
+    if (!pColors.length && !pSizes.length) {
+      show(optContainer, false);
+    } else {
+      show(optContainer, true);
+    }
+  }
 }
 
 let quickViewProduct = null;
@@ -3779,7 +3915,7 @@ function wireQuickView() {
     const trigger = e.target.closest(
       '.quickview, .cta-quickview, .product-details-popup-btn, [data-quickview], ' +
       'a[href="#quickView"], a[href="#quick_view"], a[href="#quickAdd"], ' +
-      '[data-bs-target="#quick_view"], [data-bs-target="#quickAdd"]',
+      '[data-bs-target="#quick_view"], [data-bs-target="#quickView"], [data-bs-target="#quickAdd"]',
     );
     if (!trigger) return;
     const id = trigger.closest('[data-merch-id]')?.dataset.merchId;
@@ -3792,9 +3928,32 @@ function wireQuickView() {
         fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
         paintGalleryIn(panel, THEME.product?.gallery, p);
         paintQuickViewExtras(panel, p);
-        /* After the theme has opened and laid the panel out, not before. */
-        setTimeout(() => keepPanelControlsOnScreen(panel), 0);
-        setTimeout(() => keepPanelControlsOnScreen(panel), 350);
+        await paintQuickVariants(panel, p);
+      }
+      let targetPanel = null;
+      const href = trigger.getAttribute('href') || '';
+      const bsTarget = trigger.getAttribute('data-bs-target') || '';
+      const targetSel = (bsTarget && bsTarget.startsWith('#')) ? bsTarget : (href && href.startsWith('#') ? href : '');
+      if (targetSel) {
+        targetPanel = panels.find((pan) => pan.matches(targetSel) || pan.id === targetSel.slice(1));
+      }
+      if (!targetPanel) {
+        targetPanel = panels.find((pan) => pan.id === 'quickView') || panels[0];
+      }
+      if (targetPanel) {
+        try {
+          if (window.bootstrap?.Modal) {
+            const inst = window.bootstrap.Modal.getOrCreateInstance(targetPanel);
+            inst.show();
+          } else if (window.bootstrap?.Offcanvas) {
+            const inst = window.bootstrap.Offcanvas.getOrCreateInstance(targetPanel);
+            inst.show();
+          } else if (window.jQuery && window.jQuery.fn.modal) {
+            window.jQuery(targetPanel).modal('show');
+          }
+        } catch (err) {}
+        setTimeout(() => keepPanelControlsOnScreen(targetPanel), 0);
+        setTimeout(() => keepPanelControlsOnScreen(targetPanel), 350);
       }
     } catch (err) { showError(err); }
   }, true);                                 // capture, so we fill BEFORE the theme opens it
@@ -3805,11 +3964,26 @@ function wireQuickView() {
     if (!add || !quickViewProduct) return;
     if (/wish/i.test(add.className)) return;
     e.preventDefault();
+    const selected = modal._merchSelectedVariant;
+    if (modal.dataset.merchSizeRequired === 'true' && !selected) return notify('Please select a size first.', 'error');
+    const item = selected?.product || quickViewProduct;
+    if (item.availability === 'out') return notify('That option is sold out.', 'error');
     const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
-    if (quickViewProduct.availability === 'out') return notify('That one is sold out.', 'error');
-    cart.add(quickViewProduct, qty);
-    notify(quickViewProduct.name + ' added to your cart.', 'success');
-    track('add_to_cart', { itemId: quickViewProduct.id, qty, via: 'quickview' });
+    cart.add(item, qty, selected?.label || '');
+    notify(item.name + ' added to your cart.', 'success');
+    track('add_to_cart', { itemId: item.id, qty, via: 'quickview' });
+    try {
+      if (window.bootstrap?.Modal) {
+        window.bootstrap.Modal.getInstance(modal)?.hide();
+      }
+      if (window.bootstrap?.Offcanvas) {
+        window.bootstrap.Offcanvas.getInstance(modal)?.hide();
+      }
+      const cartEl = document.getElementById('shoppingCart');
+      if (cartEl && window.bootstrap?.Offcanvas) {
+        window.bootstrap.Offcanvas.getOrCreateInstance(cartEl).show();
+      }
+    } catch (err) {}
   });
 }
 
@@ -3896,13 +4070,72 @@ const COMPARE_TEMPLATE = new WeakMap();
 /* Repaint whenever a compare table could come into view: on the page that owns
    one, and on the capture phase of any compare trigger — BEFORE the theme's own
    handler opens the modal, so it is never seen holding the previous contents. */
+async function paintCompareDrawer() {
+  const drawer = document.getElementById('compare');
+  if (!drawer) return;
+  const wrap = drawer.querySelector('.tf-compare-wrap');
+  if (!wrap) return;
+
+  const ids = compare.ids();
+  if (!ids.length) {
+    wrap.innerHTML = '<div style="padding: 20px; text-align: center; color: #888; width: 100%;">No products added to compare.</div>';
+    return;
+  }
+
+  let prods = [];
+  try {
+    prods = await api.products(ids);
+  } catch (e) {
+    return;
+  }
+
+  wrap.innerHTML = prods.map((p) => `
+    <div class="tf-compare-item file-delete" data-merch-id="${p.id}">
+      <span class="icon-close remove" data-remove-id="${p.id}" style="cursor:pointer;"></span>
+      <a href="${escapeHtml(productHref(p))}" class="image">
+        <img src="${mediaUrl((p.imageUrls || [])[0] || '')}" alt="${escapeHtml(p.name)}">
+      </a>
+      <div class="content">
+        <div class="text-title">
+          <a class="link text-line-clamp-2" href="${escapeHtml(productHref(p))}">${escapeHtml(p.name)}</a>
+        </div>
+        <div class="text-button">${money(p.price)}</div>
+      </div>
+    </div>
+  `).join('');
+
+  wrap.querySelectorAll('.remove[data-remove-id]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      compare.toggle(btn.dataset.removeId);
+      paintCompareDrawer().catch(() => {});
+      paintCompare().catch(() => {});
+    });
+  });
+
+  const clearAll = drawer.querySelector('.clear-file-delete, .tf-compapre-button-clear-all');
+  if (clearAll) {
+    clearAll.onclick = (e) => {
+      e.preventDefault();
+      writeJson(COMPARE_KEY, []);
+      paintCompareDrawer().catch(() => {});
+      paintCompare().catch(() => {});
+    };
+  }
+}
+
 function wireCompare() {
-  if (!THEME?.compare) return;
-  paintCompare().catch((e) => warn('compare', e));
+  paintCompareDrawer().catch((e) => warn('compare drawer', e));
+  if (THEME?.compare) {
+    paintCompare().catch((e) => warn('compare', e));
+  }
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('[data-merch-action="compare"], .compare, [data-bs-target="#exampleModal"], a[href*="compare"]')) return;
-    /* After the toggle handler has run, so the list already includes this item. */
-    setTimeout(() => paintCompare().catch((err) => warn('compare', err)), 0);
+    if (!e.target.closest('[data-merch-action="compare"], .compare, [data-bs-target="#exampleModal"], [data-bs-target="#compare"], a[href*="compare"]')) return;
+    setTimeout(() => {
+      paintCompareDrawer().catch((err) => warn('compare drawer', err));
+      paintCompare().catch((err) => warn('compare', err));
+    }, 0);
   }, true);
 }
 
@@ -4228,7 +4461,9 @@ async function paintBanners(data) {
 
           const descEl = pick('.subheading', slide);
           if (descEl) {
-            if (descText) {
+            if (THEME?.name === 'electronic') {
+              show(descEl, false);
+            } else if (descText) {
               setText(descEl, descText);
               show(descEl, true);
             } else {
@@ -4238,7 +4473,9 @@ async function paintBanners(data) {
 
           const btnEl = pick('.box-btn-slider a', slide);
           const btnBox = pick('.box-btn-slider', slide);
-          if (btnEl) {
+          if (THEME?.name === 'electronic') {
+            if (btnBox) show(btnBox, false);
+          } else if (btnEl) {
             if (b.link && linkUrl !== '#') {
               btnEl.setAttribute('href', linkUrl);
               if (btnBox) show(btnBox, true);
@@ -4669,8 +4906,19 @@ function storeLink(link) {
      sent, a hero button reading "Shop Now" goes to /shop — a 404 on a folder
      of static pages. Map the ones the store owns; leave the rest alone, since
      a merchant may well be linking somewhere real. */
-  const known = { '/cart': 'cart', '/checkout': 'checkout', '/account': 'account', '/orders': 'orders', '/track': 'track', '/wishlist': 'wishlist', '/blog': 'blog' };
-  const role = known[link.replace(/\/$/, '')];
+  const known = {
+    '/cart': 'cart', '/checkout': 'checkout', '/account': 'account', '/my-account': 'account',
+    '/orders': 'orders', '/my-orders': 'orders', '/track': 'track', '/track-order': 'track',
+    '/wishlist': 'wishlist', '/my-wishlist': 'wishlist', '/blog': 'blog',
+    '/about': 'about', '/about-us': 'about', '/p/about': 'about',
+    '/shipping': 'shipping', '/p/shipping': 'shipping', '/shipping-delivery': 'shipping',
+    '/returns': 'returns', '/p/returns': 'returns', '/refund': 'returns', '/returns-refunds': 'returns',
+    '/privacy': 'privacy', '/p/privacy': 'privacy', '/privacy-policy': 'privacy',
+    '/terms': 'terms', '/p/terms': 'terms', '/terms-of-service': 'terms', '/terms-and-conditions': 'terms',
+    '/contact': 'contact', '/contact-us': 'contact',
+    '/faq': 'faqs', '/faqs': 'faqs'
+  };
+  const role = known[link.replace(/\/$/, '').toLowerCase()];
   if (role) return pageUrl(role);
   return link;
 }
@@ -4739,6 +4987,11 @@ pages.listing = async () => {
           });
     } catch (e) { showError(e); return; }
     const items = Array.isArray(res) ? res : (res.products || res.items || []);
+    if (state.sort === 'a-z') {
+      items.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    } else if (state.sort === 'z-a' || state.sort === 'name_desc') {
+      items.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+    }
     for (const grid of pickAll(THEME.listing.container)) renderProducts(items, THEME.listing, grid);
     wireQuickView();
     const total = await paintResultCount(items, state, pageSize);
@@ -4759,10 +5012,8 @@ pages.listing = async () => {
 
 /* Render responsive dynamic pagination controls */
 function renderPagination(total, state, run, pageSize) {
-  const pager = pick('.pagination-area-main-wrappper, .pagination-area, .pagination, ul.wg-pagination');
-  if (!pager) return;
-  const ul = pager.tagName === 'UL' ? pager : pager.querySelector('ul');
-  if (!ul) return;
+  const pagers = pickAll('.pagination-area-main-wrappper, .pagination-area, .pagination, ul.wg-pagination');
+  if (!pagers.length) return;
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const curPage = Math.min(Math.max(1, state.page || 1), totalPages);
@@ -4773,32 +5024,77 @@ function renderPagination(total, state, run, pageSize) {
     startPage = Math.max(1, endPage - 4);
   }
 
-  const isWgPagination = ul.classList.contains('wg-pagination') || pager.classList.contains('wg-pagination');
-  if (isWgPagination) {
+  for (const pager of pagers) {
+    const ul = pager.tagName === 'UL' ? pager : pager.querySelector('ul');
+    if (!ul) continue;
+
+    const isWgPagination = ul.classList.contains('wg-pagination') || pager.classList.contains('wg-pagination');
+    if (isWgPagination) {
+      let html = '';
+      if (curPage > 1) {
+        html += `<li><a href="#" class="pagination-item text-button prev-page" data-page="${curPage - 1}"><i class="icon-arrLeft"></i></a></li>`;
+      }
+      if (startPage > 1) {
+        html += `<li><a href="#" class="pagination-item text-button page-num" data-page="1">1</a></li>`;
+        if (startPage > 2) html += `<li><span class="pagination-item text-button" style="border:none;">...</span></li>`;
+      }
+      for (let p = startPage; p <= endPage; p++) {
+        if (p === curPage) {
+          html += `<li class="active"><div class="pagination-item text-button">${p}</div></li>`;
+        } else {
+          html += `<li><a href="#" class="pagination-item text-button page-num" data-page="${p}">${p}</a></li>`;
+        }
+      }
+      if (endPage < totalPages) {
+        if (endPage < totalPages - 1) html += `<li><span class="pagination-item text-button" style="border:none;">...</span></li>`;
+        html += `<li><a href="#" class="pagination-item text-button page-num" data-page="${totalPages}">${totalPages}</a></li>`;
+      }
+      if (curPage < totalPages) {
+        html += `<li><a href="#" class="pagination-item text-button next-page" data-page="${curPage + 1}"><i class="icon-arrRight"></i></a></li>`;
+      }
+      ul.innerHTML = html;
+      ul.querySelectorAll('[data-page]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const p = Number(btn.dataset.page);
+          if (p && p !== curPage) {
+            state.page = p;
+            pushState(state);
+            run();
+            const topEl = document.querySelector('.wrapper-shop, .tf-grid-layout, .tab-pane.active') || document.body;
+            topEl.scrollIntoView({ behavior: 'smooth' });
+          }
+        });
+      });
+      continue;
+    }
+
     let html = '';
-    if (curPage > 1) {
-      html += `<li><a href="#" class="pagination-item text-button prev-page" data-page="${curPage - 1}"><i class="icon-arrLeft"></i></a></li>`;
-    }
+    html += `<li><button type="button" class="prev-page ${curPage <= 1 ? 'disabled' : ''}" ${curPage <= 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''} aria-label="Previous"><i class="fa-regular fa-chevron-left"></i></button></li>`;
+
     if (startPage > 1) {
-      html += `<li><a href="#" class="pagination-item text-button page-num" data-page="1">1</a></li>`;
-      if (startPage > 2) html += `<li><span class="pagination-item text-button" style="border:none;">...</span></li>`;
-    }
-    for (let p = startPage; p <= endPage; p++) {
-      if (p === curPage) {
-        html += `<li class="active"><div class="pagination-item text-button">${p}</div></li>`;
-      } else {
-        html += `<li><a href="#" class="pagination-item text-button page-num" data-page="${p}">${p}</a></li>`;
+      html += `<li><button type="button" class="page-num" data-page="1">1</button></li>`;
+      if (startPage > 2) {
+        html += `<li><span style="display:inline-block;padding:0 5px;color:#999;">...</span></li>`;
       }
     }
+
+    for (let p = startPage; p <= endPage; p++) {
+      html += `<li><button type="button" class="page-num ${p === curPage ? 'active' : ''}" data-page="${p}">${p}</button></li>`;
+    }
+
     if (endPage < totalPages) {
-      if (endPage < totalPages - 1) html += `<li><span class="pagination-item text-button" style="border:none;">...</span></li>`;
-      html += `<li><a href="#" class="pagination-item text-button page-num" data-page="${totalPages}">${totalPages}</a></li>`;
+      if (endPage < totalPages - 1) {
+        html += `<li><span style="display:inline-block;padding:0 5px;color:#999;">...</span></li>`;
+      }
+      html += `<li><button type="button" class="page-num" data-page="${totalPages}">${totalPages}</button></li>`;
     }
-    if (curPage < totalPages) {
-      html += `<li><a href="#" class="pagination-item text-button next-page" data-page="${curPage + 1}"><i class="icon-arrRight"></i></a></li>`;
-    }
+
+    html += `<li><button type="button" class="next-page ${curPage >= totalPages ? 'disabled' : ''}" ${curPage >= totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''} aria-label="Next"><i class="fa-regular fa-chevron-right"></i></button></li>`;
+
     ul.innerHTML = html;
-    ul.querySelectorAll('[data-page]').forEach((btn) => {
+
+    ul.querySelectorAll('button.page-num').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         const p = Number(btn.dataset.page);
@@ -4806,79 +5102,39 @@ function renderPagination(total, state, run, pageSize) {
           state.page = p;
           pushState(state);
           run();
-          const topEl = document.querySelector('.wrapper-shop, .tf-grid-layout') || document.body;
+          const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
           topEl.scrollIntoView({ behavior: 'smooth' });
         }
       });
     });
-    return;
-  }
 
-  let html = '';
-  html += `<li><button type="button" class="prev-page ${curPage <= 1 ? 'disabled' : ''}" ${curPage <= 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''} aria-label="Previous"><i class="fa-regular fa-chevron-left"></i></button></li>`;
-
-  if (startPage > 1) {
-    html += `<li><button type="button" class="page-num" data-page="1">1</button></li>`;
-    if (startPage > 2) {
-      html += `<li><span style="display:inline-block;padding:0 5px;color:#999;">...</span></li>`;
+    const prevBtn = ul.querySelector('button.prev-page:not(.disabled)');
+    if (prevBtn) {
+      prevBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (curPage > 1) {
+          state.page = curPage - 1;
+          pushState(state);
+          run();
+          const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+          topEl.scrollIntoView({ behavior: 'smooth' });
+        }
+      });
     }
-  }
 
-  for (let p = startPage; p <= endPage; p++) {
-    html += `<li><button type="button" class="page-num ${p === curPage ? 'active' : ''}" data-page="${p}">${p}</button></li>`;
-  }
-
-  if (endPage < totalPages) {
-    if (endPage < totalPages - 1) {
-      html += `<li><span style="display:inline-block;padding:0 5px;color:#999;">...</span></li>`;
+    const nextBtn = ul.querySelector('button.next-page:not(.disabled)');
+    if (nextBtn) {
+      nextBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (curPage < totalPages) {
+          state.page = curPage + 1;
+          pushState(state);
+          run();
+          const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
+          topEl.scrollIntoView({ behavior: 'smooth' });
+        }
+      });
     }
-    html += `<li><button type="button" class="page-num" data-page="${totalPages}">${totalPages}</button></li>`;
-  }
-
-  html += `<li><button type="button" class="next-page ${curPage >= totalPages ? 'disabled' : ''}" ${curPage >= totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''} aria-label="Next"><i class="fa-regular fa-chevron-right"></i></button></li>`;
-
-  ul.innerHTML = html;
-
-  ul.querySelectorAll('button.page-num').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      const p = Number(btn.dataset.page);
-      if (p && p !== curPage) {
-        state.page = p;
-        pushState(state);
-        run();
-        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
-        topEl.scrollIntoView({ behavior: 'smooth' });
-      }
-    });
-  });
-
-  const prevBtn = ul.querySelector('button.prev-page:not(.disabled)');
-  if (prevBtn) {
-    prevBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (curPage > 1) {
-        state.page = curPage - 1;
-        pushState(state);
-        run();
-        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
-        topEl.scrollIntoView({ behavior: 'smooth' });
-      }
-    });
-  }
-
-  const nextBtn = ul.querySelector('button.next-page:not(.disabled)');
-  if (nextBtn) {
-    nextBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (curPage < totalPages) {
-        state.page = curPage + 1;
-        pushState(state);
-        run();
-        const topEl = document.querySelector('.tab-content, .product-area-wrapper-shopgrid-list') || document.body;
-        topEl.scrollIntoView({ behavior: 'smooth' });
-      }
-    });
   }
 }
 
@@ -5421,8 +5677,10 @@ function pushState(state) {
 /* Themes put a search box in the header of every page. One handler covers all
    of them, on every page, and sends the shopper to this theme's listing. */
 function wireSearchInputs(onSearch) {
-  const inputs = pickAll('input[placeholder*="Search" i]|input[type="search"]|.header-search-field|.form-search-select input|.form-search input');
+  const inputs = [...document.querySelectorAll('input[type="search"], .header-search-field, .form-search-select input, .form-search input, input[placeholder*="look" i], input[placeholder*="Search" i]')];
+  const curQ = param('q') || '';
   for (const input of inputs) {
+    if (curQ && !input.value) input.value = curQ;
     const form = input.closest('form');
     const go = (e) => {
       e.preventDefault();
@@ -5432,7 +5690,7 @@ function wireSearchInputs(onSearch) {
     };
     if (form) {
       form.addEventListener('submit', go);
-      const btn = form.querySelector('button');
+      const btn = form.querySelector('button, .tf-btn, [type="submit"]');
       if (btn) btn.addEventListener('click', go);
     }
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(e); });
@@ -5440,14 +5698,12 @@ function wireSearchInputs(onSearch) {
 }
 
 function wireSortSelects(onSort) {
-  /* The store accepts price_asc, price_desc and name — nothing else. A theme's
-     "Best selling" option has nothing behind it, so it sorts by name rather
-     than sending a value the store will ignore. */
+  /* The store accepts price_asc, price_desc and name / a-z / z-a */
   const map = {
     'price, low to high': 'price_asc', 'price: low to high': 'price_asc', 'low to high': 'price_asc', 'price-low-high': 'price_asc',
     'price, high to low': 'price_desc', 'price: high to low': 'price_desc', 'high to low': 'price_desc', 'price-high-low': 'price_desc',
-    'alphabetically, a-z': 'name', 'name': 'name', 'a to z': 'name', 'alphabetically-a-z': 'name',
-    'alphabetically, z-a': 'name', 'alphabetically-z-a': 'name',
+    'alphabetically, a-z': 'a-z', 'alphabetically-a-z': 'a-z', 'a to z': 'a-z', 'a-z': 'a-z', 'name': 'a-z',
+    'alphabetically, z-a': 'z-a', 'alphabetically-z-a': 'z-a', 'z to a': 'z-a', 'z-a': 'z-a',
     'best selling': 'name', 'best-selling': 'name',
   };
   pickAll('select.sort|select[name="sort"]|.sort-by select|.nice-select').forEach((sel) => {
@@ -5627,6 +5883,7 @@ pages.product = async () => {
   } catch (e) { return showError(e); }
   if (!p) return;
 
+  window.currentProductDetailId = p.id;
   const spec = THEME.product;
   fillFields(document, spec.fields, p, { node: document, qtyEl: pick(THEME.qtyInput) });
   setDocumentTitle(p.name);
@@ -5641,6 +5898,7 @@ pages.product = async () => {
   wireProductDetailCartFlow(p);
   await paintReviews(p);
   await paintRelated(p);
+  syncWishlistCardStates();
 
   /* Tell the store it was seen, so the shopper's own recently-viewed rail
      fills as they browse. Best-effort: a failure here must never break a PDP. */
@@ -5766,8 +6024,19 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
   }
 
   for (const sel of [gallery.images, gallery.thumbs]) {
-    const nodes = within(sel);
+    let nodes = within(sel);
     if (!nodes.length) continue;
+    const parentWrapper = nodes[0].closest('.swiper-wrapper');
+    if (parentWrapper && urls.length > nodes.length) {
+      const templateSlide = nodes[0].closest('.swiper-slide');
+      if (templateSlide) {
+        for (let k = nodes.length; k < urls.length; k++) {
+          const clone = templateSlide.cloneNode(true);
+          parentWrapper.appendChild(clone);
+        }
+        nodes = within(sel);
+      }
+    }
     nodes.forEach((node, i) => {
       if (i >= urls.length) {
         const slide = node.closest('.swiper-slide, .slick-slide, .item, .thumb-wrapper') || node;
@@ -5787,28 +6056,41 @@ function paintGallery(gallery, p, within = (sel) => pickAll(sel)) {
         setAttr(img, 'src', urls[i]);
         if (img.hasAttribute('data-src')) setAttr(img, 'data-src', urls[i]);
         img.removeAttribute('srcset');
-        /* ⭐ THE PICTURE A SHOPPER SEES ON HOVER IS A DIFFERENT ATTRIBUTE. The
-           magnifier reads `data-zoom`, not `src`, so the main image showed the
-           shop's jacket and hovering it showed the template's olive wrap top —
-           a different garment, in a different colour, over the real one. */
+        img.classList.remove('lazyload', 'lazyloading');
+        img.classList.add('lazyloaded');
+        /* ⭐ THE PICTURE A SHOPPER SEES ON HOVER IS A DIFFERENT ATTRIBUTE. */
         ['data-zoom', 'data-zoom-image', 'data-large', 'data-large-image', 'data-image', 'data-pswp-src']
           .forEach((a) => { if (img.hasAttribute(a)) setAttr(img, a, urls[i]); });
       }
-      /* The lightbox opens the wrapping link's href, which points at the
-         full-size file. Only swapped when it IS an image file — a gallery
-         item can be wrapped in a link to the product page. */
       const link = node.closest('a[href]') || (node.tagName !== 'IMG' ? node.querySelector('a[href]') : null);
       if (link && /\.(jpe?g|png|webp|gif|avif)(\?|#|$)/i.test(link.getAttribute('href') || '')) {
         setAttr(link, 'href', urls[i]);
       }
     });
   }
+
+  // Bind thumbnail clicks to main swiper & reinit swiper
+  if (typeof window.initProductDetailGallery === 'function') {
+    try { window.initProductDetailGallery(); } catch (e) {}
+  }
+  try {
+    window.productThumbsSwiper?.update?.();
+    window.productMainSwiper?.update?.();
+  } catch (e) {}
+
+  const thumbSlides = pickAll('.tf-product-media-thumbs .swiper-slide');
+  thumbSlides.forEach((th, idx) => {
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', () => {
+      window.productMainSwiper?.slideTo?.(idx);
+    });
+  });
 }
 
 /* Variants & Attributes. Displays variant choices (navigates between products in a group)
    and dynamic product attributes (e.g. Size, Color) with responsive styling. */
 async function paintVariants(spec, p) {
-  if (THEME?.name === 'fashion') return paintVariantsFashion(spec, p);
+  if (THEME?.name === 'fashion' || THEME?.name === 'electronic') return paintVariantsFashion(spec, p);
   let group = null;
   try { group = await api.variants(p.id); } catch { /* best effort */ }
   const options = group?.options || [];
@@ -6592,78 +6874,77 @@ function openCartSidebar() {
 }
 
 async function paintElectronicHomeTabs() {
-  const tabList = pick('.tab-product-v3');
-  if (!tabList) return;
-
-  const tabLinks = pickAll('a[data-bs-toggle="tab"]', tabList);
-  if (!tabLinks.length) return;
+  const sections = pickAll('.deal-tabs-section, section:has(.tab-product-v3)');
+  if (!sections.length) return;
 
   let allProducts = [];
   try {
-    const catalogRes = await api.catalog({ pageSize: 24 });
+    const catalogRes = await api.catalog({ pageSize: 40 });
     allProducts = Array.isArray(catalogRes) ? catalogRes : catalogRes?.products || [];
   } catch (e) {
     warn('all products tab fetch', e);
   }
 
-  // 1. Paint #AllProducts tab
-  const allPane = document.getElementById('AllProducts');
-  if (allPane && allProducts.length) {
-    const rail = pick('.swiper-wrapper', allPane);
-    if (rail) {
-      renderProducts(allProducts.slice(0, 8), THEME.listing, rail);
-      hydrated.add(rail);
-    }
-  }
-
-  // 2. Fetch categories for remaining tabs
   let cats = [];
   try { cats = await getCategories(); } catch { cats = []; }
 
-  // Map remaining tabs: tabLinks[1], tabLinks[2], tabLinks[3]
-  const remainingTabs = tabLinks.slice(1);
-  for (let i = 0; i < remainingTabs.length; i++) {
-    const tabLink = remainingTabs[i];
-    const targetId = (tabLink.getAttribute('href') || '').replace('#', '');
-    const targetPane = targetId ? document.getElementById(targetId) : null;
-    if (!targetPane) continue;
+  let catIndex = 0;
 
-    const cat = cats[i];
-    const rail = pick('.swiper-wrapper', targetPane);
-    if (!rail) continue;
+  for (let s = 0; s < sections.length; s++) {
+    const sec = sections[s];
+    const tabList = pick('.tab-product-v3', sec);
+    if (!tabList) continue;
 
-    let tabProducts = [];
-    if (cat) {
-      const catName = typeof cat === 'string' ? cat : cat.name;
-      tabLink.textContent = catName;
-      try {
-        const catRes = await api.catalog({ category: catName, pageSize: 8 });
-        tabProducts = Array.isArray(catRes) ? catRes : catRes?.products || [];
-      } catch (e) {
-        warn('tab category catalog', e);
+    const tabLinks = pickAll('a[data-bs-toggle="tab"]', tabList);
+    if (!tabLinks.length) continue;
+
+    for (let i = 0; i < tabLinks.length; i++) {
+      const tabLink = tabLinks[i];
+      const targetId = (tabLink.getAttribute('href') || '').replace('#', '');
+      const targetPane = targetId ? document.getElementById(targetId) : null;
+      if (!targetPane) continue;
+
+      const rail = pick('.swiper-wrapper', targetPane);
+      if (!rail) continue;
+
+      let tabProducts = [];
+      const linkText = (tabLink.textContent || '').trim().toLowerCase();
+      const isAllTab = linkText.includes('all') || i === 0;
+
+      if (isAllTab && i === 0) {
+        const start = (s * 8) % Math.max(1, allProducts.length);
+        tabProducts = allProducts.slice(start, start + 8);
+        if (tabProducts.length < 4) tabProducts = allProducts.slice(0, 8);
+      } else {
+        const cat = cats.length ? cats[catIndex % cats.length] : null;
+        catIndex++;
+        if (cat) {
+          const catName = typeof cat === 'string' ? cat : cat.name;
+          tabLink.textContent = catName;
+          try {
+            const catRes = await api.catalog({ category: catName, pageSize: 8 });
+            tabProducts = Array.isArray(catRes) ? catRes : catRes?.products || [];
+          } catch (e) {
+            warn('tab category catalog', e);
+          }
+        }
+        if (!tabProducts.length && allProducts.length) {
+          const startIdx = ((s + 1) * 8 + i * 4) % allProducts.length;
+          tabProducts = allProducts.slice(startIdx, startIdx + 8);
+          if (tabProducts.length < 4) tabProducts = allProducts.slice(0, 8);
+        }
       }
-    }
 
-    // If category has no products or not enough, take a distinct non-overlapping slice from allProducts
-    if (!tabProducts.length && allProducts.length) {
-      const startIdx = ((i + 1) * 4) % allProducts.length;
-      tabProducts = allProducts.slice(startIdx, startIdx + 8);
-      if (tabProducts.length < 4) {
-        tabProducts = allProducts.slice(0, 8);
+      if (tabProducts.length) {
+        renderProducts(tabProducts, THEME.listing, rail);
+        hydrated.add(rail);
       }
-    }
 
-    if (tabProducts.length) {
-      renderProducts(tabProducts, THEME.listing, rail);
-      hydrated.add(rail);
+      tabLink.addEventListener('shown.bs.tab', () => {
+        refreshSwipers();
+      });
     }
   }
-
-  tabLinks.forEach((link) => {
-    link.addEventListener('shown.bs.tab', () => {
-      refreshSwipers();
-    });
-  });
 }
 
 async function paintStickyAtcBar(p) {
@@ -6782,6 +7063,33 @@ function remapDeadLinks() {
       a.setAttribute('href', href.replace(cleanHref, 'shop-left-sidebar.html'));
     } else if (prodPages.includes(cleanHref)) {
       a.setAttribute('href', href.replace(cleanHref, 'product-detail.html'));
+    }
+  });
+
+  // Ensure all footer links open their corresponding working HTML page
+  $$('.footer-menu-list a, .footer-menu a, footer a').forEach((a) => {
+    const text = (a.textContent || '').trim().toLowerCase();
+    const href = (a.getAttribute('href') || '').trim();
+    if (href === '#' || href === '' || href.startsWith('/') || href.includes('javascript:')) {
+      if (text.includes('about') || text.includes('our stories') || text.includes('career')) {
+        a.setAttribute('href', 'about-us.html');
+      } else if (text.includes('shipping')) {
+        a.setAttribute('href', 'shipping.html');
+      } else if (text.includes('return') || text.includes('refund')) {
+        a.setAttribute('href', 'returns.html');
+      } else if (text.includes('privacy')) {
+        a.setAttribute('href', 'privacy-policy.html');
+      } else if (text.includes('term')) {
+        a.setAttribute('href', 'term-of-use.html');
+      } else if (text.includes('faq') || text.includes('size guide')) {
+        a.setAttribute('href', 'FAQs.html');
+      } else if (text.includes('contact')) {
+        a.setAttribute('href', 'contact.html');
+      } else if (text.includes('account')) {
+        a.setAttribute('href', 'my-account.html');
+      } else if (text.includes('wishlist')) {
+        a.setAttribute('href', 'wish-list.html');
+      }
     }
   });
 }
@@ -7709,12 +8017,17 @@ async function paintQuickVariants(panel, p) {
   let group = null;
   try { group = await api.variants(p.id); } catch { /* remove demo controls below */ }
   const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
-  pickAll('.quick-variant-picker, .tf-product-variant .variant-picker-item', panel).forEach(remove);
+  const optContainer = pick('.tf-product-info-choose-option, .tf-product-info-variant-picker, .tf-product-variant', panel);
+  pickAll('.quick-variant-picker, .variant-picker-item', optContainer || panel).forEach(remove);
   panel._merchSelectedVariant = null;
   panel.dataset.merchSizeRequired = 'false';
-  if (!options.length) return;
+  if (!options.length) {
+    if (optContainer) show(optContainer, false);
+    return;
+  }
+  if (optContainer) show(optContainer, true);
 
-  const host = pick('.tf-product-variant', panel) || pick('.tf-product-quick_add, .tf-product-quick_view', panel) || panel;
+  const host = optContainer || pick('.tf-product-quick_add, .tf-product-quick_view', panel) || panel;
   const parsedList = options.map((o) => parseVariantOption(o, p));
   const hasSizes = parsedList.some((x) => x.size);
   panel.dataset.merchSizeRequired = hasSizes ? 'true' : 'false';
@@ -8171,9 +8484,29 @@ async function paintFilters(state, run) {
 
   for (const group of FILTER_GROUPS) {
     const values = group.values(facets);
-    if (!values.length) continue;
     const scope = filterGroupScope(group.rx);
+    if (!values.length) {
+      if (scope) {
+        const box = scope.closest('.widget-facet, .single-filter-box, .facet, .sidebar-single, .widget, .filter-group, .collapse-item, .tf-filter-group') || scope.parentElement;
+        if (box) show(box, false);
+      }
+      if (group.key === 'size') {
+        pickAll('.widget-facet.facet-size, .facet-size').forEach((w) => show(w, false));
+      }
+      if (group.key === 'color') {
+        pickAll('.widget-facet.facet-color, .facet-color').forEach((w) => show(w, false));
+      }
+      continue;
+    }
+    if (group.key === 'size') {
+      pickAll('.widget-facet.facet-size, .facet-size').forEach((w) => show(w, true));
+    }
+    if (group.key === 'color') {
+      pickAll('.widget-facet.facet-color, .facet-color').forEach((w) => show(w, true));
+    }
     if (!scope) continue;
+    const box = scope.closest('.widget-facet, .single-filter-box, .facet, .sidebar-single, .widget, .filter-group, .collapse-item, .tf-filter-group') || scope.parentElement;
+    if (box) show(box, true);
     paintFilterGroup(scope, group, values, state, run);
   }
 
@@ -8273,7 +8606,7 @@ function filterGroupScope(rx) {
     /* The list is whichever descendant holds more than one option row. */
     const list = [...box.querySelectorAll('*')].find(
       (el) => el.children.length > 1
-        && [...el.children].filter((c) => c.querySelector('input[type="checkbox"], input[type="radio"], a, label')).length > 1,
+        && [...el.children].filter((c) => c.matches?.('input[type="checkbox"], input[type="radio"], a, label, span, .color-item, .size-item') || c.querySelector('input[type="checkbox"], input[type="radio"], a, label, span, .color-item, .size-item')).length > 1,
     );
     if (list) return list;
   }
@@ -8305,6 +8638,8 @@ function paintFilterGroup(list, group, values, state, run) {
       input.checked = String(state[group.key] || '') === String(v.value);
       if (label.tagName === 'LABEL') label.setAttribute('for', id);
     }
+    const isSelected = String(state[group.key] || '') === String(v.value);
+    node.classList.toggle('active', isSelected);
     setText(label, v.count ? `${v.label} (${v.count})` : v.label);
     if (group.key === 'color') {
       const dot = colourDot(v.value, 12);
@@ -8322,7 +8657,9 @@ function paintFilterGroup(list, group, values, state, run) {
       pushState(state);
       run();
       pickAll('input', list).forEach((i) => { i.checked = false; });
+      pickAll('.color-item, .size-item, li, label', list).forEach((it) => it.classList.remove('active'));
       if (input && !already) input.checked = true;
+      if (!already) node.classList.add('active');
       syncHorizontalDropdownFromState(state);
     };
     (input || label).addEventListener('click', choose);
@@ -10541,7 +10878,8 @@ async function boot() {
      three themes — it is wired here, unconditionally, because that is where the
      fashion copy wired it and the guard already lives inside the function. */
   cart.onChange(() => { paintHeader(); paintFashionMiniCart(); });
-  wishlist.onChange(paintHeader);
+  wishlist.onChange(() => { paintHeader(); syncWishlistCardStates(); });
+  syncWishlistCardStates();
   paintFashionMiniCart();
   try { paintStoreChrome(STORE); } catch (e) { warn('store chrome', e); }
   try { paintAnnouncement(STORE); } catch (e) { warn('announcement', e); }
