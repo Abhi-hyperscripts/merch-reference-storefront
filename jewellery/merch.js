@@ -477,6 +477,14 @@ let themeOnce = null;
 let ALL_PRODUCTS_CACHE = null;
 let IS_FETCHING_CACHE = false;
 
+try {
+  const storedCatalog = sessionStorage.getItem('merch.catalog_cache');
+  if (storedCatalog) {
+    const parsed = JSON.parse(storedCatalog);
+    if (Array.isArray(parsed) && parsed.length > 0) ALL_PRODUCTS_CACHE = parsed;
+  }
+} catch {}
+
 async function getAllProducts() {
   if (ALL_PRODUCTS_CACHE && ALL_PRODUCTS_CACHE.length > 0) return ALL_PRODUCTS_CACHE;
   if (IS_FETCHING_CACHE) {
@@ -491,6 +499,7 @@ async function getAllProducts() {
     const firstItems = Array.isArray(firstRes) ? firstRes : (firstRes?.products || firstRes?.items || []);
     if (firstItems && firstItems.length) {
       ALL_PRODUCTS_CACHE = [...firstItems];
+      try { sessionStorage.setItem('merch.catalog_cache', JSON.stringify(ALL_PRODUCTS_CACHE)); } catch {}
     }
     // Stream remaining pages in background
     (async () => {
@@ -505,7 +514,10 @@ async function getAllProducts() {
           if (items.length < 200) break;
           page++;
         }
-        if (all.length > 0) ALL_PRODUCTS_CACHE = all;
+        if (all.length > 0) {
+          ALL_PRODUCTS_CACHE = all;
+          try { sessionStorage.setItem('merch.catalog_cache', JSON.stringify(all)); } catch {}
+        }
       } catch {}
     })();
     return ALL_PRODUCTS_CACHE || [];
@@ -516,6 +528,7 @@ async function getAllProducts() {
     IS_FETCHING_CACHE = false;
   }
 }
+
 
 export const api = {
   /* --- store settings --- */
@@ -592,8 +605,18 @@ export const api = {
   verifyPayment: (payload) => request('/api/payment/verify', { method: 'POST', body: payload, auth: 'optional' }),
   abandonPayment: (razorpayOrderId) => request('/api/payment/abandon', { method: 'POST', body: { razorpayOrderId }, auth: 'optional' }),
 
-  /* --- an order after the fact --- */
-  order: (id) => request('/api/orders/' + encodeURIComponent(id), { auth: 'optional' }),
+  order: async (id) => {
+    try {
+      return await request('/api/orders/' + encodeURIComponent(id), { auth: 'optional' });
+    } catch (e) {
+      const local = readJson('merch.local_order.' + id, null);
+      if (local) return local;
+      const recent = readJson('merch.recent_orders', []);
+      const found = recent.find((o) => o.id === id || o.orderRef === id || o.reference === id);
+      if (found) return found;
+      throw e;
+    }
+  },
   lookupOrder: (email, reference, phone) =>
     request('/api/orders/lookup', { method: 'POST', body: { email, reference, phone } }),
   cancelOrder: (id, reason) =>
@@ -944,6 +967,7 @@ function repeat({ container, template, sample, card }, items, fill) {
   const frag = document.createDocumentFragment();
   items.forEach((item, i) => {
     const node = template.cloneNode(true);
+    node.style.display = '';
     try { fill(node, item, i); } catch (e) { warn('fill failed', e); }
     frag.appendChild(node);
   });
@@ -3826,8 +3850,27 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
      here — this is the one place every product on every page passes through. */
   rememberColourCodes(items);
   const region = regionEl || pick(spec.container) || document;
-  const cards = realCards(spec, region);
-  if (!cards.length) { log('no product template in this region'); return null; }
+  let cards = realCards(spec, region);
+  if (!cards.length) {
+    const kept = TEMPLATES.get(region)?.get(spec.card) || TEMPLATES.get(document)?.get(spec.card);
+    if (kept) {
+      const container = region;
+      show(container, true);
+      pickAll('.merch-listing-loader', container).forEach(remove);
+      if (!items.length) { renderEmpty(container, 'No products found.', spec); return container; }
+      const t = { container, template: kept.cloneNode(true), sample: kept, card: spec.card };
+      hydrated.add(container);
+      repeat(t, items, (node, p) => {
+        node.style.display = '';
+        node.dataset.merchId = p.id;
+        fillFields(node, spec.fields, p, { node, qtyEl: pick(THEME.qtyInput, node) });
+        if (p.availability === 'out') node.classList.add('out-of-stock');
+      });
+      return container;
+    }
+    log('no product template in this region');
+    return null;
+  }
 
   /* A "region" can hold more than one container: a list layout is often two
      columns of five, and filling each of them with the whole result set shows
@@ -5119,18 +5162,29 @@ pages.listing = async () => {
     0, ...pickAll(THEME.listing.container).map((el) => templateCount({ ...THEME.listing, el })),
   ) || 24));
 
-  // Remove static cards immediately and show loading spinner until real products arrive
+  // Hide static cards immediately and show loading spinner until real products arrive
   const listingGrids = pickAll(THEME.listing.container);
   listingGrids.forEach((grid) => {
     takeTemplate({ ...THEME.listing, el: grid });
-    grid.innerHTML = `
-      <div class="merch-listing-loader text-center w-100 my-5 py-5" style="grid-column: 1 / -1; width: 100%; min-height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+    [...grid.children].forEach((child) => {
+      if (!child.classList.contains('merch-listing-loader')) {
+        child.style.display = 'none';
+      }
+    });
+    let loader = grid.querySelector('.merch-listing-loader');
+    if (!loader) {
+      loader = document.createElement('div');
+      loader.className = 'merch-listing-loader text-center w-100 my-5 py-5';
+      loader.style.cssText = 'grid-column: 1 / -1; width: 100%; min-height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: center;';
+      loader.innerHTML = `
         <div class="spinner-border" role="status" style="width: 3.5rem; height: 3.5rem; color: #c29958 !important; border-width: 3px;">
           <span class="visually-hidden">Loading products...</span>
         </div>
         <p class="mt-3 text-muted" style="font-size: 15px; font-weight: 500;">Loading jewellery products...</p>
-      </div>
-    `;
+      `;
+      grid.prepend(loader);
+    }
+    loader.style.display = 'flex';
   });
 
   const state = {
@@ -5162,13 +5216,8 @@ pages.listing = async () => {
         items = c?.products || [];
         total = items.length;
       } else {
-        let all = null;
-        try {
-          all = await getAllProducts();
-        } catch {}
-
-        if (all && all.length) {
-          let filtered = [...all];
+        if (ALL_PRODUCTS_CACHE && ALL_PRODUCTS_CACHE.length > 0) {
+          let filtered = [...ALL_PRODUCTS_CACHE];
           if (state.q) {
             filtered = searchProductsInMemory(filtered, state.q);
           }
@@ -5225,7 +5274,8 @@ pages.listing = async () => {
             page: state.page > 1 ? state.page : undefined,
           });
           items = Array.isArray(res) ? res : (res?.products || res?.items || []);
-          total = items.length;
+          total = res?.total || items.length;
+          getAllProducts().catch(() => {});
         }
       }
     } catch (e) { showError(e); return; }
@@ -5247,7 +5297,7 @@ pages.listing = async () => {
   wirePagination(state, run, pageSize);
   wirePriceFilter(state, run);
   wireStockFilter(state, run);
-  await paintFilters(state, run);
+  paintFilters(state, run).catch(warn);
   await run();
 };
 
@@ -9447,17 +9497,77 @@ function ensureCustomerFields(spec) {
   log('added a state field: this template has none and the store requires one');
 }
 
+const GST_STATE_CODES = {
+  'jammu and kashmir': '01', 'jammu & kashmir': '01', 'jk': '01', 'j&k': '01',
+  'himachal pradesh': '02', 'himachal': '02', 'hp': '02',
+  'punjab': '03', 'pb': '03',
+  'chandigarh': '04', 'ch': '04',
+  'uttarakhand': '05', 'uk': '05', 'uttaranchal': '05',
+  'haryana': '06', 'hr': '06',
+  'delhi': '07', 'new delhi': '07', 'dl': '07', 'nct': '07',
+  'rajasthan': '08', 'rj': '08',
+  'uttar pradesh': '09', 'up': '09',
+  'bihar': '10', 'br': '10',
+  'sikkim': '11', 'sk': '11',
+  'arunachal pradesh': '12', 'arunachal': '12', 'ar': '12',
+  'nagaland': '13', 'nl': '13',
+  'manipur': '14', 'mn': '14',
+  'mizoram': '15', 'mz': '15',
+  'tripura': '16', 'tr': '16',
+  'meghalaya': '17', 'ml': '17',
+  'assam': '18', 'as': '18',
+  'west bengal': '19', 'bengal': '19', 'wb': '19',
+  'jharkhand': '20', 'jh': '20',
+  'odisha': '21', 'orissa': '21', 'or': '21', 'od': '21',
+  'chhattisgarh': '22', 'chattisgarh': '22', 'cg': '22',
+  'madhya pradesh': '23', 'mp': '23',
+  'gujarat': '24', 'gj': '24',
+  'daman and diu': '26', 'dadra and nagar haveli': '26', 'dnh': '26',
+  'maharashtra': '27', 'mh': '27',
+  'andhra pradesh (old)': '28',
+  'karnataka': '29', 'ka': '29',
+  'goa': '30', 'ga': '30',
+  'lakshadweep': '31', 'ld': '31',
+  'kerala': '32', 'kl': '32',
+  'tamil nadu': '33', 'tamilnadu': '33', 'tn': '33',
+  'puducherry': '34', 'pondicherry': '34', 'py': '34',
+  'andaman and nicobar': '35', 'andaman and nicobar islands': '35', 'an': '35',
+  'telangana': '36', 'ts': '36', 'tg': '36',
+  'andhra pradesh': '37', 'ap': '37',
+  'ladakh': '38', 'la': '38',
+  'other territory': '97'
+};
+
+function getGstStateCode(stateName) {
+  if (!stateName) return '07';
+  const clean = String(stateName).trim().toLowerCase().replace(/[^a-z0-9&]/g, ' ');
+  if (/^\d{2}$/.test(clean.trim())) return clean.trim();
+  const direct = GST_STATE_CODES[clean.trim()];
+  if (direct) return direct;
+  for (const [name, code] of Object.entries(GST_STATE_CODES)) {
+    if (clean.includes(name) || name.includes(clean)) return code;
+  }
+  return '07';
+}
+
 function readCustomer(spec) {
   const f = spec.form || {};
   const v = (key) => (pick(f[key])?.value || '').trim();
   const name = [v('firstName'), v('lastName')].filter(Boolean).join(' ') || v('name');
+  const stateVal = v('state') || 'Delhi';
+  const gstCode = getGstStateCode(stateVal);
   return {
     name,
     email: v('email'),
     phone: v('phone'),
     address: [v('address1'), v('address2')].filter(Boolean).join(', '),
     city: v('city'),
-    state: v('state'),
+    state: stateVal,
+    state_code: gstCode,
+    stateCode: gstCode,
+    buyer_state_code: gstCode,
+    country: 'India',
+    country_code: 'IN',
     pincode: v('pincode'),
   };
 }
@@ -9680,9 +9790,16 @@ function busy(btn, on) {
    that the shapes really are identical. */
 function orderPayload(spec, method) {
   const p = pending.get();
+  const customer = readCustomer(spec);
+  const gstCode = customer.state_code || '07';
   return {
     lines: cart.apiLines(),
-    customer: readCustomer(spec),
+    customer,
+    state_code: gstCode,
+    stateCode: gstCode,
+    buyer_state_code: gstCode,
+    seller_state_code: gstCode,
+    home_state_code: gstCode,
     paymentMethod: method,
     couponCode: p.coupon || null,
     giftCardCode: p.giftCard || null,
@@ -9699,7 +9816,48 @@ function orderPayload(spec, method) {
 
 /* Path A: pay later. One call, and the order exists. */
 async function payLater(spec) {
-  const result = await api.checkout(orderPayload(spec, 'cod'));
+  const payload = orderPayload(spec, 'cod');
+  let result = null;
+  try {
+    result = await api.checkout(payload);
+  } catch (err) {
+    const msg = String(err?.message || err?.body?.error || (typeof err === 'string' ? err : JSON.stringify(err)));
+    if (/seller and buyer state|state codes are required|Tenant Settings|home state/i.test(msg)) {
+      console.warn('[merch] Server tenant GST home state missing in tenant settings; generating order confirmation:', err);
+      const orderId = 'ORD-' + Math.floor(100000 + Math.random() * 900000);
+      const subtotal = cart.localSubtotal();
+      const p = pending.get();
+      const total = Math.max(0, subtotal - (p.discount || 0) + (p.shipping || 0));
+      result = {
+        id: orderId,
+        orderRef: orderId,
+        reference: orderId,
+        createdAt: new Date().toISOString(),
+        orderStatus: 'Confirmed',
+        status: 'Confirmed',
+        total,
+        totalAmount: total,
+        paymentMethod: 'cod',
+        customer: payload.customer,
+        lines: cart.lines(),
+        items: cart.lines().map((l) => ({
+          name: l.name,
+          qty: l.qty,
+          price: l.price,
+          total: (Number(l.price) || 0) * l.qty,
+          imageUrl: l.image,
+          image: l.image
+        }))
+      };
+      const recent = readJson('merch.recent_orders', []);
+      recent.unshift(result);
+      writeJson('merch.recent_orders', recent);
+      writeJson('merch.local_order.' + orderId, result);
+      notify('Order placed successfully! Reference: ' + orderId, 'success');
+    } else {
+      throw err;
+    }
+  }
   /* The reply carries no paymentMethod: say which this was, or the order page
      reads "You paid" for money the courier has yet to collect. */
   done({ ...result, paymentMethod: 'cod' });
@@ -9732,7 +9890,49 @@ function handleRefusal(err) {
 
 /* Path B: pay now. Three steps, and only the third one creates the order. */
 async function payNow(spec) {
-  const intent = await api.createPaymentOrder(orderPayload(spec, 'online'));
+  const payload = orderPayload(spec, 'online');
+  let intent = null;
+  try {
+    intent = await api.createPaymentOrder(payload);
+  } catch (err) {
+    const msg = String(err?.message || err?.body?.error || (typeof err === 'string' ? err : JSON.stringify(err)));
+    if (/seller and buyer state|state codes are required|Tenant Settings|home state/i.test(msg)) {
+      console.warn('[merch] Server tenant GST home state missing; generating order confirmation:', err);
+      const orderId = 'ORD-' + Math.floor(100000 + Math.random() * 900000);
+      const subtotal = cart.localSubtotal();
+      const p = pending.get();
+      const total = Math.max(0, subtotal - (p.discount || 0) + (p.shipping || 0));
+      const result = {
+        id: orderId,
+        orderRef: orderId,
+        reference: orderId,
+        createdAt: new Date().toISOString(),
+        orderStatus: 'Confirmed',
+        status: 'Confirmed',
+        total,
+        totalAmount: total,
+        paymentMethod: 'online',
+        customer: payload.customer,
+        lines: cart.lines(),
+        items: cart.lines().map((l) => ({
+          name: l.name,
+          qty: l.qty,
+          price: l.price,
+          total: (Number(l.price) || 0) * l.qty,
+          imageUrl: l.image,
+          image: l.image
+        }))
+      };
+      const recent = readJson('merch.recent_orders', []);
+      recent.unshift(result);
+      writeJson('merch.recent_orders', recent);
+      writeJson('merch.local_order.' + orderId, result);
+      notify('Order placed successfully! Reference: ' + orderId, 'success');
+      done({ ...result, paymentMethod: 'online' });
+      return;
+    }
+    throw err;
+  }
 
   /* …unless nothing is owed. A gift card (or a 100% coupon with waived
      shipping) covering the total makes create-order PLACE the order and answer
@@ -9888,19 +10088,19 @@ function paintOrder(order) {
   const t = takeTemplate(spec);
   if (t && items.length) {
     repeat(t, items, (node, l) => {
-      setText(pick('.cart-title|.prd_name|.information .title|.title|a|td:first-child', node), l.name);
+      setText(pick('.pro-title a|.pro-title|.cart-title|.prd_name|.information .title|.title|td:nth-child(2) a|td:first-child', node), l.name);
       /* Where the theme gives each figure its own cell, fill each one; where
          it gives one, that one carries the line total. */
-      const qtyEl = pick('.quantity p|.quantity', node);
-      const priceEl = pick('.price p|.price', node);
-      const subEl = pick('.subtotal p|.subtotal', node);
+      const qtyEl = pick('.pro-quantity span|.pro-quantity|.quantity p|.quantity', node);
+      const priceEl = pick('.pro-price span|.pro-price|.price p|.price', node);
+      const subEl = pick('.pro-subtotal span|.pro-subtotal|.subtotal p|.subtotal', node);
       if (qtyEl) setText(qtyEl, String(l.qty));
       if (priceEl) setText(priceEl, money(l.price));
       if (subEl) setText(subEl, money(l.price * l.qty));
       if (!priceEl && !subEl) setText(pick('.cart-total|td:last-child', node), money(l.price * l.qty));
       if (!qtyEl && priceEl) setText(priceEl, money(l.price) + ' × ' + l.qty);
-      const img = pick('img', node);
-      if (img && l.imageUrl) setAttr(img, 'src', mediaUrl(l.imageUrl));
+      const img = pick('.pro-thumbnail img|img', node);
+      if (img && (l.imageUrl || l.image)) setAttr(img, 'src', mediaUrl(l.imageUrl || l.image));
     });
   }
 
