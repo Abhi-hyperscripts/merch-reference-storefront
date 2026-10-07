@@ -176,8 +176,14 @@ const warn = (...a) => console.warn('[merch]', ...a);
    2. SMALL UTILITIES
 --------------------------------------------------------------------------- */
 
-const $ = (sel, root = document) => (sel ? root.querySelector(sel) : null);
-const $$ = (sel, root = document) => (sel ? [...root.querySelectorAll(sel)] : []);
+const $ = (sel, root = document) => {
+  if (!sel) return null;
+  try { return root.querySelector(sel); } catch { return null; }
+};
+const $$ = (sel, root = document) => {
+  if (!sel) return [];
+  try { return [...root.querySelectorAll(sel)]; } catch { return []; }
+};
 
 /* A selector list where the FIRST one that matches wins. Themes disagree about
    names far more often than about structure, so nearly every map entry is a
@@ -192,9 +198,11 @@ function pick(sel, root = document) {
        inside it, because what gets cloned is the card's outermost wrapper and
        that is sometimes the card itself. Checking the root first makes one
        selector cover both, instead of silently filling nothing. */
-    if (root.nodeType === 1 && typeof root.matches === 'function' && root.matches(one)) return root;
-    const el = root.querySelector(one);
-    if (el) return el;
+    try {
+      if (root.nodeType === 1 && typeof root.matches === 'function' && root.matches(one)) return root;
+      const el = root.querySelector(one);
+      if (el) return el;
+    } catch {}
   }
   return null;
 }
@@ -212,8 +220,10 @@ function matchesAny(el, sel) {
 function pickAll(sel, root = document) {
   if (!sel) return [];
   for (const s of String(sel).split('|')) {
-    const els = [...root.querySelectorAll(s.trim())];
-    if (els.length) return els;
+    try {
+      const els = [...root.querySelectorAll(s.trim())];
+      if (els.length) return els;
+    } catch {}
   }
   return [];
 }
@@ -625,7 +635,7 @@ export const api = {
    figures that matter always come back from the store.
 --------------------------------------------------------------------------- */
 
-const CART_KEY = 'merch.cart';
+const CART_KEY = 'merch.cart.jewellery';
 const cartListeners = new Set();
 
 function readCart() {
@@ -643,7 +653,7 @@ function writeCart(lines) {
 export const cart = {
   lines: () => readCart(),
   apiLines: () => readCart().map((l) => ({ itemId: l.itemId, qty: l.qty })),
-  count: () => readCart().reduce((n, l) => n + l.qty, 0),
+  count: () => readCart().length,
   localSubtotal: () => readCart().reduce((n, l) => n + (Number(l.price) || 0) * l.qty, 0),
   onChange: (fn) => { cartListeners.add(fn); return () => cartListeners.delete(fn); },
 
@@ -694,7 +704,7 @@ export const cart = {
 
 /* A local wishlist for guests, merged into the account's on sign-in. The store
    owns the real one; this is what makes the heart icon work signed out. */
-const WISH_KEY = 'merch.wishlist';
+const WISH_KEY = 'merch.wishlist.jewellery';
 const wishListeners = new Set();
 function writeWish(ids) {
   writeJson(WISH_KEY, ids);
@@ -1488,7 +1498,7 @@ const THEMES = {
        why it read as "nothing to do" rather than as a miss. */
     header: {
       cartCount: '.minicart-btn .notification, a[href*="cart"] .notification, .cart-item-count, .item-count, .cart-item_count',
-      wishCount: 'a[href*="wishlist"] .notification, .header-configure-area li:has(.pe-7s-like) .notification, .header-configure-area a[href*="wishlist"] .notification, .mini-cart-wrap a[href*="wishlist"] .notification, .mobile-menu-toggler a[href*="wishlist"] .notification, .header-tools .nav > li > a:not(.minicart-btn) .notification',
+      wishCount: 'a[href*="wishlist"] .notification, .header-configure-area a[href*="wishlist"] .notification, .mini-cart-wrap a[href*="wishlist"] .notification, .mobile-menu-toggler a[href*="wishlist"] .notification, .header-tools .nav > li > a:not(.minicart-btn) .notification',
       cartTotal: '.minicart-pricing-box li:last-child span:last-child|.cart-total-price',
     },
     /* ⭐ The header basket drops down a LIST, not just a count. Left alone it
@@ -1520,7 +1530,7 @@ const THEMES = {
       subtotal: '.minicart-pricing-box li:first-child span:last-child',
       total: '.minicart-pricing-box .total span:last-child',
     },
-    resultCount: '.toolbar-amount|.product-showing',
+    resultCount: '.product-amount p|.product-amount|.toolbar-amount|.product-showing',
 
     /* ⭐ BRAND LOGOS THIS SHOP DOES NOT HAVE. The strip ships 17 of the
        theme's own logo files and the catalogue carries 12 REAL brands with an
@@ -1645,7 +1655,7 @@ const THEMES = {
         countdown: { sel: '.product-countdown', dropWhen: () => true, all: true },
         add:    { sel: '.btn-cart', action: 'add', all: true },
         wish:   { sel: '.button-group a:nth-child(1)', action: 'wishlist', all: true },
-        compare:{ sel: '.button-group a:nth-child(2)', action: 'compare', all: true },
+        compare:{ sel: '.button-group a:has(i.pe-7s-refresh-2), .button-group a[href*="compare"], .button-group a:nth-child(2)', dropWhen: () => true, all: true },
       },
     },
 
@@ -2915,7 +2925,7 @@ function paintHeader() {
     setText(num, wishCount);
   });
   pickAll(h.wishCount).forEach((el) => setText(el, wishCount));
-  pickAll('a[href*="wishlist"] .notification, .mini-cart-wrap:has(i.pe-7s-like) .notification, .mobile-menu-toggler a[href*="wishlist"] .notification').forEach((el) => setText(el, wishCount));
+  pickAll('a[href*="wishlist"] .notification, .mobile-menu-toggler a[href*="wishlist"] .notification').forEach((el) => setText(el, wishCount));
 
   pickAll(h.cartTotal).forEach((el) => setText(el, money(cart.localSubtotal())));
 
@@ -2936,6 +2946,16 @@ function paintHeader() {
   syncWishlistCardStates();
   paintMiniCart();
   paintAccountHeader().catch(() => {});
+
+  // Clean like-icon and compare buttons safely without complex selectors
+  try {
+    $$('.like-icon').forEach(remove);
+    $$('.button-group a, .useful-links a').forEach((a) => {
+      if (a.querySelector('.pe-7s-refresh-2') || /compare/i.test(a.getAttribute('href') || '') || /compare/i.test(a.getAttribute('title') || '')) {
+        a.remove();
+      }
+    });
+  } catch {}
 }
 
 function syncWishlistCardStates() {
@@ -2943,7 +2963,8 @@ function syncWishlistCardStates() {
   pickAll('[data-merch-id]').forEach((card) => {
     const id = String(card.dataset.merchId || '');
     const isWished = wishIds.has(id);
-    const wishBtn = pick('.button-group a:has(i.pe-7s-like), .button-group a:first-child, [data-action="wishlist"]', card);
+    const btns = $$('.button-group a, [data-action="wishlist"]', card);
+    const wishBtn = btns.find((b) => b.querySelector('.pe-7s-like') || b.dataset.action === 'wishlist') || btns[0];
     if (wishBtn) {
       wishBtn.classList.toggle('active', isWished);
       if (isWished) {
@@ -3197,6 +3218,12 @@ function paintStoreChrome(theme) {
     phone: '+91 85860 84450',
     email: 'marketing@wisetrack.in',
   }, theme?.footer || {});
+
+  if (THEME?.name === 'jewellery') {
+    f.address = 'Plot No. 11, Sector-Tech Zone IV, Tech Zone IV, Amrapali Leisure Valley, Greater Noida, Uttar Pradesh 201318';
+    f.phone = '+91 85860 84450';
+    f.email = 'marketing@wisetrack.in';
+  }
 
   /* A contact detail the merchant has NOT set must not fall back to the
      template's. These read as facts about the shop — this jewellery template
@@ -3903,50 +3930,111 @@ function wireQuickView() {
       quickViewProduct = p;
       for (const panel of panels) {
         fillFields(panel, fields, p, { node: panel, qtyEl: pick(THEME.qtyInput, panel) });
-        paintGalleryIn(panel, THEME.product?.gallery, p);
         paintQuickViewExtras(panel, p);
 
-        // Complete gallery handling for jewellery slick sliders & zoom
+        // Bulletproof gallery handling for jewellery slick sliders & zoom
         const imgs = (p.imageUrls || []).filter(Boolean);
-        const mainImg = imgs[0] ? mediaUrl(imgs[0]) : '';
-        if (mainImg) {
-          const largeImgs = pickAll('.product-large-slider img:not(.zoomImg)', panel);
-          largeImgs.forEach((img, idx) => {
-            const src = imgs[idx % imgs.length] ? mediaUrl(imgs[idx % imgs.length]) : mainImg;
-            img.src = src;
-            img.setAttribute('src', src);
-          });
-          const zoomImgs = pickAll('.product-large-slider .zoomImg', panel);
-          zoomImgs.forEach((img, idx) => {
-            const src = imgs[idx % imgs.length] ? mediaUrl(imgs[idx % imgs.length]) : mainImg;
-            img.src = src;
-            img.setAttribute('src', src);
-          });
-          pickAll('.product-large-slider .pro-large-img', panel).forEach((div, idx) => {
-            const src = imgs[idx % imgs.length] ? mediaUrl(imgs[idx % imgs.length]) : mainImg;
-            if (div.style.backgroundImage) div.style.backgroundImage = `url("${src}")`;
-          });
-          const thumbImgs = pickAll('.pro-nav img', panel);
-          thumbImgs.forEach((img, idx) => {
-            const src = imgs[idx % imgs.length] ? mediaUrl(imgs[idx % imgs.length]) : mainImg;
-            img.src = src;
-            img.setAttribute('src', src);
-          });
+        const mainImg = imgs[0] ? mediaUrl(imgs[0]) : (p.image ? mediaUrl(p.image) : 'assets/img/product/product-details-img1.jpg');
+        const imgUrls = imgs.length ? imgs.map(mediaUrl) : [mainImg];
 
-          if (window.jQuery) {
-            try {
-              const $panel = window.jQuery(panel);
-              $panel.find('.product-large-slider').slick('slickGoTo', 0);
-              $panel.find('.product-large-slider, .pro-nav').slick('setPosition');
-            } catch {}
+        // 1. Large slider images
+        const largeSlides = pickAll('.product-large-slider .pro-large-img', panel);
+        largeSlides.forEach((slide, idx) => {
+          const src = imgUrls[idx % imgUrls.length] || mainImg;
+          let img = slide.querySelector('img:not(.zoomImg)');
+          if (!img) {
+            img = document.createElement('img');
+            slide.appendChild(img);
           }
+          img.src = src;
+          img.setAttribute('src', src);
+          img.alt = p.name || 'product';
+          img.dataset.merchArt = '1';
+          img.style.display = 'block';
+          img.style.width = '100%';
+          img.classList.remove('lazyload');
+          img.classList.add('lazyloaded');
+        });
+
+        // 2. Zoom images
+        pickAll('.product-large-slider .zoomImg', panel).forEach((zImg, idx) => {
+          const src = imgUrls[idx % imgUrls.length] || mainImg;
+          zImg.src = src;
+          zImg.setAttribute('src', src);
+        });
+
+        // 3. Nav thumbnails
+        const thumbSlides = pickAll('.pro-nav .pro-nav-thumb', panel);
+        thumbSlides.forEach((slide, idx) => {
+          const src = imgUrls[idx % imgUrls.length] || mainImg;
+          let img = slide.querySelector('img');
+          if (!img) {
+            img = document.createElement('img');
+            slide.appendChild(img);
+          }
+          img.src = src;
+          img.setAttribute('src', src);
+          img.alt = p.name || 'product';
+          img.dataset.merchArt = '1';
+          img.style.display = 'block';
+          img.style.width = '100%';
+          img.classList.remove('lazyload');
+          img.classList.add('lazyloaded');
+        });
+
+        // 4. Remove like-icon and compare links from quick view
+        $$('.like-icon', panel).forEach(remove);
+        $$('.useful-links a', panel).forEach((a) => {
+          if (a.querySelector('.pe-7s-refresh-2') || /compare/i.test(a.getAttribute('title') || '') || /compare/i.test(a.textContent || '')) {
+            a.remove();
+          }
+        });
+
+        // 5. Wire wishlist link in quick view
+        const wishBtn = $$('.useful-links a', panel).find((a) =>
+          a.querySelector('.pe-7s-like') || /wishlist/i.test(a.getAttribute('title') || '') || /wishlist/i.test(a.textContent || '')
+        );
+        if (wishBtn) {
+          const isWished = wishlist.has(p.id);
+          wishBtn.classList.toggle('active', isWished);
+          if (isWished) {
+            wishBtn.setAttribute('data-wishlist-active', 'true');
+            wishBtn.innerHTML = '<i class="pe-7s-like" style="color:#c29958;"></i>Browse Wishlist';
+          } else {
+            wishBtn.removeAttribute('data-wishlist-active');
+            wishBtn.innerHTML = '<i class="pe-7s-like"></i>Wishlist';
+          }
+          wishBtn.onclick = async (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const on = await wishlist.toggle(p.id);
+            wishBtn.classList.toggle('active', on);
+            if (on) {
+              wishBtn.setAttribute('data-wishlist-active', 'true');
+              wishBtn.innerHTML = '<i class="pe-7s-like" style="color:#c29958;"></i>Browse Wishlist';
+            } else {
+              wishBtn.removeAttribute('data-wishlist-active');
+              wishBtn.innerHTML = '<i class="pe-7s-like"></i>Wishlist';
+            }
+            notify(on ? 'Saved to your wishlist.' : 'Removed from your wishlist.', 'success');
+            paintHeader();
+            syncWishlistCardStates();
+          };
+        }
+
+        if (window.jQuery) {
+          try {
+            const $panel = window.jQuery(panel);
+            $panel.find('.product-large-slider').slick('slickGoTo', 0);
+            $panel.find('.product-large-slider, .pro-nav').slick('setPosition');
+          } catch {}
         }
 
         /* After the theme has opened and laid the panel out, not before. */
         setTimeout(() => keepPanelControlsOnScreen(panel), 0);
         setTimeout(() => keepPanelControlsOnScreen(panel), 350);
         setTimeout(() => {
-          if (window.jQuery && mainImg) {
+          if (window.jQuery) {
             try {
               const $panel = window.jQuery(panel);
               $panel.find('.product-large-slider').slick('slickGoTo', 0);
@@ -4630,6 +4718,7 @@ function replaceTemplateArt() {
   try { imgs = $$('img'); } catch { return; }
   imgs.forEach((img) => {
     if (img.dataset.merchArt || img.hasAttribute('data-merch-id')) return;
+    if (img.closest('#quick_view, #quickView, [id*="quick"], .modal, .product-details-inner, .product-large-slider, .pro-nav, .product-details-des')) return;
     const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
     if (!src || /^(data:|blob:)/.test(src)) return;
     if (/^https?:/.test(src) && !src.includes(location.host)) return;
@@ -4844,6 +4933,25 @@ async function renderRecentlyViewed(container) {
   } catch { /* a rail that will not load simply stays as the theme shipped it */ }
 }
 
+function searchProductsInMemory(items, query) {
+  if (!query || !query.trim()) return items;
+  const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  return items.filter((p) => {
+    const text = [
+      p.name,
+      p.description,
+      p.category,
+      p.brandName,
+      p.brand,
+      p.sku,
+      ...(p.tags || []),
+      ...(p.keywords || []),
+      ...(p.categories || []).map((c) => (typeof c === 'string' ? c : c.name)),
+    ].filter(Boolean).join(' ').toLowerCase();
+    return terms.every((term) => text.includes(term));
+  });
+}
+
 /* --- LISTING -------------------------------------------------------------
    Search, category, brand, sort, price and in-stock, all held in the URL so a
    filtered grid can be linked, bookmarked and gone Back to. */
@@ -4857,7 +4965,7 @@ pages.listing = async () => {
   /* Measured before the first fetch only to size the request; the containers
      themselves are looked up again after every answer, because the theme's own
      scripts may rebuild them in between (see pages.home). */
-  const pageSize = Math.min(60, Math.max(8, Math.max(
+  const pageSize = THEME?.name === 'jewellery' ? 15 : Math.min(60, Math.max(8, Math.max(
     0, ...pickAll(THEME.listing.container).map((el) => templateCount({ ...THEME.listing, el })),
   ) || 24));
 
@@ -4876,14 +4984,56 @@ pages.listing = async () => {
   };
 
   const run = async () => {
-    let res;
+    let items = [];
+    let total = 0;
     try {
-      res = state.collection
-        ? (await api.collection(state.collection)).products
-        : await api.catalog({
-            /* The store calls it `search`. A `q=` is silently IGNORED, which
-               reads as "the shop has everything": a narrowing question
-               answered with the full catalogue. */
+      if (state.collection) {
+        const c = await api.collection(state.collection);
+        items = c?.products || [];
+        total = items.length;
+      } else {
+        let all = null;
+        try {
+          all = await getAllProducts();
+        } catch {}
+
+        if (all && all.length) {
+          let filtered = [...all];
+          if (state.q) {
+            filtered = searchProductsInMemory(filtered, state.q);
+          }
+          if (state.category) {
+            const cat = state.category.toLowerCase();
+            filtered = filtered.filter((p) => (p.category || '').toLowerCase() === cat);
+          }
+          if (state.brand) {
+            const b = state.brand.toLowerCase();
+            filtered = filtered.filter((p) => (p.brandName || p.brand || '').toLowerCase() === b);
+          }
+          if (state.minPrice) {
+            filtered = filtered.filter((p) => Number(p.price) >= Number(state.minPrice));
+          }
+          if (state.maxPrice) {
+            filtered = filtered.filter((p) => Number(p.price) <= Number(state.maxPrice));
+          }
+          if (state.inStock) {
+            filtered = filtered.filter((p) => p.availability !== 'out');
+          }
+          if (state.sort === 'price_asc') {
+            filtered.sort((a, b) => Number(a.price) - Number(b.price));
+          } else if (state.sort === 'price_desc') {
+            filtered.sort((a, b) => Number(b.price) - Number(a.price));
+          } else if (state.sort === 'a-z' || state.sort === 'name') {
+            filtered.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+          } else if (state.sort === 'z-a' || state.sort === 'name_desc') {
+            filtered.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+          }
+          total = filtered.length;
+          const curPage = Math.max(1, state.page || 1);
+          const start = (curPage - 1) * pageSize;
+          items = filtered.slice(start, start + pageSize);
+        } else {
+          const res = await api.catalog({
             search: state.q || undefined,
             pageSize,
             category: state.category || undefined,
@@ -4896,12 +5046,19 @@ pages.listing = async () => {
             size: state.size || undefined,
             page: state.page > 1 ? state.page : undefined,
           });
+          items = Array.isArray(res) ? res : (res?.products || res?.items || []);
+          total = items.length;
+        }
+      }
     } catch (e) { showError(e); return; }
-    const items = Array.isArray(res) ? res : (res.products || res.items || []);
+
     for (const grid of pickAll(THEME.listing.container)) renderProducts(items, THEME.listing, grid);
     wireQuickView();
-    const total = await paintResultCount(items, state, pageSize);
-    renderPagination(total, state, run, pageSize);
+    const finalTotal = total > 0 ? total : await paintResultCount(items, state, pageSize);
+    if (total > 0) {
+      await paintResultCount(items, state, pageSize, total);
+    }
+    renderPagination(finalTotal, state, run, pageSize);
     THEME.reinit?.();
   };
 
@@ -4918,9 +5075,9 @@ pages.listing = async () => {
 
 /* Render responsive dynamic pagination controls */
 function renderPagination(total, state, run, pageSize) {
-  const pager = pick('.pagination-area-main-wrappper, .pagination-area, .pagination, ul.wg-pagination');
+  const pager = pick('.paginatoin-area .pagination-box, .pagination-area .pagination-box, .pagination-box, .paginatoin-area, .pagination-area-main-wrappper, .pagination-area, .pagination, ul.wg-pagination');
   if (!pager) return;
-  const ul = pager.tagName === 'UL' ? pager : pager.querySelector('ul');
+  const ul = pager.tagName === 'UL' ? pager : (pager.querySelector('ul.pagination-box, ul') || pager);
   if (!ul) return;
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -4930,6 +5087,57 @@ function renderPagination(total, state, run, pageSize) {
   let endPage = Math.min(totalPages, startPage + 4);
   if (endPage - startPage < 4) {
     startPage = Math.max(1, endPage - 4);
+  }
+
+  // --- Jewellery pagination style (.paginatoin-area .pagination-box) ---
+  const isJewelleryPagination = ul.classList.contains('pagination-box') || pager.classList.contains('paginatoin-area') || pager.closest?.('.paginatoin-area') || THEME?.name === 'jewellery';
+  if (isJewelleryPagination) {
+    let html = '';
+    if (curPage > 1) {
+      html += `<li><a class="previous" href="#" data-page="${curPage - 1}" aria-label="Previous"><i class="pe-7s-angle-left"></i></a></li>`;
+    } else {
+      html += `<li><a class="previous disabled" href="#" style="opacity:0.4;cursor:not-allowed;pointer-events:none;" aria-label="Previous"><i class="pe-7s-angle-left"></i></a></li>`;
+    }
+
+    if (startPage > 1) {
+      html += `<li><a href="#" class="page-num" data-page="1">1</a></li>`;
+      if (startPage > 2) html += `<li><span style="display:inline-block;padding:0 5px;color:#999;line-height:36px;">...</span></li>`;
+    }
+
+    for (let p = startPage; p <= endPage; p++) {
+      if (p === curPage) {
+        html += `<li class="active"><a href="#" class="page-num" data-page="${p}">${p}</a></li>`;
+      } else {
+        html += `<li><a href="#" class="page-num" data-page="${p}">${p}</a></li>`;
+      }
+    }
+
+    if (endPage < totalPages) {
+      if (endPage < totalPages - 1) html += `<li><span style="display:inline-block;padding:0 5px;color:#999;line-height:36px;">...</span></li>`;
+      html += `<li><a href="#" class="page-num" data-page="${totalPages}">${totalPages}</a></li>`;
+    }
+
+    if (curPage < totalPages) {
+      html += `<li><a class="next" href="#" data-page="${curPage + 1}" aria-label="Next"><i class="pe-7s-angle-right"></i></a></li>`;
+    } else {
+      html += `<li><a class="next disabled" href="#" style="opacity:0.4;cursor:not-allowed;pointer-events:none;" aria-label="Next"><i class="pe-7s-angle-right"></i></a></li>`;
+    }
+
+    ul.innerHTML = html;
+    ul.querySelectorAll('a[data-page]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const p = Number(btn.dataset.page);
+        if (p && p !== curPage) {
+          state.page = p;
+          pushState(state);
+          run();
+          const topEl = document.querySelector('.shop-main-wrapper, .shop-product-wrap, .breadcrumb-area') || document.body;
+          topEl.scrollIntoView({ behavior: 'smooth' });
+        }
+      });
+    });
+    return;
   }
 
   const isWgPagination = ul.classList.contains('wg-pagination') || pager.classList.contains('wg-pagination');
@@ -5540,7 +5748,7 @@ function wirePriceFilter(state, run) {
 /* /api/catalog answers a plain array with no total, so the honest number for
    "N products found" comes from the facets endpoint, which counts the same
    filter. Without it we would print the PAGE size and call it the total. */
-async function paintResultCount(items, state, pageSize) {
+async function paintResultCount(items, state, pageSize, forcedTotal) {
   /* Themes write this as a sentence in an unnamed <span> ("Showing 1-20 of 57
      results"), so the reliable way to find it is the SENTENCE, not a class.
      Left alone it keeps announcing the demo's 57 products forever. */
@@ -5549,19 +5757,21 @@ async function paintResultCount(items, state, pageSize) {
     (el) => el.children.length === 0 && /showing\s+[\d,]+\s*[-\u2013]\s*[\d,]+\s+of\s+[\d,]+/i.test(el.textContent || ''),
   );
 
-  let total = items.length;
-  try {
-    const f = await api.facets({
-      search: state.q || undefined,
-      category: state.category || undefined,
-      brand: state.brand || undefined,
-      inStock: state.inStock || undefined,
-    });
-    if (Number.isFinite(f?.total)) total = f.total;
-  } catch { /* the page count is a fair fallback */ }
+  let total = forcedTotal !== undefined ? forcedTotal : items.length;
+  if (forcedTotal === undefined) {
+    try {
+      const f = await api.facets({
+        search: state.q || undefined,
+        category: state.category || undefined,
+        brand: state.brand || undefined,
+        inStock: state.inStock || undefined,
+      });
+      if (Number.isFinite(f?.total)) total = f.total;
+    } catch { /* the page count is a fair fallback */ }
+  }
 
   const from = items.length ? (state.page - 1) * pageSize + 1 : 0;
-  const to = (state.page - 1) * pageSize + items.length;
+  const to = Math.min(total, (state.page - 1) * pageSize + items.length);
   if (sentence.length) {
     sentence.forEach((el) => setText(el, 'Showing ' + from + '\u2013' + to + ' of ' + total + ' results'));
   }
@@ -5792,6 +6002,90 @@ pages.product = async () => {
 
   paintBreadcrumbs(p);
   paintGallery(spec.gallery, p);
+
+  // PDP Jewellery gallery handling
+  const imgs = (p.imageUrls || []).filter(Boolean);
+  const mainImg = imgs[0] ? mediaUrl(imgs[0]) : (p.image ? mediaUrl(p.image) : 'assets/img/product/product-details-img1.jpg');
+  const imgUrls = imgs.length ? imgs.map(mediaUrl) : [mainImg];
+
+  const pdpLarge = pickAll('.product-large-slider .pro-large-img');
+  pdpLarge.forEach((slide, idx) => {
+    const src = imgUrls[idx % imgUrls.length] || mainImg;
+    let img = slide.querySelector('img:not(.zoomImg)');
+    if (!img) {
+      img = document.createElement('img');
+      slide.appendChild(img);
+    }
+    img.src = src;
+    img.setAttribute('src', src);
+    img.alt = p.name || 'product';
+    img.dataset.merchArt = '1';
+    img.style.display = 'block';
+    img.style.width = '100%';
+    img.classList.remove('lazyload');
+    img.classList.add('lazyloaded');
+  });
+  pickAll('.product-large-slider .zoomImg').forEach((zImg, idx) => {
+    const src = imgUrls[idx % imgUrls.length] || mainImg;
+    zImg.src = src;
+    zImg.setAttribute('src', src);
+  });
+  const pdpThumbs = pickAll('.pro-nav .pro-nav-thumb');
+  pdpThumbs.forEach((slide, idx) => {
+    const src = imgUrls[idx % imgUrls.length] || mainImg;
+    let img = slide.querySelector('img');
+    if (!img) {
+      img = document.createElement('img');
+      slide.appendChild(img);
+    }
+    img.src = src;
+    img.setAttribute('src', src);
+    img.alt = p.name || 'product';
+    img.dataset.merchArt = '1';
+    img.style.display = 'block';
+    img.style.width = '100%';
+    img.classList.remove('lazyload');
+    img.classList.add('lazyloaded');
+  });
+
+  $$('.like-icon').forEach(remove);
+  $$('.useful-links a').forEach((a) => {
+    if (a.querySelector('.pe-7s-refresh-2') || /compare/i.test(a.getAttribute('title') || '') || /compare/i.test(a.textContent || '')) {
+      a.remove();
+    }
+  });
+
+  // Wire PDP wishlist button
+  const pdpWishBtn = $$('.useful-links a').find((a) =>
+    a.querySelector('.pe-7s-like') || /wishlist/i.test(a.getAttribute('title') || '') || /wishlist/i.test(a.textContent || '')
+  );
+  if (pdpWishBtn) {
+    const isWished = wishlist.has(p.id);
+    pdpWishBtn.classList.toggle('active', isWished);
+    if (isWished) {
+      pdpWishBtn.setAttribute('data-wishlist-active', 'true');
+      pdpWishBtn.innerHTML = '<i class="pe-7s-like" style="color:#c29958;"></i>Browse Wishlist';
+    } else {
+      pdpWishBtn.removeAttribute('data-wishlist-active');
+      pdpWishBtn.innerHTML = '<i class="pe-7s-like"></i>Wishlist';
+    }
+    pdpWishBtn.onclick = async (ev) => {
+      ev.preventDefault();
+      const on = await wishlist.toggle(p.id);
+      pdpWishBtn.classList.toggle('active', on);
+      if (on) {
+        pdpWishBtn.setAttribute('data-wishlist-active', 'true');
+        pdpWishBtn.innerHTML = '<i class="pe-7s-like" style="color:#c29958;"></i>Browse Wishlist';
+      } else {
+        pdpWishBtn.removeAttribute('data-wishlist-active');
+        pdpWishBtn.innerHTML = '<i class="pe-7s-like"></i>Wishlist';
+      }
+      notify(on ? 'Saved to your wishlist.' : 'Removed from your wishlist.', 'success');
+      paintHeader();
+      syncWishlistCardStates();
+    };
+  }
+
   await paintVariants(spec, p);
   paintProductUniques(p);
   paintProductTabs(p);
@@ -6176,6 +6470,39 @@ function paintProductTabs(p) {
       specs.forEach((s) => {
         const tr = document.createElement('tr');
         tr.innerHTML = `<td style="font-weight: 600; color: #444; width: 35%;">${escapeHtml(s.key)}</td><td style="color: #666;">${escapeHtml(s.val)}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+  }
+
+  // --- Jewellery theme tabs: #tab_one (Description) & #tab_two (Information) ---
+  const tabOne = pick('#tab_one');
+  if (tabOne) {
+    const desc = (p.description || '').trim() || p.name;
+    const tabOneDiv = pick('.tab-one', tabOne) || tabOne;
+    tabOneDiv.innerHTML = `<p>${escapeHtml(desc)}</p>`;
+  }
+
+  const tabTwo = pick('#tab_two');
+  if (tabTwo) {
+    const table = pick('table', tabTwo);
+    if (table) {
+      const tbody = pick('tbody', table) || table;
+      tbody.replaceChildren();
+      const specs = [
+        { key: 'Product Name', val: p.name },
+        p.brandName ? { key: 'Brand', val: p.brandName } : null,
+        p.category ? { key: 'Category', val: p.category } : null,
+        p.sku ? { key: 'SKU', val: p.sku } : (p.id ? { key: 'SKU', val: p.id } : null),
+        p.unit ? { key: 'Unit / Weight', val: p.unit } : null,
+        ...(Array.isArray(p.attributes) ? p.attributes.filter((a) => a.key && a.value).map((a) => ({ key: a.key.charAt(0).toUpperCase() + a.key.slice(1), val: a.value })) : []),
+        { key: 'Price', val: money(p.price) },
+        { key: 'Stock Status', val: stockLabel(p) }
+      ].filter(Boolean);
+
+      specs.forEach((s) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td style="font-weight: 600; color: #444; width: 30%;">${escapeHtml(s.key)}</td><td style="color: #666;">${escapeHtml(String(s.val))}</td>`;
         tbody.appendChild(tr);
       });
     }
@@ -10707,7 +11034,7 @@ async function boot() {
     catch (e) { warn('account controls', e); }
   }
 
-  paintHeader();
+  try { paintHeader(); } catch (e) { warn('paint header', e); }
   /* paintFashionMiniCart self-gates on THEME.name, so this is a no-op on the other
      three themes — it is wired here, unconditionally, because that is where the
      fashion copy wired it and the guard already lives inside the function. */
@@ -10716,8 +11043,9 @@ async function boot() {
 
   // Delegated wishlist toggle for jewellery product cards
   document.addEventListener('click', async (e) => {
-    const btn = e.target.closest('.button-group a:has(i.pe-7s-like), .button-group a:first-child');
+    const btn = e.target.closest('.button-group a');
     if (!btn) return;
+    if (!btn.querySelector('.pe-7s-like') && !btn.matches('.button-group a:first-child')) return;
     const card = btn.closest('[data-merch-id]');
     if (!card || !card.dataset.merchId) return;
     if (btn.dataset.merchActionWired) return;
