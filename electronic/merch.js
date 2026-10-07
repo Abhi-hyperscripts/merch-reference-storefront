@@ -1107,9 +1107,9 @@ function productContainers(spec = THEME.listing, root = document) {
   const seen = new Set();
   const out = [];
   for (const card of pickAll(spec.card, root)) {
-    if (card.closest('.swiper-slide-duplicate, .slick-cloned')) continue;
+    if (card.closest('.swiper-slide-duplicate, .slick-cloned, .modal, .offcanvas, #search, .modal-search')) continue;
     const container = unitOf(card, spec, root === document ? null : root).parentElement;
-    if (!container || seen.has(container)) continue;
+    if (!container || seen.has(container) || container.closest('.modal, .offcanvas, #search, .modal-search')) continue;
     seen.add(container);
     out.push(container);
   }
@@ -3208,6 +3208,9 @@ function paintStoreChrome(theme) {
      publishing someone else's phone number. */
   if (!useStore('footerContact')) return;
   const f = theme.footer || {};
+  const STORE_ADDRESS = 'Plot No. 11, Sector-Tech Zone IV, Tech Zone IV, Amrapali Leisure Valley, Greater Noida, Uttar Pradesh 201318';
+  const STORE_MAPS_URL = 'https://www.google.com/maps?q=' + encodeURIComponent(STORE_ADDRESS);
+  if (f) f.address = STORE_ADDRESS;
 
   /* A contact detail the merchant has NOT set must not fall back to the
      template's. These read as facts about the shop — this jewellery template
@@ -3239,7 +3242,11 @@ function paintStoreChrome(theme) {
   };
   contact(sel.phone || 'a[href^="tel:"]', f.phone, 'tel');
   contact(sel.email || 'a[href^="mailto:"]', f.email, 'mail');
-  contact(sel.address || 'address|[data-store-address]', f.address, 'text');
+  contact(sel.address || 'address|[data-store-address]', STORE_ADDRESS, 'text');
+
+  for (const a of $$('a[href*="google.com/maps"], a[href*="maps.google.com"], a[href*="549+Oak"], a.text-decoration-underline[href*="maps"], .footer-infor a[href*="maps"], .need-help-wrap a[href*="maps"]')) {
+    a.setAttribute('href', STORE_MAPS_URL);
+  }
 
   /* These themes repeat the shop's details OUTSIDE the footer — a topbar, a
      mobile menu, an offcanvas "need help" panel — each with its own icon
@@ -3282,6 +3289,8 @@ function paintStoreChrome(theme) {
            stays under the shop's name. Replace the NUMBER, keep the label.
            Eight digits minimum, so a price or a badge count cannot match. */
         setText(el, t.replace(LABELLED_PHONE_RE, f.phone));
+      } else if (/549\s+Oak|JM\s+Aroma|Sector\s+75|Amrapali|Tech\s+Zone|Connaught/i.test(t)) {
+        setText(el, STORE_ADDRESS);
       }
     }
   }
@@ -5196,6 +5205,58 @@ function syncFilterSidebarInputs(state) {
   });
 }
 
+let ALL_PRODUCTS_CACHE = null;
+let IS_FETCHING_CACHE = false;
+
+async function getAllProducts() {
+  if (ALL_PRODUCTS_CACHE && ALL_PRODUCTS_CACHE.length > 0) return ALL_PRODUCTS_CACHE;
+  if (IS_FETCHING_CACHE) {
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      if (ALL_PRODUCTS_CACHE && ALL_PRODUCTS_CACHE.length > 0) return ALL_PRODUCTS_CACHE;
+    }
+  }
+  IS_FETCHING_CACHE = true;
+  try {
+    const all = [];
+    let page = 1;
+    while (page <= 6) {
+      const res = await api.catalog({ page, pageSize: 200 });
+      const items = Array.isArray(res) ? res : (res?.products || res?.items || []);
+      if (!items || !items.length) break;
+      all.push(...items);
+      if (items.length < 200) break;
+      page++;
+    }
+    if (all.length > 0) ALL_PRODUCTS_CACHE = all;
+    return ALL_PRODUCTS_CACHE || [];
+  } catch (e) {
+    warn('failed to fetch full catalog cache', e);
+    return [];
+  } finally {
+    IS_FETCHING_CACHE = false;
+  }
+}
+
+function searchProductsInMemory(items, query) {
+  if (!query || !query.trim()) return items;
+  const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  return items.filter((p) => {
+    const text = [
+      p.name,
+      p.description,
+      p.category,
+      p.brandName,
+      p.brand,
+      p.sku,
+      ...(p.tags || []),
+      ...(p.keywords || []),
+      ...(p.categories || []).map((c) => (typeof c === 'string' ? c : c.name)),
+    ].filter(Boolean).join(' ').toLowerCase();
+    return terms.every((term) => text.includes(term));
+  });
+}
+
 /* --- LISTING -------------------------------------------------------------
    Search, category, brand, sort, price and in-stock, all held in the URL so a
    filtered grid can be linked, bookmarked and gone Back to. */
@@ -5217,35 +5278,81 @@ pages.listing = async () => {
   };
 
   const run = async () => {
-    let res;
+    let items = [];
+    let total = 0;
     try {
-      res = state.collection
-        ? (await api.collection(state.collection)).products
-        : await api.catalog({
-            search: state.q || undefined,
-            pageSize,
-            category: state.category || undefined,
-            brand: state.brand || undefined,
-            sort: state.sort || undefined,
-            minPrice: state.minPrice || undefined,
-            maxPrice: state.maxPrice || undefined,
-            inStock: state.inStock || undefined,
-            color: state.color || undefined,
-            size: state.size || undefined,
-            page: state.page > 1 ? state.page : undefined,
-          });
+      if (state.collection) {
+        const c = await api.collection(state.collection);
+        items = c?.products || [];
+        total = items.length;
+      } else if (ALL_PRODUCTS_CACHE && ALL_PRODUCTS_CACHE.length && (state.q || !state.collection)) {
+        let filtered = [...ALL_PRODUCTS_CACHE];
+        if (state.q) {
+          filtered = searchProductsInMemory(filtered, state.q);
+        }
+        if (state.category) {
+          const cat = state.category.toLowerCase();
+          filtered = filtered.filter((p) => (p.category || '').toLowerCase() === cat);
+        }
+        if (state.brand) {
+          const b = state.brand.toLowerCase();
+          filtered = filtered.filter((p) => (p.brandName || '').toLowerCase() === b);
+        }
+        if (state.minPrice) {
+          filtered = filtered.filter((p) => Number(p.price) >= Number(state.minPrice));
+        }
+        if (state.maxPrice) {
+          filtered = filtered.filter((p) => Number(p.price) <= Number(state.maxPrice));
+        }
+        if (state.inStock) {
+          filtered = filtered.filter((p) => p.availability !== 'out');
+        }
+        if (state.sort === 'price_asc') {
+          filtered.sort((a, b) => Number(a.price) - Number(b.price));
+        } else if (state.sort === 'price_desc') {
+          filtered.sort((a, b) => Number(b.price) - Number(a.price));
+        } else if (state.sort === 'a-z' || state.sort === 'name') {
+          filtered.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        } else if (state.sort === 'z-a' || state.sort === 'name_desc') {
+          filtered.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+        }
+        total = filtered.length;
+        const curPage = Math.max(1, state.page || 1);
+        const start = (curPage - 1) * pageSize;
+        items = filtered.slice(start, start + pageSize);
+      } else {
+        const res = await api.catalog({
+          search: state.q || undefined,
+          pageSize,
+          category: state.category || undefined,
+          brand: state.brand || undefined,
+          sort: state.sort || undefined,
+          minPrice: state.minPrice || undefined,
+          maxPrice: state.maxPrice || undefined,
+          inStock: state.inStock || undefined,
+          color: state.color || undefined,
+          size: state.size || undefined,
+          page: state.page > 1 ? state.page : undefined,
+        });
+        items = Array.isArray(res) ? res : (res?.products || res?.items || []);
+        if (state.sort === 'a-z' || state.sort === 'name') {
+          items.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        } else if (state.sort === 'z-a' || state.sort === 'name_desc') {
+          items.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+        }
+        total = items.length;
+      }
     } catch (e) { showError(e); return; }
-    const items = Array.isArray(res) ? res : (res.products || res.items || []);
-    if (state.sort === 'a-z') {
-      items.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    } else if (state.sort === 'z-a' || state.sort === 'name_desc') {
-      items.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
-    }
+
     for (const grid of pickAll(THEME.listing.container)) renderProducts(items, THEME.listing, grid);
     wireQuickView();
     syncListingLayout();
-    const total = await paintResultCount(items, state, pageSize);
-    renderPagination(total, state, run, pageSize);
+    const isCached = ALL_PRODUCTS_CACHE && ALL_PRODUCTS_CACHE.length;
+    const finalTotal = isCached ? total : await paintResultCount(items, state, pageSize);
+    if (isCached) {
+      await paintResultCount(items, state, pageSize, total);
+    }
+    renderPagination(finalTotal, state, run, pageSize);
     paintAppliedFilters(state, run);
     THEME.reinit?.();
   };
@@ -5897,7 +6004,7 @@ function wirePriceFilter(state, run) {
 /* /api/catalog answers a plain array with no total, so the honest number for
    "N products found" comes from the facets endpoint, which counts the same
    filter. Without it we would print the PAGE size and call it the total. */
-async function paintResultCount(items, state, pageSize) {
+async function paintResultCount(items, state, pageSize, knownTotal = null) {
   /* Themes write this as a sentence in an unnamed <span> ("Showing 1-20 of 57
      results"), so the reliable way to find it is the SENTENCE, not a class.
      Left alone it keeps announcing the demo's 57 products forever. */
@@ -5906,19 +6013,21 @@ async function paintResultCount(items, state, pageSize) {
     (el) => el.children.length === 0 && /showing\s+[\d,]+\s*[-\u2013]\s*[\d,]+\s+of\s+[\d,]+/i.test(el.textContent || ''),
   );
 
-  let total = items.length;
-  try {
-    const f = await api.facets({
-      search: state.q || undefined,
-      category: state.category || undefined,
-      brand: state.brand || undefined,
-      inStock: state.inStock || undefined,
-      color: state.color || undefined,
-      minPrice: state.minPrice || undefined,
-      maxPrice: state.maxPrice || undefined,
-    });
-    if (Number.isFinite(f?.total)) total = f.total;
-  } catch { /* the page count is a fair fallback */ }
+  let total = Number.isFinite(knownTotal) ? knownTotal : items.length;
+  if (!Number.isFinite(knownTotal)) {
+    try {
+      const f = await api.facets({
+        search: state.q || undefined,
+        category: state.category || undefined,
+        brand: state.brand || undefined,
+        inStock: state.inStock || undefined,
+        color: state.color || undefined,
+        minPrice: state.minPrice || undefined,
+        maxPrice: state.maxPrice || undefined,
+      });
+      if (Number.isFinite(f?.total)) total = f.total;
+    } catch { /* the page count is a fair fallback */ }
+  }
 
   const from = items.length ? (state.page - 1) * pageSize + 1 : 0;
   const to = (state.page - 1) * pageSize + items.length;
@@ -5949,10 +6058,12 @@ function wireSearchInputs(onSearch) {
   const inputs = [...document.querySelectorAll('input[type="search"], .header-search-field, .form-search-select input, .form-search input, input[placeholder*="look" i], input[placeholder*="Search" i]')];
   const curQ = param('q') || '';
   for (const input of inputs) {
+    if (input.closest('#search, .modal-search')) continue;
+    input.removeAttribute('required');
     if (curQ && !input.value) input.value = curQ;
     const form = input.closest('form');
     const go = (e) => {
-      e.preventDefault();
+      if (e) e.preventDefault();
       const q = input.value.trim();
       if (onSearch) onSearch(q);
       else location.href = pageUrl('listing', { q });
@@ -5963,7 +6074,171 @@ function wireSearchInputs(onSearch) {
       if (btn) btn.addEventListener('click', go);
     }
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(e); });
+
+    if (onSearch) {
+      let debounceTimer = null;
+      input.addEventListener('input', () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          const q = input.value.trim();
+          onSearch(q);
+        }, 120);
+      });
+    }
   }
+}
+
+let modalGridTemplate = null;
+let defaultModalProducts = [];
+let defaultTitleText = '';
+
+function renderModalProducts(modal, items, query = '') {
+  const gridContainer = modal.querySelector('.tf-grid-layout');
+  if (!gridContainer) return;
+
+  if (!modalGridTemplate) {
+    const card = gridContainer.querySelector('.card-product');
+    if (card) modalGridTemplate = card.cloneNode(true);
+  }
+  if (!modalGridTemplate) return;
+
+  gridContainer.innerHTML = '';
+
+  if (!items || !items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'w-100 text-center py-4 cl-text-2';
+    empty.style.cssText = 'grid-column: 1 / -1; width: 100%; padding: 40px 15px; font-size: 15px; color: #777;';
+    empty.textContent = query ? `No products found matching "${query}"` : 'No products found.';
+    gridContainer.appendChild(empty);
+  } else {
+    for (const p of items) {
+      const node = modalGridTemplate.cloneNode(true);
+      node.dataset.merchId = p.id;
+      pickAll('.compare, .box-icon.compare, [data-bs-target="#compare"], [href="#compare"]', node).forEach((el) => el.remove());
+      fillFields(node, THEME.listing.fields, p, { node, qtyEl: pick(THEME.qtyInput, node) });
+      if (p.availability === 'out') node.classList.add('out-of-stock');
+      gridContainer.appendChild(node);
+    }
+  }
+
+  wireQuickView();
+  syncWishlistCardStates();
+}
+
+async function wireSearchModal() {
+  const modal = $('#search');
+  if (!modal) return;
+
+  const headingH5 = modal.querySelector('h5');
+  if (headingH5 && !headingH5.closest('.list-tags, .search-feature')) {
+    headingH5.textContent = 'Search';
+  }
+
+  // Remove "Feature keywords Today"
+  pickAll('div:has(.list-tags), .search-feature', modal).forEach((el) => el.remove());
+  for (const h of pickAll('h5, h6', modal)) {
+    if (/Feature keywords Today/i.test(h.textContent || '')) {
+      const parentDiv = h.closest('div');
+      if (parentDiv && parentDiv !== modal && !parentDiv.classList.contains('modal-content')) {
+        parentDiv.remove();
+      } else {
+        h.remove();
+      }
+    }
+  }
+
+  const form = modal.querySelector('form');
+  const input = modal.querySelector('input');
+  const titleEl = modal.querySelector('h6.mb_16, .recently-view h6, .recently-view h5, h6');
+  if (titleEl && !defaultTitleText) {
+    defaultTitleText = titleEl.textContent.trim();
+  }
+
+  if (input) {
+    input.removeAttribute('required');
+  }
+
+  // 1. Initial Products
+  const loadInitialProducts = async () => {
+    if (defaultModalProducts.length) return;
+    try {
+      const rv = (await api.recentlyViewed(sessionId(), 8))?.products || [];
+      if (rv && rv.length >= 2) {
+        defaultModalProducts = rv;
+      }
+    } catch {}
+    if (!defaultModalProducts.length) {
+      const catalog = await getAllProducts();
+      defaultModalProducts = (catalog || []).slice(0, 8);
+    }
+    if (input && !input.value.trim()) {
+      renderModalProducts(modal, defaultModalProducts);
+    }
+  };
+
+  loadInitialProducts().catch(() => {});
+
+  // 2. Letter-to-Letter Search inside modal
+  if (input && !input.__wiredModalSearch) {
+    input.__wiredModalSearch = true;
+    let searchTimer = null;
+    input.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(async () => {
+        const q = input.value.trim();
+        const curTitle = modal.querySelector('h6.mb_16, .recently-view h6, .recently-view h5, h6');
+        if (!q) {
+          if (curTitle) curTitle.textContent = defaultTitleText || 'Recently viewed products';
+          renderModalProducts(modal, defaultModalProducts);
+          return;
+        }
+
+        const catalog = await getAllProducts();
+        const matches = searchProductsInMemory(catalog, q).slice(0, 8);
+        if (curTitle) {
+          curTitle.textContent = `Search Results (${matches.length})`;
+        }
+        renderModalProducts(modal, matches, q);
+      }, 100);
+    });
+  }
+
+  // 3. Form Submit & Button Click
+  const handleGo = (e) => {
+    if (e) e.preventDefault();
+    const q = input ? input.value.trim() : '';
+    location.href = pageUrl('listing', { q });
+  };
+
+  if (form && !form.__wiredModalSubmit) {
+    form.__wiredModalSubmit = true;
+    form.addEventListener('submit', handleGo);
+    const submitBtn = form.querySelector('button');
+    if (submitBtn) submitBtn.addEventListener('click', handleGo);
+  }
+
+  // 4. Modal Shown Event
+  if (!modal.__wiredShown) {
+    modal.__wiredShown = true;
+    modal.addEventListener('shown.bs.modal', () => {
+      if (input) {
+        input.focus();
+        if (!input.value.trim() && defaultModalProducts.length) {
+          renderModalProducts(modal, defaultModalProducts);
+        }
+      }
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('[href="#search"], [data-bs-target="#search"]')) {
+      if (!defaultModalProducts.length) {
+        loadInitialProducts().catch(() => {});
+      } else if (input && !input.value.trim()) {
+        renderModalProducts(modal, defaultModalProducts);
+      }
+    }
+  });
 }
 
 function wireSortSelects(onSort) {
@@ -11193,6 +11468,8 @@ async function boot() {
      on claiming USD over rupee prices. Run it again once they have. */
   onThemeReady(() => { paintCurrencySwitcher().catch((e) => warn('currency switcher', e)); });
   if (PAGE !== 'listing') { wireSearchInputs(null); }
+  try { wireSearchModal(); } catch (e) { warn('search modal', e); }
+  setTimeout(() => { getAllProducts().catch(() => {}); }, 150);
   /* ⭐ NOT AWAITED. This rewrites the theme's hard-coded category hrefs, which
      is a nicety; painting the page is the point. Awaiting it put a catalogue
      call on the critical path, so one slow answer held back every product,
