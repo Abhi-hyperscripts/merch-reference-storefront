@@ -3785,18 +3785,22 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
         }
       }
 
-      // Dynamic sizes: show if product has sizes, otherwise hide
-      const sizeBox = node.querySelector('.size-box, .size-list, .variant-box');
-      if (sizeBox) {
-        const pSizes = (p.optionValues || p.attributes || []).filter((o) => (o.key || '').toLowerCase() === 'size');
-        if (pSizes.length > 0) {
+      // Dynamic sizes: show if product has sizes, otherwise completely empty and hide
+      const pSizes = (p.optionValues || p.attributes || []).filter((o) => (o.key || '').toLowerCase() === 'size');
+      const sizeElements = node.querySelectorAll('.size-box, .size-list, .variant-box, .size-item');
+      if (pSizes.length > 0) {
+        const sizeBox = node.querySelector('.size-box, .size-list, .variant-box');
+        if (sizeBox) {
           sizeBox.innerHTML = pSizes.map((s) => `
             <span class="size-item box-icon">${escapeHtml(s.value)}</span>
           `).join('');
           show(sizeBox, true);
-        } else {
-          show(sizeBox, false);
         }
+      } else {
+        sizeElements.forEach((el) => {
+          el.innerHTML = '';
+          el.style.display = 'none';
+        });
       }
     });
   }
@@ -3818,8 +3822,12 @@ function renderProducts(items, spec = THEME.listing, regionEl = null) {
    jar of peanut butter showing the template's fashion photography, a colour
    swatch reading "Beige" and a size run of S/M/L/XL. The pictures come from
    the product; the pickers are the template's clothing demo and come off. */
+/* The quick view ships its OWN gallery and its own colour and size pickers,
+   neither of which the product-page selectors reach. The pictures come from
+   the product; the pickers are populated dynamically or hidden if absent. */
 function paintQuickViewExtras(panel, p) {
   const imgs = (p.imageUrls || []).filter(Boolean);
+  if (!imgs.length && p.imageUrl) imgs.push(p.imageUrl);
   const wrap = pick('.wrap-quick-view, .wrapper-scroll-quickview, .tf-quick-view-image', panel);
   if (wrap && imgs.length) {
     wrap.innerHTML = imgs.map((imgUrl, i) => `
@@ -3829,30 +3837,101 @@ function paintQuickViewExtras(panel, p) {
     `).join('');
   }
 
-  /* Static clothing options: hide completely if product has no color or size attributes */
+  /* Always keep the choose-option container (contains quantity & buttons) visible! */
   const optContainer = pick('.tf-product-info-choose-option, .tf-product-info-variant-picker', panel);
   if (optContainer) {
-    const pColors = (p.optionValues || p.attributes || []).filter((o) => (o.key || '').toLowerCase() === 'color');
-    const pSizes = (p.optionValues || p.attributes || []).filter((o) => (o.key || '').toLowerCase() === 'size');
-    if (!pColors.length && !pSizes.length) {
-      show(optContainer, false);
-    } else {
-      show(optContainer, true);
+    show(optContainer, true);
+  }
+
+  // Update price in Add to Cart button
+  const atcPrice = pick('.tf-qty-price, .total-price', panel);
+  if (atcPrice && p.price) {
+    atcPrice.textContent = money(p.price);
+  }
+
+  // Reset quantity input to 1
+  const qtyInput = pick('.quantity-product', panel);
+  if (qtyInput) qtyInput.value = '1';
+
+  // Handle Colors
+  const pColors = (p.optionValues || p.attributes || []).filter((o) => (o.key || '').toLowerCase() === 'color');
+  const pickerItems = pickAll('.variant-picker-item', panel);
+  const colorItem = pickerItems.find((it) => /color/i.test(it.textContent || ''));
+  if (pColors.length > 0) {
+    if (colorItem) {
+      show(colorItem, true);
+      const labelVal = colorItem.querySelector('.variant-picker-label-value');
+      if (labelVal) labelVal.textContent = pColors[0].value;
+      const valsContainer = colorItem.querySelector('.variant-picker-values');
+      if (valsContainer) {
+        valsContainer.innerHTML = pColors.map((c, i) => `
+          <label class="hover-tooltip tooltip-bot radius-60 color-btn btn-scroll-quickview ${i === 0 ? 'active' : ''}" data-value="${escapeHtml(c.value)}" style="cursor:pointer;margin-right:8px;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;border:2px solid ${i === 0 ? '#181818' : '#e5e7eb'};padding:2px;">
+            <span class="btn-checkbox" style="background-color:${c.color_code || resolveColorSwatch(c.value) || '#ccc'};width:100%;height:100%;border-radius:50%;display:inline-block;"></span>
+            <span class="tooltip">${escapeHtml(c.value)}</span>
+          </label>
+        `).join('');
+        valsContainer.querySelectorAll('.color-btn').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            valsContainer.querySelectorAll('.color-btn').forEach((b) => {
+              b.classList.remove('active');
+              b.style.borderColor = '#e5e7eb';
+            });
+            btn.classList.add('active');
+            btn.style.borderColor = '#181818';
+            if (labelVal) labelVal.textContent = btn.dataset.value;
+            panel._merchSelectedColor = btn.dataset.value;
+          });
+        });
+      }
     }
+  } else if (colorItem) {
+    show(colorItem, false);
+  }
+
+  // Handle Sizes - If product has no sizes in API, completely remove/hide size picker
+  const pSizes = (p.optionValues || p.attributes || []).filter((o) => (o.key || '').toLowerCase() === 'size');
+  const sizeItem = pickerItems.find((it) => /size/i.test(it.textContent || ''));
+  if (pSizes.length > 0) {
+    if (sizeItem) {
+      show(sizeItem, true);
+      const labelVal = sizeItem.querySelector('.variant-picker-label-value');
+      if (labelVal) labelVal.textContent = pSizes[0].value;
+      const valsContainer = sizeItem.querySelector('.variant-picker-values');
+      if (valsContainer) {
+        valsContainer.innerHTML = pSizes.map((s, i) => `
+          <label class="style-text size-btn ${i === 0 ? 'active' : ''}" data-value="${escapeHtml(s.value)}" style="cursor:pointer;margin-right:6px;padding:6px 14px;border:1px solid ${i === 0 ? '#181818' : '#e5e7eb'};border-radius:4px;display:inline-block;">
+            <span class="text-title">${escapeHtml(s.value)}</span>
+          </label>
+        `).join('');
+        valsContainer.querySelectorAll('.size-btn').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            valsContainer.querySelectorAll('.size-btn').forEach((b) => {
+              b.classList.remove('active');
+              b.style.borderColor = '#e5e7eb';
+            });
+            btn.classList.add('active');
+            btn.style.borderColor = '#181818';
+            if (labelVal) labelVal.textContent = btn.dataset.value;
+            panel._merchSelectedSize = btn.dataset.value;
+          });
+        });
+      }
+    }
+  } else {
+    if (sizeItem) show(sizeItem, false);
+    const sg = panel.querySelector('.size-guide, .show-size-guide');
+    if (sg) show(sg, false);
   }
 }
 
 let quickViewProduct = null;
 
-/* ⭐ A CONTROL PLACED OUTSIDE ITS PANEL MUST STILL BE ON SCREEN. These themes
-   park the quick view's close button at `right:-50px; top:-50px`, which works
-   for a dialog narrower than the window — and these panels open full-bleed, so
-   the button landed 50px past the right edge and 50px above the top. Off
-   screen, with the Escape key the only way left to shut the quick view, and
-   the panel appearing to overflow the viewport. Anything that still fits is
-   left exactly where the designer put it. */
 function keepPanelControlsOnScreen(panel) {
   if (!panel) return;
+  // If panel is a Bootstrap modal or offcanvas drawer, never alter its height/overflow styles
+  if (panel.classList?.contains('modal') || panel.closest?.('.modal') || panel.classList?.contains('offcanvas') || panel.closest?.('.offcanvas')) return;
   const vw = document.documentElement.clientWidth;
   pickAll('[class*="close"], .btn-close', panel).forEach((btn) => {
     const cs = getComputedStyle(btn);
@@ -3863,22 +3942,6 @@ function keepPanelControlsOnScreen(panel) {
     if (r.top < 2) btn.style.top = '12px';
   });
 
-  /* ⭐⭐ AND THE PANEL ITSELF MUST HOLD ITS OWN CONTENT. The quick view is sized
-     by the theme for its demo product — a short name, two lines of copy. A real
-     catalogue description, a category path and a SKU run longer, and the panel
-     has `max-height:none; overflow:visible`, so the extra simply spilled out of
-     the bottom of the box: the last rows rendered BELOW the modal, over the
-     page behind it, with "Share:" sliced in half by the panel's edge.
-
-     Measured on grocery at 1440×900: panel 520px tall, content 818px.
-
-     Height is released to auto first — a panel with a computed height cannot
-     grow — and only then capped and allowed to scroll, so a long product reads
-     inside the modal instead of outside it. Untouched when it already fits. */
-  /* ⚠ The INNER box, not the wrapper. `panel.matches('[class*="popup"]')` is
-     true for `.product-details-popup-WRAPPER`, which is the fixed, full-height
-     backdrop — nothing ever overflows that, so the check passed and the real
-     panel went on spilling its last rows onto the page behind it. */
   const box = pick('.product-details-popup, .modal-content, .modal-dialog', panel) || panel;
   const deepest = [...box.querySelectorAll('*')]
     .reduce((m, e) => { const r = e.getBoundingClientRect(); return r.height && r.bottom > m ? r.bottom : m; }, 0);
@@ -3893,9 +3956,6 @@ function keepPanelControlsOnScreen(panel) {
 
 function wireQuickView() {
   if (THEME?.name === 'fashion') return wireQuickViewFashion();
-  /* A theme can ship more than one of these — fashion has a Quick View
-     offcanvas AND a Quick Add modal, on the same card. Fill them all: whichever
-     the shopper opens has to be the product they clicked. */
   const panels = [];
   for (const sel of ['#quickView', '#quick_view', '#quickAdd', '.product-details-popup-wrapper:not(.in-shopdetails)', '.modal-quick-view']) {
     $$(sel).forEach((el) => { if (!panels.includes(el)) panels.push(el); });
@@ -3903,10 +3963,6 @@ function wireQuickView() {
   if (!panels.length || panels[0].dataset.merchQuickView) return;
   panels.forEach((el) => { el.dataset.merchQuickView = '1'; });
 
-  /* The text fields only. Anything carrying an `action` is wired once, below,
-     against whichever product is currently showing — re-running wireAction per
-     open would either be ignored (it guards against double-wiring) or stack a
-     handler per open. */
   const fields = Object.fromEntries(
     Object.entries(THEME.product?.fields || {}).filter(([, f]) => f && !f.action),
   );
@@ -3919,7 +3975,9 @@ function wireQuickView() {
     );
     if (!trigger) return;
     const id = trigger.closest('[data-merch-id]')?.dataset.merchId;
-    if (!id) return;                       // a trigger on markup we never filled
+    if (!id) return;
+    e.preventDefault();
+    e.stopPropagation();
 
     try {
       const p = await api.product(id);
@@ -3952,39 +4010,100 @@ function wireQuickView() {
             window.jQuery(targetPanel).modal('show');
           }
         } catch (err) {}
-        setTimeout(() => keepPanelControlsOnScreen(targetPanel), 0);
-        setTimeout(() => keepPanelControlsOnScreen(targetPanel), 350);
       }
     } catch (err) { showError(err); }
-  }, true);                                 // capture, so we fill BEFORE the theme opens it
+  }, true);
 
-  /* One handler for the panels' own buttons, reading whatever is showing. */
-  for (const modal of panels) modal.addEventListener('click', (e) => {
-    const add = e.target.closest('.btn-add-to-cart, .btn-action-price, .btn-cart2, .btn-cart, .rts-btn.btn-primary, .tf-btn');
-    if (!add || !quickViewProduct) return;
-    if (/wish/i.test(add.className)) return;
-    e.preventDefault();
-    const selected = modal._merchSelectedVariant;
-    if (modal.dataset.merchSizeRequired === 'true' && !selected) return notify('Please select a size first.', 'error');
-    const item = selected?.product || quickViewProduct;
-    if (item.availability === 'out') return notify('That option is sold out.', 'error');
-    const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
-    cart.add(item, qty, selected?.label || '');
-    notify(item.name + ' added to your cart.', 'success');
-    track('add_to_cart', { itemId: item.id, qty, via: 'quickview' });
-    try {
-      if (window.bootstrap?.Modal) {
-        window.bootstrap.Modal.getInstance(modal)?.hide();
+  /* Wire buttons on each panel */
+  for (const modal of panels) {
+    // Quantity steppers
+    modal.addEventListener('click', (e) => {
+      const dec = e.target.closest('.btn-quantity.btn-decrease');
+      const inc = e.target.closest('.btn-quantity.btn-increase');
+      const qtyInput = pick('.quantity-product', modal);
+      const atcPrice = pick('.tf-qty-price, .total-price', modal);
+      if (dec || inc) {
+        e.preventDefault();
+        e.stopPropagation();
+        let cur = Math.max(1, Math.floor(Number(qtyInput?.value) || 1));
+        if (dec) cur = Math.max(1, cur - 1);
+        if (inc) cur = cur + 1;
+        if (qtyInput) qtyInput.value = cur;
+        if (atcPrice && quickViewProduct?.price) {
+          atcPrice.textContent = money(quickViewProduct.price * cur);
+        }
       }
-      if (window.bootstrap?.Offcanvas) {
-        window.bootstrap.Offcanvas.getInstance(modal)?.hide();
+    });
+
+    // Add to cart
+    modal.addEventListener('click', (e) => {
+      const add = e.target.closest('.btn-add-to-cart, .btn-action-price, .show-shopping-cart, .btn-style-2, .btn-cart2, .btn-cart');
+      if (!add || !quickViewProduct) return;
+      if (/wish|compare/i.test(add.className)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const selected = modal._merchSelectedVariant;
+      if (modal.dataset.merchSizeRequired === 'true' && !selected) return notify('Please select a size first.', 'error');
+      const item = selected?.product || quickViewProduct;
+      if (item.availability === 'out') return notify('That option is sold out.', 'error');
+      const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
+      cart.add(item, qty, selected?.label || modal._merchSelectedColor || '');
+      notify(item.name + ' added to your cart.', 'success');
+      track('add_to_cart', { itemId: item.id, qty, via: 'quickview' });
+      try {
+        if (window.bootstrap?.Modal) {
+          window.bootstrap.Modal.getInstance(modal)?.hide();
+        }
+      } catch (err) {}
+      openCartSidebar();
+    });
+
+    // Buy now
+    modal.addEventListener('click', (e) => {
+      const buy = e.target.closest('.btn-style-3, .btn-buy-now');
+      if (!buy || !quickViewProduct) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const selected = modal._merchSelectedVariant;
+      const item = selected?.product || quickViewProduct;
+      const qty = Math.max(1, Math.floor(Number(pick(THEME.qtyInput, modal)?.value) || 1));
+      cart.add(item, qty, selected?.label || modal._merchSelectedColor || '');
+      try {
+        if (window.bootstrap?.Modal) {
+          window.bootstrap.Modal.getInstance(modal)?.hide();
+        }
+      } catch (err) {}
+      location.href = pageUrl('checkout');
+    });
+
+    // Compare
+    modal.addEventListener('click', (e) => {
+      const comp = e.target.closest('.show-compare, .box-icon.compare, .compare');
+      if (!comp || !quickViewProduct) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const on = compare.toggle(quickViewProduct.id);
+      notify(on ? 'Added to compare.' : 'Removed from compare.', 'success');
+      paintCompareDrawer().catch(() => {});
+      paintCompare().catch(() => {});
+      const drawer = document.getElementById('compare');
+      if (drawer && on && window.bootstrap?.Offcanvas) {
+        try { window.bootstrap.Offcanvas.getOrCreateInstance(drawer).show(); } catch {}
       }
-      const cartEl = document.getElementById('shoppingCart');
-      if (cartEl && window.bootstrap?.Offcanvas) {
-        window.bootstrap.Offcanvas.getOrCreateInstance(cartEl).show();
-      }
-    } catch (err) {}
-  });
+    });
+
+    // Wishlist
+    modal.addEventListener('click', async (e) => {
+      const wish = e.target.closest('.box-icon.wishlist, .wishlist');
+      if (!wish || !quickViewProduct) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const on = await wishlist.toggle(quickViewProduct.id);
+      wish.classList.toggle('active', on);
+      syncWishlistCardStates();
+      notify(on ? 'Saved to your wishlist.' : 'Removed from your wishlist.', 'success');
+    });
+  }
 }
 
 /* ───────── COMPARE ─────────────────────────────────────────────────────────
@@ -4933,22 +5052,155 @@ async function renderRecentlyViewed(container) {
   } catch { /* a rail that will not load simply stays as the theme shipped it */ }
 }
 
+let _currentListingLayout = 'tf-col-3';
+
+function syncListingLayout() {
+  const listEl = document.getElementById('listLayout');
+  const gridEl = document.getElementById('gridLayout');
+  if (!listEl && !gridEl) return;
+
+  const activeSwitch = document.querySelector('.tf-view-layout-switch.active');
+  const layout = activeSwitch?.dataset.valueLayout || _currentListingLayout || 'tf-col-3';
+  _currentListingLayout = layout;
+
+  if (layout === 'list') {
+    if (listEl) listEl.style.display = '';
+    if (gridEl) gridEl.style.display = 'none';
+    const ctrl = document.querySelector('.wrapper-control-shop');
+    if (ctrl) { ctrl.classList.add('listLayout-wrapper'); ctrl.classList.remove('gridLayout-wrapper'); }
+  } else {
+    if (listEl) listEl.style.display = 'none';
+    if (gridEl) {
+      gridEl.style.display = '';
+      gridEl.className = `wrapper-shop tf-grid-layout ${layout}`;
+    }
+    const ctrl = document.querySelector('.wrapper-control-shop');
+    if (ctrl) { ctrl.classList.add('gridLayout-wrapper'); ctrl.classList.remove('listLayout-wrapper'); }
+  }
+}
+
+function wireLayoutSwitches() {
+  const switches = document.querySelectorAll('.tf-view-layout-switch');
+  switches.forEach((sw) => {
+    if (sw._merchWired) return;
+    sw._merchWired = true;
+    sw.addEventListener('click', (e) => {
+      e.preventDefault();
+      const layout = sw.dataset.valueLayout;
+      switches.forEach((s) => s.classList.remove('active'));
+      sw.classList.add('active');
+      _currentListingLayout = layout;
+      syncListingLayout();
+    });
+  });
+}
+
+function paintAppliedFilters(state, run) {
+  const container = document.getElementById('applied-filters');
+  const removeAllBtn = document.getElementById('remove-all');
+  const resetBtn = document.getElementById('reset-filter');
+
+  const tags = [];
+  if (state.category) {
+    tags.push({ key: 'category', label: state.category });
+  }
+  if (state.brand) {
+    tags.push({ key: 'brand', label: state.brand });
+  }
+  if (state.color) {
+    tags.push({ key: 'color', label: state.color });
+  }
+  if (state.size) {
+    tags.push({ key: 'size', label: state.size });
+  }
+  if (state.inStock) {
+    tags.push({ key: 'inStock', label: 'In stock' });
+  }
+  if (state.minPrice || state.maxPrice) {
+    tags.push({ key: 'price', label: `${state.minPrice ? money(state.minPrice) : ''} - ${state.maxPrice ? money(state.maxPrice) : ''}` });
+  }
+  if (state.q) {
+    tags.push({ key: 'q', label: `Search: ${state.q}` });
+  }
+
+  if (container) {
+    container.innerHTML = tags.map((t) => `
+      <span class="filter-tag">
+        ${escapeHtml(t.label)}
+        <span class="remove-tag icon-close" data-filter-key="${t.key}" style="cursor:pointer;margin-left:6px;"></span>
+      </span>
+    `).join('');
+
+    container.querySelectorAll('[data-filter-key]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const k = btn.dataset.filterKey;
+        if (k === 'price') {
+          state.minPrice = '';
+          state.maxPrice = '';
+        } else if (k === 'inStock') {
+          state.inStock = false;
+        } else {
+          state[k] = '';
+        }
+        state.page = 1;
+        pushState(state);
+        syncFilterSidebarInputs(state);
+        run();
+      });
+    });
+  }
+
+  const hasFilters = tags.length > 0;
+  if (removeAllBtn) {
+    removeAllBtn.style.display = hasFilters ? '' : 'none';
+    if (!removeAllBtn._merchWired) {
+      removeAllBtn._merchWired = true;
+      removeAllBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        resetAllFilters(state, run);
+      });
+    }
+  }
+
+  if (resetBtn && !resetBtn._merchWired) {
+    resetBtn._merchWired = true;
+    resetBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      resetAllFilters(state, run);
+    });
+  }
+}
+
+function resetAllFilters(state, run) {
+  state.category = '';
+  state.brand = '';
+  state.color = '';
+  state.size = '';
+  state.q = '';
+  state.inStock = false;
+  state.minPrice = '';
+  state.maxPrice = '';
+  state.page = 1;
+  pushState(state);
+  syncFilterSidebarInputs(state);
+  run();
+}
+
+function syncFilterSidebarInputs(state) {
+  document.querySelectorAll('.widget-facet input[type="checkbox"], .widget-facet input[type="radio"]').forEach((i) => {
+    i.checked = false;
+  });
+  document.querySelectorAll('.widget-facet .active').forEach((el) => {
+    el.classList.remove('active');
+  });
+}
+
 /* --- LISTING -------------------------------------------------------------
    Search, category, brand, sort, price and in-stock, all held in the URL so a
    filtered grid can be linked, bookmarked and gone Back to. */
 pages.listing = async () => {
-  /* A listing page usually ships the SAME products twice — once as a grid and
-     once as a list, behind the theme's own view toggle. Hydrating only the
-     first leaves the other showing demo data, one click away.
-
-     The theme's own grid also decides the page size: a page laid out for 15
-     cards asks for 15. */
-  /* Measured before the first fetch only to size the request; the containers
-     themselves are looked up again after every answer, because the theme's own
-     scripts may rebuild them in between (see pages.home). */
-  const pageSize = Math.min(60, Math.max(8, Math.max(
-    0, ...pickAll(THEME.listing.container).map((el) => templateCount({ ...THEME.listing, el })),
-  ) || 24));
+  const pageSize = 18;
 
   const state = {
     q: param('q') || '',
@@ -4970,9 +5222,6 @@ pages.listing = async () => {
       res = state.collection
         ? (await api.collection(state.collection)).products
         : await api.catalog({
-            /* The store calls it `search`. A `q=` is silently IGNORED, which
-               reads as "the shop has everything": a narrowing question
-               answered with the full catalogue. */
             search: state.q || undefined,
             pageSize,
             category: state.category || undefined,
@@ -4994,8 +5243,10 @@ pages.listing = async () => {
     }
     for (const grid of pickAll(THEME.listing.container)) renderProducts(items, THEME.listing, grid);
     wireQuickView();
+    syncListingLayout();
     const total = await paintResultCount(items, state, pageSize);
     renderPagination(total, state, run, pageSize);
+    paintAppliedFilters(state, run);
     THEME.reinit?.();
   };
 
@@ -5006,13 +5257,15 @@ pages.listing = async () => {
   wirePagination(state, run, pageSize);
   wirePriceFilter(state, run);
   wireStockFilter(state, run);
+  wireLayoutSwitches();
+  syncListingLayout();
   await paintFilters(state, run);
   await run();
 };
 
 /* Render responsive dynamic pagination controls */
 function renderPagination(total, state, run, pageSize) {
-  const pagers = pickAll('.pagination-area-main-wrappper, .pagination-area, .pagination, ul.wg-pagination');
+  const pagers = document.querySelectorAll('ul.wg-pagination, .pagination-area-main-wrappper, .pagination-area, .pagination');
   if (!pagers.length) return;
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -5023,10 +5276,16 @@ function renderPagination(total, state, run, pageSize) {
   if (endPage - startPage < 4) {
     startPage = Math.max(1, endPage - 4);
   }
+  startPage = Math.max(1, startPage);
 
   for (const pager of pagers) {
     const ul = pager.tagName === 'UL' ? pager : pager.querySelector('ul');
     if (!ul) continue;
+
+    if (totalPages <= 1) {
+      ul.innerHTML = '';
+      continue;
+    }
 
     const isWgPagination = ul.classList.contains('wg-pagination') || pager.classList.contains('wg-pagination');
     if (isWgPagination) {
@@ -5068,6 +5327,7 @@ function renderPagination(total, state, run, pageSize) {
       });
       continue;
     }
+
 
     let html = '';
     html += `<li><button type="button" class="prev-page ${curPage <= 1 ? 'disabled' : ''}" ${curPage <= 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''} aria-label="Previous"><i class="fa-regular fa-chevron-left"></i></button></li>`;
@@ -5653,6 +5913,9 @@ async function paintResultCount(items, state, pageSize) {
       category: state.category || undefined,
       brand: state.brand || undefined,
       inStock: state.inStock || undefined,
+      color: state.color || undefined,
+      minPrice: state.minPrice || undefined,
+      maxPrice: state.maxPrice || undefined,
     });
     if (Number.isFinite(f?.total)) total = f.total;
   } catch { /* the page count is a fair fallback */ }
@@ -5660,7 +5923,13 @@ async function paintResultCount(items, state, pageSize) {
   const from = items.length ? (state.page - 1) * pageSize + 1 : 0;
   const to = (state.page - 1) * pageSize + items.length;
   if (sentence.length) {
-    sentence.forEach((el) => setText(el, 'Showing ' + from + '\u2013' + to + ' of ' + total + ' results'));
+    sentence.forEach((el) => {
+      if (el.id === 'product-count-grid' || el.id === 'product-count-list') {
+        el.innerHTML = `<span class="count">${total}</span> Products Found`;
+      } else {
+        setText(el, 'Showing ' + from + '\u2013' + to + ' of ' + total + ' results');
+      }
+    });
   }
   return total;
 }
@@ -7993,7 +8262,7 @@ function renderVariantPickers({
   }
 
   // Insert into host container before quantity widget if present
-  const quantity = pick('.tf-product-total-quantity, .product-total-quantity', host);
+  const quantity = pick('.tf-product-total-quantity, .product-total-quantity, .tf-product-info-quantity, .wg-quantity', host);
   if (uniqueColors.length) {
     if (quantity) host.insertBefore(colorTarget, quantity);
     else host.appendChild(colorTarget);
@@ -8015,17 +8284,17 @@ function renderVariantPickers({
 
 async function paintQuickVariants(panel, p) {
   let group = null;
-  try { group = await api.variants(p.id); } catch { /* remove demo controls below */ }
+  try { group = await api.variants(p.id); } catch { /* ignore */ }
   const options = Array.isArray(group) ? group : (group?.options || group?.variants || []);
   const optContainer = pick('.tf-product-info-choose-option, .tf-product-info-variant-picker, .tf-product-variant', panel);
-  pickAll('.quick-variant-picker, .variant-picker-item', optContainer || panel).forEach(remove);
+  if (optContainer) show(optContainer, true);
+  pickAll('.quick-variant-picker', optContainer || panel).forEach(remove);
   panel._merchSelectedVariant = null;
   panel.dataset.merchSizeRequired = 'false';
   if (!options.length) {
-    if (optContainer) show(optContainer, false);
     return;
   }
-  if (optContainer) show(optContainer, true);
+  pickAll('.variant-picker-item', optContainer || panel).forEach(remove);
 
   const host = optContainer || pick('.tf-product-quick_add, .tf-product-quick_view', panel) || panel;
   const parsedList = options.map((o) => parseVariantOption(o, p));
@@ -8039,10 +8308,12 @@ async function paintQuickVariants(panel, p) {
     isQuick: true,
     onSelect: (variant, label) => {
       panel._merchSelectedVariant = { product: variant, label };
-      setText(pick('.product-infor-name|.prd-name', panel), variant.name);
+      setText(pick('.product-infor-name|.prd-name|.tf-product-info-name h3', panel), variant.name);
       paintQuickViewExtras(panel, variant);
-      const newPrice = pick('.price-on-sale|.price-new', panel);
+      const newPrice = pick('.price-on-sale|.price-new|.tf-product-info-price .price-on-sale', panel);
       if (newPrice) setText(newPrice, money(variant.price));
+      const atcPrice = pick('.tf-qty-price, .total-price', panel);
+      if (atcPrice) setText(atcPrice, money(variant.price));
     },
     onClear: () => {
       panel._merchSelectedVariant = null;
@@ -8491,18 +8762,18 @@ async function paintFilters(state, run) {
         if (box) show(box, false);
       }
       if (group.key === 'size') {
-        pickAll('.widget-facet.facet-size, .facet-size').forEach((w) => show(w, false));
+        document.querySelectorAll('.widget-facet.facet-size, .facet-size').forEach((w) => { w.style.display = 'none'; });
       }
       if (group.key === 'color') {
-        pickAll('.widget-facet.facet-color, .facet-color').forEach((w) => show(w, false));
+        document.querySelectorAll('.widget-facet.facet-color, .facet-color').forEach((w) => { w.style.display = 'none'; });
       }
       continue;
     }
     if (group.key === 'size') {
-      pickAll('.widget-facet.facet-size, .facet-size').forEach((w) => show(w, true));
+      document.querySelectorAll('.widget-facet.facet-size, .facet-size').forEach((w) => { w.style.display = ''; });
     }
     if (group.key === 'color') {
-      pickAll('.widget-facet.facet-color, .facet-color').forEach((w) => show(w, true));
+      document.querySelectorAll('.widget-facet.facet-color, .facet-color').forEach((w) => { w.style.display = ''; });
     }
     if (!scope) continue;
     const box = scope.closest('.widget-facet, .single-filter-box, .facet, .sidebar-single, .widget, .filter-group, .collapse-item, .tf-filter-group') || scope.parentElement;
@@ -8513,6 +8784,34 @@ async function paintFilters(state, run) {
   /* The price slider's ends should be the shop's real range, not $10-$90. */
   const price = facets.price;
   if (price && Number.isFinite(price.min) && Number.isFinite(price.max)) {
+    const priceSlider = document.getElementById('price-value-range');
+    if (priceSlider && priceSlider.noUiSlider) {
+      priceSlider.setAttribute('data-min', Math.floor(price.min));
+      priceSlider.setAttribute('data-max', Math.ceil(price.max));
+      try {
+        priceSlider.noUiSlider.updateOptions({
+          range: {
+            min: Math.floor(price.min),
+            max: Math.ceil(price.max),
+          },
+        });
+        priceSlider.noUiSlider.set([
+          state.minPrice ? Number(state.minPrice) : Math.floor(price.min),
+          state.maxPrice ? Number(state.maxPrice) : Math.ceil(price.max),
+        ]);
+      } catch {}
+      if (!priceSlider._merchPriceBound) {
+        priceSlider._merchPriceBound = true;
+        priceSlider.noUiSlider.on('change', (vals) => {
+          state.minPrice = Math.floor(Number(vals[0]));
+          state.maxPrice = Math.ceil(Number(vals[1]));
+          state.page = 1;
+          pushState(state);
+          run();
+        });
+      }
+    }
+
     pickAll('.filter-value-min-max span|.price-range|.widget-price .title-price').forEach((el) => {
       if (/\d/.test(el.textContent || '')) setText(el, 'Price: ' + money(price.min) + ' — ' + money(price.max));
     });

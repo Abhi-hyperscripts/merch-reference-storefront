@@ -629,8 +629,8 @@
 
   $(function () {
     rangeTwoPrice();
-    filterProducts();
-    filterSort();
+    // filterProducts();
+    // filterSort();
     swLayoutShop();
     handleSidebarFilter();
     handleDropdownFilter();
