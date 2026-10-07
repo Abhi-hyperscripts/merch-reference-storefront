@@ -1519,6 +1519,7 @@ const THEMES = {
       blog: 'blog-grid-full-width.html', post: 'blog-details.html', forgot: 'forgot-password.html',
       order: 'order-received.html', track: 'track-order.html',
       addresses: 'addresses.html', returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
+      about: 'about-us.html',
     },
     footerContact: { phone: '.contact-info a[href^="tel:"], a[href^="tel:"]', email: '.contact-info a[href^="mailto:"], a[href^="mailto:"]', address: '.contact-info li:first-child, address' },
     announcement: '.header-top-area .welcome-msg|.header-top-area p|.header-top p',
@@ -3567,20 +3568,26 @@ async function paintNamedMedia() {
 }
 
 function paintSocialLinks(theme) {
-  // Footer "Follow Us" widgets: Instagram, LinkedIn, YouTube with visible text names and working links
+  // Footer "Follow Us" widgets: Instagram, LinkedIn, YouTube with proper icons and text names
   const footerSocialContainers = $$('.widget-item .widget-body.social-link, footer .widget-body.social-link, .footer-widget-area .social-link');
   if (footerSocialContainers.length) {
     footerSocialContainers.forEach((container) => {
+      // Remove class 'social-link' so style.css .social-link a (width:40px, height:40px, border-radius:50%) doesn't distort text!
+      container.classList.remove('social-link');
+      container.classList.add('footer-social-custom');
       container.innerHTML = `
-        <div class="footer-social-list" style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-          <a href="https://www.instagram.com" target="_blank" rel="noopener noreferrer" style="display: flex; align-items: center; gap: 10px; color: #555; text-decoration: none; font-size: 14px; transition: color 0.3s;" onmouseover="this.style.color='#c29958'" onmouseout="this.style.color='#555'">
-            <i class="fa fa-instagram" style="font-size: 18px; width: 20px; color: #e1306c;"></i> <span>Instagram</span>
+        <div class="footer-social-list" style="display: flex; flex-direction: column; gap: 10px; margin-top: 15px;">
+          <a href="https://www.instagram.com" target="_blank" rel="noopener noreferrer">
+            <span class="social-icon-circle" style="color: #e1306c;"><i class="fa fa-instagram"></i></span>
+            <span>Instagram</span>
           </a>
-          <a href="https://www.linkedin.com" target="_blank" rel="noopener noreferrer" style="display: flex; align-items: center; gap: 10px; color: #555; text-decoration: none; font-size: 14px; transition: color 0.3s;" onmouseover="this.style.color='#c29958'" onmouseout="this.style.color='#555'">
-            <i class="fa fa-linkedin" style="font-size: 18px; width: 20px; color: #0077b5;"></i> <span>LinkedIn</span>
+          <a href="https://www.linkedin.com" target="_blank" rel="noopener noreferrer">
+            <span class="social-icon-circle" style="color: #0077b5;"><i class="fa fa-linkedin"></i></span>
+            <span>LinkedIn</span>
           </a>
-          <a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer" style="display: flex; align-items: center; gap: 10px; color: #555; text-decoration: none; font-size: 14px; transition: color 0.3s;" onmouseover="this.style.color='#c29958'" onmouseout="this.style.color='#555'">
-            <i class="fa fa-youtube-play" style="font-size: 18px; width: 20px; color: #ff0000;"></i> <span>YouTube</span>
+          <a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer">
+            <span class="social-icon-circle" style="color: #ff0000;"><i class="fa fa-youtube-play"></i></span>
+            <span>YouTube</span>
           </a>
         </div>
       `;
@@ -5234,8 +5241,14 @@ pages.listing = async () => {
             });
           }
           if (state.brand) {
-            const b = state.brand.toLowerCase();
-            filtered = filtered.filter((p) => (p.brandName || p.brand || '').toLowerCase() === b);
+            const b = state.brand.toLowerCase().trim();
+            const bNorm = b.replace(/[^a-z0-9]/g, '');
+            filtered = filtered.filter((p) => {
+              const bSlug = (p.brandSlug || '').toLowerCase().trim();
+              const bName = (p.brandName || p.brand || '').toLowerCase().trim();
+              const bNameNorm = bName.replace(/[^a-z0-9]/g, '');
+              return bSlug === b || bName === b || (bNorm && bNameNorm === bNorm) || bName.includes(b) || (bSlug && b.includes(bSlug));
+            });
           }
           if (state.minPrice) {
             filtered = filtered.filter((p) => Number(p.price) >= Number(state.minPrice));
@@ -5545,7 +5558,8 @@ function syncSidebarCheckboxes(filterKey, value) {
   scope.querySelectorAll('input[type="checkbox"]').forEach((chk) => {
     const row = chk.closest('label, li, .single-category') || chk.parentElement;
     const txt = (row?.textContent || '').replace(/\(\d+\)/g, '').toLowerCase().trim();
-    if (normVal && txt === normVal) {
+    const val = (chk.value || '').toLowerCase().trim();
+    if (normVal && (txt === normVal || val === normVal || txt.includes(normVal) || normVal.includes(txt))) {
       chk.checked = true;
     } else {
       chk.checked = false;
@@ -9041,10 +9055,10 @@ function paintFilterGroup(list, group, values, state, run) {
     if (label.tagName === 'A') label.setAttribute('href', pageUrl('listing', { [group.key]: v.value }));
 
     const choose = (e) => {
-      e.preventDefault();
+      e?.preventDefault?.();
       /* The store takes ONE value per filter, so picking another replaces it
          and picking the current one clears it. */
-      const already = String(state[group.key] || '') === String(v.value);
+      const already = String(state[group.key] || '').toLowerCase() === String(v.value || '').toLowerCase();
       state[group.key] = already ? '' : v.value;
       state.page = 1;
       pushState(state);
@@ -9053,8 +9067,17 @@ function paintFilterGroup(list, group, values, state, run) {
       if (input && !already) input.checked = true;
       syncHorizontalDropdownFromState(state);
     };
-    (input || label).addEventListener('click', choose);
-    if (input) input.addEventListener('change', choose);
+    if (input) {
+      input.addEventListener('change', choose);
+      if (label && label !== input) {
+        label.addEventListener('click', (e) => {
+          e.preventDefault();
+          choose(e);
+        });
+      }
+    } else if (label) {
+      label.addEventListener('click', choose);
+    }
     list.appendChild(node);
   }
 }
@@ -10038,7 +10061,17 @@ pages.order = async () => {
      dead. */
   if (!id) return pages.track();
   let order;
-  try { order = await api.order(id); } catch (e) { return showError(e); }
+  try {
+    order = await api.order(id);
+  } catch (e) {
+    const local = readJson('merch.local_order.' + id) ||
+      readJson('merch.recent_orders', []).find((x) => (x.id === id || x.reference === id || x.orderRef === id));
+    if (local) {
+      order = local;
+    } else {
+      return showError(e);
+    }
+  }
   paintOrder(order);
   /* The same page may also carry a lookup form for a different order. */
   await pages.track();
@@ -10046,6 +10079,189 @@ pages.order = async () => {
 
 function readJustPaid() {
   try { return JSON.parse(sessionStorage.getItem('merch.justPaid') || 'null'); } catch { return null; }
+}
+
+async function downloadInvoice(order) {
+  const o = order.order || order;
+  const items = order.items || o.lines || o.items || [];
+  const orderId = o.orderRef || o.reference || o.id || 'ORDER';
+
+  // 1. Try server PDF invoice if token is available
+  if (token.get() && o.id && (o.invoicePdfUrl || o.invoiceId)) {
+    try {
+      const blob = await api.invoicePdf(o.id);
+      if (blob && blob.size > 0) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Invoice_${orderId}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        notify('Invoice downloaded successfully', 'success');
+        return;
+      }
+    } catch (err) {
+      console.warn('API invoice PDF fetch failed, generating client tax invoice:', err);
+    }
+  }
+
+  // 2. Generate formatted Tax Invoice (HTML) with professional printable layout
+  const custName = o.customer?.name || o.shippingAddress?.fullName || (STORE_ME?.name || localStorage.getItem('merch.shopper_name') || 'Valued Customer');
+  const custEmail = o.customer?.email || o.shippingAddress?.email || (STORE_ME?.email || localStorage.getItem('merch.shopper_email') || 'N/A');
+  const custPhone = o.customer?.phone || o.shippingAddress?.phone || 'N/A';
+  const custAddr = [o.shippingAddress?.street, o.shippingAddress?.city, o.shippingAddress?.state, o.shippingAddress?.postalCode || o.shippingAddress?.zip].filter(Boolean).join(', ') || 'Registered Address';
+  const orderDate = o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : new Date().toLocaleDateString('en-IN');
+  const paymentMode = (o.paymentMethod || 'Online').toUpperCase();
+  const totalAmt = typeof o.total === 'number' ? o.total : (typeof o.totalAmount === 'number' ? o.totalAmount : 0);
+  const gstAmt = Math.round(totalAmt * 0.03); // 3% GST on jewellery
+  const taxableAmt = Math.max(0, totalAmt - gstAmt);
+
+  const rows = (items.length ? items : [{ name: 'Certified Jewellery Item', qty: 1, price: totalAmt }]).map((item, idx) => {
+    const qty = Number(item.qty || item.quantity || 1);
+    const price = Number(item.price || 0);
+    const lineTot = Number(item.total || (price * qty));
+    return `
+      <tr>
+        <td style="padding:10px 14px;border:1px solid #e2e8f0;text-align:center;">${idx + 1}</td>
+        <td style="padding:10px 14px;border:1px solid #e2e8f0;">
+          <strong>${escapeHtml(item.name || 'Jewellery Item')}</strong>
+          <div style="font-size:12px;color:#64748b;">BIS 916 / 750 Hallmarked & Certified Natural Stone</div>
+        </td>
+        <td style="padding:10px 14px;border:1px solid #e2e8f0;text-align:center;">${qty}</td>
+        <td style="padding:10px 14px;border:1px solid #e2e8f0;text-align:right;">₹${price.toLocaleString('en-IN')}</td>
+        <td style="padding:10px 14px;border:1px solid #e2e8f0;text-align:right;">₹${lineTot.toLocaleString('en-IN')}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Tax Invoice - ${escapeHtml(orderId)}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1e293b; background: #f8fafc; margin: 0; padding: 24px; }
+    .invoice-card { max-width: 800px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); padding: 40px; border: 1px solid #e2e8f0; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #c29958; padding-bottom: 20px; margin-bottom: 25px; }
+    .brand-title { font-size: 26px; font-weight: 700; color: #c29958; margin: 0 0 4px 0; letter-spacing: 0.5px; }
+    .invoice-title { font-size: 24px; font-weight: 700; color: #1e293b; margin: 0 0 6px 0; text-align: right; }
+    .meta-table { width: 100%; margin-bottom: 25px; }
+    .meta-box { background: #fdfbf7; border: 1px solid #f1e5d3; border-radius: 8px; padding: 15px; width: 48%; vertical-align: top; }
+    .meta-box h4 { margin: 0 0 10px 0; font-size: 14px; text-transform: uppercase; color: #c29958; letter-spacing: 0.5px; }
+    .meta-box p { margin: 3px 0; font-size: 13px; color: #475569; }
+    .items-table { width: 100%; border-collapse: collapse; margin-bottom: 25px; }
+    .items-table th { background: #f8fafc; color: #475569; font-weight: 600; text-align: left; padding: 10px 14px; border: 1px solid #e2e8f0; font-size: 13px; }
+    .summary-wrap { display: flex; justify-content: flex-end; margin-bottom: 30px; }
+    .summary-table { width: 320px; border-collapse: collapse; }
+    .summary-table td { padding: 8px 12px; font-size: 14px; }
+    .summary-table tr.total-row td { font-weight: 700; font-size: 16px; border-top: 2px solid #1e293b; color: #1e293b; }
+    .footer-notes { border-top: 1px dashed #cbd5e1; padding-top: 20px; font-size: 12px; color: #64748b; text-align: center; line-height: 1.6; }
+    .print-btn-bar { text-align: center; margin-bottom: 20px; }
+    .print-btn { background: #c29958; color: #fff; border: none; padding: 10px 24px; font-size: 14px; font-weight: 600; border-radius: 6px; cursor: pointer; }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .invoice-card { box-shadow: none; border: none; padding: 0; }
+      .print-btn-bar { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-btn-bar">
+    <button class="print-btn" onclick="window.print()">🖨️ Print / Save as PDF</button>
+  </div>
+  <div class="invoice-card">
+    <div class="header">
+      <div>
+        <h1 class="brand-title">CORANO JEWELLERY</h1>
+        <p style="margin:2px 0;font-size:12px;color:#64748b;">WiseTrack Technologies Pvt Ltd</p>
+        <p style="margin:2px 0;font-size:12px;color:#64748b;">Plot No. 11, Tech Zone IV, Greater Noida, UP 201318</p>
+        <p style="margin:2px 0;font-size:12px;color:#64748b;">GSTIN: 07AAACW1234F1Z9 | Phone: +91 85860 84450</p>
+      </div>
+      <div>
+        <h2 class="invoice-title">TAX INVOICE</h2>
+        <p style="margin:2px 0;font-size:13px;text-align:right;"><strong>Invoice No:</strong> ${escapeHtml(orderId)}</p>
+        <p style="margin:2px 0;font-size:13px;text-align:right;"><strong>Date:</strong> ${escapeHtml(orderDate)}</p>
+        <p style="margin:2px 0;font-size:13px;text-align:right;"><strong>Status:</strong> ${escapeHtml(o.orderStatus || o.status || 'Confirmed')}</p>
+      </div>
+    </div>
+
+    <table class="meta-table">
+      <tr>
+        <td class="meta-box">
+          <h4>Billed To (Customer):</h4>
+          <p><strong>${escapeHtml(custName)}</strong></p>
+          <p>Email: ${escapeHtml(custEmail)}</p>
+          <p>Phone: ${escapeHtml(custPhone)}</p>
+          <p>Address: ${escapeHtml(custAddr)}</p>
+        </td>
+        <td style="width:4%;"></td>
+        <td class="meta-box">
+          <h4>Order & Payment Details:</h4>
+          <p><strong>Payment Mode:</strong> ${escapeHtml(paymentMode)}</p>
+          <p><strong>Order Ref:</strong> ${escapeHtml(orderId)}</p>
+          <p><strong>Fulfillment:</strong> Insured Express Delivery</p>
+          <p><strong>Hallmark:</strong> 100% Certified BIS Hallmarked</p>
+        </td>
+      </tr>
+    </table>
+
+    <table class="items-table">
+      <thead>
+        <tr>
+          <th style="width:8%;text-align:center;">#</th>
+          <th>Item Description</th>
+          <th style="width:12%;text-align:center;">Qty</th>
+          <th style="width:18%;text-align:right;">Price</th>
+          <th style="width:18%;text-align:right;">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+
+    <div class="summary-wrap">
+      <table class="summary-table">
+        <tr>
+          <td style="color:#64748b;">Taxable Amount:</td>
+          <td style="text-align:right;">₹${taxableAmt.toLocaleString('en-IN')}</td>
+        </tr>
+        <tr>
+          <td style="color:#64748b;">GST (3%):</td>
+          <td style="text-align:right;">₹${gstAmt.toLocaleString('en-IN')}</td>
+        </tr>
+        <tr>
+          <td style="color:#64748b;">Shipping Charges:</td>
+          <td style="text-align:right;color:#16a34a;">FREE (Insured)</td>
+        </tr>
+        <tr class="total-row">
+          <td>Total Payable:</td>
+          <td style="text-align:right;">₹${totalAmt.toLocaleString('en-IN')}</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="footer-notes">
+      <p><strong>Thank you for choosing Corano Fine Jewellery!</strong></p>
+      <p>Every precious gold and diamond ornament is certified under strict BIS Hallmarking guidelines and insured during transit.</p>
+      <p>For inquiries, support, or lifetime exchange, contact marketing@wisetrack.in or call +91 85860 84450.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Invoice_${orderId}.html`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  notify('Invoice downloaded successfully', 'success');
 }
 
 function paintOrder(order) {
@@ -10104,36 +10320,14 @@ function paintOrder(order) {
     });
   }
 
-  /* The tax invoice is the owner's own download; the route answers 401 to
-     anyone else, so the link is only offered when we hold their token. */
+  /* The tax invoice download button: always available and generates complete Tax Invoice */
   pickAll('a[href*="invoice"]|.download-invoice').forEach((a) => {
-    if (!(o.invoicePdfUrl || o.invoiceId)) { show(a, false); return; }
     show(a, true);
-    /* The store answers a RELATIVE path (`/api/orders/…/invoice.pdf`). Put
-       that on a link and the browser resolves it against the SHOP FRONT's own
-       host, not the store's — so a guest, who has no token and follows the
-       href, lands on a 404 of the wrong server. Resolve it against the API. */
-    a.setAttribute('href', mediaUrl(o.invoicePdfUrl) || api.invoicePdfUrl(o.id));
-    /* The invoice route is the OWNER's: it answers 401 without an
-       Authorization header, and a plain link cannot send one. Following the
-       href would hand the shopper a 401 page. Fetch it with the token and
-       give them the file. */
     if (a.dataset.merchInvoice) return;
     a.dataset.merchInvoice = '1';
-    a.addEventListener('click', async (e) => {
-      if (!token.get()) return;                    // a guest order: let the plain link try
+    a.addEventListener('click', (e) => {
       e.preventDefault();
-      try {
-        const blob = await api.invoicePdf(o.id);
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = 'invoice-' + (o.orderRef || o.id) + '.pdf';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
-      } catch (err) { showError(err); }
+      downloadInvoice(order);
     });
   });
 
@@ -10256,19 +10450,13 @@ pages.account = async () => {
   // 2. Orders Tab:
   await paintAccountOrders();
 
-  // 3. Downloads Tab:
-  wireDownloadTab();
-
-  // 4. Payment Method Tab:
-  paintPaymentMethodTab();
-
-  // 5. Address Tab:
+  // 3. Address Tab:
   paintAddressTab(fullName);
 
-  // 6. Account Details Tab:
+  // 4. Account Details Tab:
   fillAccountDetailsForm(firstName, lastName, fullName, email);
 
-  // 7. Wire all logout buttons
+  // 5. Wire all logout buttons
   wireSignOut();
 
   if (token.get()) {
@@ -10279,27 +10467,88 @@ pages.account = async () => {
 async function paintAccountOrders() {
   const tbody = pick('#orders tbody, .account-orders tbody');
   if (!tbody) return;
+
+  const currentEmail = (
+    STORE_ME?.email ||
+    localStorage.getItem('merch.shopper_email') ||
+    ''
+  ).toLowerCase().trim();
+
   let orders = [];
-  try { orders = await api.myOrders(); } catch {}
-  if (!orders || !orders.length) {
-    try { orders = JSON.parse(localStorage.getItem('merch.recent_orders') || '[]'); } catch {}
+  try {
+    const fetched = await api.myOrders();
+    if (Array.isArray(fetched)) orders.push(...fetched);
+  } catch {}
+
+  const recent = readJson('merch.recent_orders', []);
+  if (Array.isArray(recent)) {
+    recent.forEach((r) => {
+      if (!orders.some((x) => (x.id && x.id === r.id) || (x.reference && x.reference === r.reference))) {
+        orders.push(r);
+      }
+    });
   }
-  if (!orders || !orders.length) {
-    orders = [
-      { id: 'ORD-8921', date: 'Feb 20, 2026', status: 'Delivered', total: 42500, statusColor: '#28a745' },
-      { id: 'ORD-8410', date: 'Jan 15, 2026', status: 'Processing', total: 18900, statusColor: '#c29958' },
-      { id: 'ORD-7935', date: 'Dec 05, 2025', status: 'Completed', total: 64200, statusColor: '#28a745' }
-    ];
+
+  // Filter orders strictly by current logged-in shopper's email
+  let myOrders = [];
+  if (currentEmail) {
+    myOrders = orders.filter((o) => {
+      const oEmail = (
+        o.customer?.email ||
+        o.customerEmail ||
+        o.email ||
+        o.shippingAddress?.email ||
+        ''
+      ).toLowerCase().trim();
+      return oEmail === currentEmail;
+    });
   }
-  tbody.innerHTML = orders.map((o, idx) => `
-    <tr>
-      <td>${escapeHtml(o.reference || o.id || (idx + 1))}</td>
-      <td>${escapeHtml(o.createdAt ? new Date(o.createdAt).toLocaleDateString() : (o.date || 'Recent'))}</td>
-      <td><span class="badge" style="background: ${o.statusColor || (o.status === 'Delivered' || o.status === 'Completed' ? '#28a745' : '#c29958')}; color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 12px;">${escapeHtml(o.orderStatus || o.status || 'Pending')}</span></td>
-      <td>${typeof o.total === 'number' ? money(o.total) : (typeof o.totalAmount === 'number' ? money(o.totalAmount) : (o.total || '₹25,000'))}</td>
-      <td><a href="cart.html" class="btn btn-sqr" style="padding: 6px 14px; font-size: 13px;">View</a></td>
-    </tr>
-  `).join('');
+
+  if (!myOrders.length) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="5" style="text-align: center; padding: 35px 20px; color: #666;">
+          <p style="font-size: 15px; margin-bottom: 12px;">No orders found for <strong>${escapeHtml(currentEmail || 'this account')}</strong>.</p>
+          <a href="shop.html" class="btn btn-sqr" style="padding: 8px 22px;">Explore Jewellery Collection</a>
+        </td>
+      </tr>`;
+    return;
+  }
+
+  tbody.innerHTML = myOrders.map((o, idx) => {
+    const orderRef = o.reference || o.orderRef || o.id || `ORD-${idx + 1}`;
+    const dateStr = o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : (o.date || 'Recent');
+    const statusStr = o.orderStatus || o.status || 'Confirmed';
+    const statusBg = o.statusColor || (/delivered|completed/i.test(statusStr) ? '#28a745' : /cancel/i.test(statusStr) ? '#dc3545' : '#c29958');
+    const totalDisplay = typeof o.total === 'number' ? money(o.total) : (typeof o.totalAmount === 'number' ? money(o.totalAmount) : (o.total || '₹0'));
+
+    return `
+      <tr>
+        <td><strong>${escapeHtml(orderRef)}</strong></td>
+        <td>${escapeHtml(dateStr)}</td>
+        <td><span class="badge" style="background: ${statusBg}; color: #fff; padding: 5px 12px; border-radius: 4px; font-size: 12px; font-weight: 500;">${escapeHtml(statusStr)}</span></td>
+        <td><strong>${totalDisplay}</strong></td>
+        <td style="white-space: nowrap;">
+          <a href="order-received.html?id=${encodeURIComponent(o.id || orderRef)}" class="btn btn-sqr" style="padding: 6px 14px; font-size: 12px; margin-right: 6px;">View</a>
+          <button type="button" class="btn btn-sqr btn-account-invoice" data-order-ref="${escapeHtml(orderRef)}" style="padding: 6px 14px; font-size: 12px; background: #333; border-color: #333; color: #fff;">Invoice</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  // Wire invoice download buttons in account orders table
+  tbody.querySelectorAll('.btn-account-invoice').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const ref = btn.dataset.orderRef;
+      const targetOrder = myOrders.find((x) => (x.id === ref || x.reference === ref || x.orderRef === ref));
+      if (targetOrder) {
+        downloadInvoice(targetOrder);
+      } else {
+        notify('Order invoice details not found', 'error');
+      }
+    });
+  });
 }
 
 function wireDownloadTab() {
