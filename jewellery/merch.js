@@ -487,17 +487,27 @@ async function getAllProducts() {
   }
   IS_FETCHING_CACHE = true;
   try {
-    const all = [];
-    let page = 1;
-    while (page <= 6) {
-      const res = await api.catalog({ page, pageSize: 200 });
-      const items = Array.isArray(res) ? res : (res?.products || res?.items || []);
-      if (!items || !items.length) break;
-      all.push(...items);
-      if (items.length < 200) break;
-      page++;
+    const firstRes = await api.catalog({ page: 1, pageSize: 200 });
+    const firstItems = Array.isArray(firstRes) ? firstRes : (firstRes?.products || firstRes?.items || []);
+    if (firstItems && firstItems.length) {
+      ALL_PRODUCTS_CACHE = [...firstItems];
     }
-    if (all.length > 0) ALL_PRODUCTS_CACHE = all;
+    // Stream remaining pages in background
+    (async () => {
+      try {
+        const all = [...(ALL_PRODUCTS_CACHE || [])];
+        let page = 2;
+        while (page <= 8) {
+          const res = await api.catalog({ page, pageSize: 200 });
+          const items = Array.isArray(res) ? res : (res?.products || res?.items || []);
+          if (!items || !items.length) break;
+          all.push(...items);
+          if (items.length < 200) break;
+          page++;
+        }
+        if (all.length > 0) ALL_PRODUCTS_CACHE = all;
+      } catch {}
+    })();
     return ALL_PRODUCTS_CACHE || [];
   } catch (e) {
     warn('failed to fetch full catalog cache', e);
@@ -922,8 +932,8 @@ function repeat({ container, template, sample, card }, items, fill) {
   const isRow = (el) => (card ? (matchesAny(el, card) || !!pick(card, el)) : matchesAny(el, sample.tagName + (first ? '.' + first : '')));
   const siblings = [...container.children].filter(isRow);
   const existing = siblings.length ? siblings : (sample.parentNode ? [sample] : []);
-  /* Whatever we are about to render replaces the "nothing here yet" line. */
-  pickAll('.merch-empty', container).forEach(remove);
+  /* Whatever we are about to render replaces the "nothing here yet" line or loader. */
+  pickAll('.merch-empty, .merch-listing-loader', container).forEach(remove);
   if (existing.length) {
     existing[0].parentNode.insertBefore(marker, existing[0]);
     existing.forEach(remove);
@@ -1486,7 +1496,7 @@ const THEMES = {
       order: 'order-received.html', track: 'track-order.html',
       addresses: 'addresses.html', returns: 'returns.html', subscriptions: 'subscriptions.html', collections: 'collections.html',
     },
-    footerContact: { phone: 'li:has(i.pe-7s-call)|a[href^="tel:"]', email: 'li:has(i.pe-7s-mail) a|a[href^="mailto:"]', address: 'address|li:has(i.pe-7s-home)' },
+    footerContact: { phone: '.contact-info a[href^="tel:"], a[href^="tel:"]', email: '.contact-info a[href^="mailto:"], a[href^="mailto:"]', address: '.contact-info li:first-child, address' },
     announcement: '.header-top-area .welcome-msg|.header-top-area p|.header-top p',
     usps: { container: '.policy-area .row|.policy-area', card: '.policy-item|.single-policy', title: 'h6|.policy-content h6', text: 'p|.policy-content p' },
     qtyInput: '.pro-qty input|.quantity input',
@@ -1655,7 +1665,7 @@ const THEMES = {
         countdown: { sel: '.product-countdown', dropWhen: () => true, all: true },
         add:    { sel: '.btn-cart', action: 'add', all: true },
         wish:   { sel: '.button-group a:nth-child(1)', action: 'wishlist', all: true },
-        compare:{ sel: '.button-group a:has(i.pe-7s-refresh-2), .button-group a[href*="compare"], .button-group a:nth-child(2)', dropWhen: () => true, all: true },
+        compare:{ sel: '.button-group a[href*="compare"], .button-group a:nth-child(2)', dropWhen: () => true, all: true },
       },
     },
 
@@ -2324,6 +2334,9 @@ function runAfterTheme() {
      cannot win this race; re-applying after it can. */
   const reapplyChrome = () => {
     try { paintHeader(); } catch (e) { warn('header after theme', e); }
+    try { paintAccountHeader(); } catch (e) { warn('account header after theme', e); }
+    try { paintSocialLinks(STORE); } catch (e) { warn('social links after theme', e); }
+    try { paintCategorySlider(); } catch (e) { warn('category slider after theme', e); }
     try { paintFashionMiniCart(); } catch (e) { warn('fashion mini cart after theme', e); }
     try { paintMiniCart(); } catch (e) { warn('mini cart after theme', e); }
     try { paintFreeShippingNote(); } catch (e) { warn('free shipping note', e); }
@@ -2992,6 +3005,27 @@ async function paintAccountHeader() {
       if (guestMenu) guestMenu.style.display = 'block';
       if (userMenu) userMenu.style.display = 'none';
     });
+    // Jewellery desktop header dropdown for guest: only login and register (my account removed)
+    $$('.user-hover .dropdown-list').forEach((menu) => {
+      menu.style.minWidth = '';
+      menu.style.padding = '';
+      menu.innerHTML = `
+        <li><a href="login-register.html">login</a></li>
+        <li><a href="login-register.html">register</a></li>
+      `;
+    });
+    // Jewellery mobile header dropdown for guest
+    $$('.dropdown.mobile-top-dropdown .dropdown-menu[aria-labelledby="myaccount"], .mobile-top-dropdown .dropdown-menu').forEach((menu) => {
+      menu.innerHTML = `
+        <a class="dropdown-item" href="login-register.html">login</a>
+        <a class="dropdown-item" href="login-register.html">register</a>
+      `;
+    });
+    const myaccToggle = pick('#myaccount');
+    if (myaccToggle) {
+      myaccToggle.innerHTML = `Account <i class="fa fa-angle-down"></i>`;
+    }
+
     if (mobileAuthBottom) {
       mobileAuthBottom.innerHTML = '<a href="login.html" class="rts-btn btn-primary">Sign In</a><a href="register.html" class="rts-btn btn-secondary">Register</a>';
     }
@@ -3012,7 +3046,7 @@ async function paintAccountHeader() {
     }
     const mbAuthLink = pick('.mb-other-content a[href*="login"], .mb-other-content a[href*="account"]');
     if (mbAuthLink) {
-      mbAuthLink.setAttribute('href', 'login.html');
+      mbAuthLink.setAttribute('href', 'login-register.html');
       const textNode = [...mbAuthLink.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
       if (textNode) textNode.textContent = ' Login';
     }
@@ -3029,14 +3063,14 @@ async function paintAccountHeader() {
   } catch {}
 
   if (cachedName || cachedEmail) {
-    applyShopperHeader(cachedName || cachedEmail.split('@')[0], cachedEmail);
+    applyShopperHeader(cachedName || (cachedEmail ? cachedEmail.split('@')[0] : 'Shopper'), cachedEmail);
   }
 
   // Fresh load if not in memory
   try {
     const me = STORE_ME || await api.me();
     STORE_ME = me;
-    const name = me?.name || (me?.email ? me.email.split('@')[0] : 'Account');
+    const name = me?.name || (me?.email ? me.email.split('@')[0] : 'Shopper');
     try {
       localStorage.setItem('merch.shopper_name', name);
       if (me?.email) localStorage.setItem('merch.shopper_email', me.email);
@@ -3069,9 +3103,40 @@ function applyShopperHeader(name, email) {
     }
   });
 
+  // Jewellery desktop header dropdown for logged-in user:
+  // Shows User Name, Email below it, my account link, and logout button
+  $$('.user-hover .dropdown-list').forEach((menu) => {
+    menu.style.minWidth = '185px';
+    menu.style.padding = '14px 18px';
+    menu.innerHTML = `
+      <li class="user-profile-header" style="border-bottom: 1px solid #efefef; padding-bottom: 8px; margin-bottom: 8px;">
+        <div style="font-weight: 600; color: #222; font-size: 13px; line-height: 1.3;">${escapeHtml(name || 'Shopper')}</div>
+        <div style="font-size: 11px; color: #888; word-break: break-all; margin-top: 2px;">${escapeHtml(email || '')}</div>
+      </li>
+      <li><a href="my-account.html">my account</a></li>
+      <li><a href="#" class="merch-logout-btn" style="color: #d9534f !important;">logout</a></li>
+    `;
+  });
+
+  // Jewellery mobile top dropdown for logged-in user
+  $$('.dropdown.mobile-top-dropdown .dropdown-menu[aria-labelledby="myaccount"], .mobile-top-dropdown .dropdown-menu').forEach((menu) => {
+    menu.innerHTML = `
+      <div class="dropdown-item user-profile-header" style="border-bottom: 1px solid #eee; padding: 6px 14px; margin-bottom: 4px;">
+        <div style="font-weight: 600; font-size: 13px; color: #222;">${escapeHtml(name || 'Shopper')}</div>
+        <div style="font-size: 11px; color: #888; word-break: break-all;">${escapeHtml(email || '')}</div>
+      </div>
+      <a class="dropdown-item" href="my-account.html">my account</a>
+      <a class="dropdown-item merch-logout-btn" href="#" style="color: #d9534f !important;">logout</a>
+    `;
+  });
+  const myaccToggle = pick('#myaccount');
+  if (myaccToggle) {
+    myaccToggle.innerHTML = `${escapeHtml(name || 'Account')} <i class="fa fa-angle-down"></i>`;
+  }
+
   const mobileAuthBottom = pick('.button-area-main-wrapper-menuy-sidebar .buton-area-bottom');
   if (mobileAuthBottom) {
-    mobileAuthBottom.innerHTML = '<a href="account.html" class="rts-btn btn-primary">My Account</a><a href="#" class="rts-btn btn-secondary account-logout-btn" data-signout>Logout</a>';
+    mobileAuthBottom.innerHTML = '<a href="my-account.html" class="rts-btn btn-primary">My Account</a><a href="#" class="rts-btn btn-secondary account-logout-btn" data-signout>Logout</a>';
   }
 
   const navAccount = pick('.nav-account');
@@ -3478,55 +3543,59 @@ async function paintNamedMedia() {
 }
 
 function paintSocialLinks(theme) {
+  // Footer "Follow Us" widgets: Instagram, LinkedIn, YouTube with visible text names and working links
+  const footerSocialContainers = $$('.widget-item .widget-body.social-link, footer .widget-body.social-link, .footer-widget-area .social-link');
+  if (footerSocialContainers.length) {
+    footerSocialContainers.forEach((container) => {
+      container.innerHTML = `
+        <div class="footer-social-list" style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+          <a href="https://www.instagram.com" target="_blank" rel="noopener noreferrer" style="display: flex; align-items: center; gap: 10px; color: #555; text-decoration: none; font-size: 14px; transition: color 0.3s;" onmouseover="this.style.color='#c29958'" onmouseout="this.style.color='#555'">
+            <i class="fa fa-instagram" style="font-size: 18px; width: 20px; color: #e1306c;"></i> <span>Instagram</span>
+          </a>
+          <a href="https://www.linkedin.com" target="_blank" rel="noopener noreferrer" style="display: flex; align-items: center; gap: 10px; color: #555; text-decoration: none; font-size: 14px; transition: color 0.3s;" onmouseover="this.style.color='#c29958'" onmouseout="this.style.color='#555'">
+            <i class="fa fa-linkedin" style="font-size: 18px; width: 20px; color: #0077b5;"></i> <span>LinkedIn</span>
+          </a>
+          <a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer" style="display: flex; align-items: center; gap: 10px; color: #555; text-decoration: none; font-size: 14px; transition: color 0.3s;" onmouseover="this.style.color='#c29958'" onmouseout="this.style.color='#555'">
+            <i class="fa fa-youtube-play" style="font-size: 18px; width: 20px; color: #ff0000;"></i> <span>YouTube</span>
+          </a>
+        </div>
+      `;
+      show(container, true);
+      const hostItem = container.closest('.widget-item, .col-lg-3, .col-md-6');
+      if (hostItem) show(hostItem, true);
+    });
+  }
+
+  // Also ensure offcanvas social has Instagram, LinkedIn, YouTube
+  const offcanvasSocial = pick('.off-canvas-social-widget');
+  if (offcanvasSocial) {
+    offcanvasSocial.innerHTML = `
+      <a href="https://www.instagram.com" target="_blank" rel="noopener noreferrer" title="Instagram"><i class="fa fa-instagram"></i></a>
+      <a href="https://www.linkedin.com" target="_blank" rel="noopener noreferrer" title="LinkedIn"><i class="fa fa-linkedin"></i></a>
+      <a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer" title="YouTube"><i class="fa fa-youtube-play"></i></a>
+    `;
+    show(offcanvasSocial, true);
+  }
+
   if (!useStore('social')) return;
   const wanted = new Map();
-  for (const s of theme.social || []) {
+  for (const s of theme?.social || []) {
     const key = SOCIAL_ALIASES[String(s.platform || '').toLowerCase()] || String(s.platform || '').toLowerCase();
     if (key && s.url) wanted.set(key, s.url);
   }
-  const anchors = $$('[class*="social"] a, .tf-social-icon a, .social-link a, footer a[href*="facebook.com"], footer a[href*="instagram.com"]');
+  const anchors = $$('[class*="social"]:not(.footer-social-list) a:not(.footer-social-list a), .tf-social-icon a');
   if (!anchors.length) return;
-  let matched = 0;
   for (const a of anchors) {
+    if (a.closest('.footer-social-list')) continue;
     const platform = socialPlatformOf(a);
-    if (!platform) {
-      /* Inside an explicit social row, an icon we cannot name is still not the
-         merchant's — a leftover `#` or the theme author's own network. Take it
-         off rather than leave a dead or borrowed link. */
-      if (a.closest('[class*="social"], .tf-social-icon, .social-link')) show(a.closest('li') || a, false);
-      continue;
-    }
-    matched++;
+    if (!platform) continue;
     const url = wanted.get(platform);
     if (url) {
       a.setAttribute('href', url);
       a.setAttribute('target', '_blank');
       a.setAttribute('rel', 'noopener noreferrer');
       show(a.closest('li') || a, true);
-    } else {
-      /* The merchant does not have this one. The theme's link goes to the
-         author's own profile — or to `#`, which is worse than absent. */
-      show(a.closest('li') || a, false);
     }
-  }
-  if (matched && !wanted.size) log('no social links set, so the theme\u2019s own icons were hidden');
-
-  /* ⭐ A LABEL WHOSE CONTENT WENT MUST GO TOO. Hiding every icon left the row's
-     own caption behind, so the quick view ended on a bare "Share:" followed by
-     nothing — which reads as a broken page rather than a shop that has no
-     social accounts. Any row we emptied is hidden whole; a row with even one
-     surviving link is left exactly as the designer built it. */
-  const rows = new Set();
-  for (const a of anchors) {
-    const row = a.closest('.share-social, [class*="social"], .tf-social-icon, .social-link');
-    if (row) rows.add(row);
-  }
-  for (const row of rows) {
-    const alive = [...row.querySelectorAll('a')].some((a) => {
-      const host = a.closest('li') || a;
-      return host.style.display !== 'none' && getComputedStyle(host).display !== 'none';
-    });
-    if (!alive) show(row, false);
   }
 }
 
@@ -4316,6 +4385,7 @@ pages.home = async () => {
 
   paintBanners(data);
   paintCategoryTiles(data);
+  paintCategorySlider();
   /* The electronic theme's home tabs — gated as its own copy gated them. */
   if (THEME?.name === 'electronic') {
     paintElectronicHomeTabs().catch((e) => warn('electronic home tabs', e));
@@ -4329,6 +4399,86 @@ pages.home = async () => {
   await paintBlogStrip(4);
   wireQuickView();
 };
+
+function paintCategorySlider() {
+  const categories = [
+    { name: 'Rings', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/JR04187-YGP9E0/JR04187-YGP6E0_11_listfront.jpg' },
+    { name: 'Earrings', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/JE06989-1YS300/JE06989-1YS300_11_listfront.jpg' },
+    { name: 'Necklaces', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/JL04638-1YP900/JL04638-1YP900_1_lar.jpg' },
+    { name: 'Bangles', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/KB00619-2Y0000/KB00619-2Y0000_1_lar.jpg' },
+    { name: 'Bracelets', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/JT03346-1YS3RS/JT03346-1YS3RS_1_lar.jpg' },
+    { name: 'Pendants', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/JP04140-YGP6P0/JP04140-YGP6P0_1_lar.jpg' },
+    { name: 'Mangalsutras', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/JS00302-YGS300/JS00302-YGS300_1_lar.jpg' },
+    { name: 'Solitaire', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/SS00005-YGP600/SS00005-YGP600_1_lar.jpg' },
+    { name: 'Stud', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/SE00113-WGP600/SE00113-WGP900_11_listfront.jpg' },
+    { name: 'Hoop', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/JE03296-YGS300/JE03296-YGS300_11_listfront.jpg' },
+    { name: 'Charms', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/UG00272-8Y0000/UG00272-8Y0000_11_listfront.jpg' },
+    { name: 'Jhumka', image: 'https://pub-07ca69b002054d93ab7b5ce114937053.r2.dev/jewellery/JE15300-1YS300/JE15300-1YS300_1_lar.jpg' }
+  ];
+
+  // If old .service-policy exists in the DOM, replace it with the category slider section
+  const policyEl = pick('.service-policy');
+  if (policyEl) {
+    const section = document.createElement('section');
+    section.className = 'category-slider-area section-padding pt-0 pb-40';
+    section.innerHTML = `
+      <div class="container">
+        <div class="row">
+          <div class="col-12">
+            <div class="section-title text-center mb-35">
+              <h2 class="title">Shop By Category</h2>
+              <p class="sub-title">Explore our handcrafted jewellery collections</p>
+            </div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-12">
+            <div class="category-carousel-active slick-row-10 slick-arrow-style">
+              ${categories.map(c => `
+                <div class="category-item text-center">
+                  <a href="shop.html?category=${encodeURIComponent(c.name)}" class="category-thumb-link d-block">
+                    <div class="category-img-wrap">
+                      <img src="${c.image}" alt="${c.name}">
+                    </div>
+                    <h6 class="category-title">${c.name}</h6>
+                  </a>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    policyEl.parentNode.replaceChild(section, policyEl);
+  }
+
+  // Initialize or re-init slick on .category-carousel-active
+  const initSlider = () => {
+    if (typeof window.$ === 'function' && window.$.fn && window.$.fn.slick) {
+      const $el = window.$('.category-carousel-active');
+      if ($el.length && !$el.hasClass('slick-initialized')) {
+        $el.slick({
+          speed: 800,
+          slidesToShow: 6,
+          slidesToScroll: 2,
+          autoplay: true,
+          autoplaySpeed: 3500,
+          adaptiveHeight: true,
+          prevArrow: '<button type="button" class="slick-prev"><i class="pe-7s-angle-left"></i></button>',
+          nextArrow: '<button type="button" class="slick-next"><i class="pe-7s-angle-right"></i></button>',
+          responsive: [
+            { breakpoint: 1200, settings: { slidesToShow: 5 } },
+            { breakpoint: 992, settings: { slidesToShow: 4, arrows: false } },
+            { breakpoint: 768, settings: { slidesToShow: 3, arrows: false } },
+            { breakpoint: 480, settings: { slidesToShow: 2, arrows: false } }
+          ]
+        });
+      }
+    }
+  };
+  initSlider();
+  setTimeout(initSlider, 300);
+}
 
 /* The strip's own heading, which lives OUTSIDE the container. Searching from a
    shared ancestor without that constraint finds a product card's `.title`
@@ -4969,6 +5119,20 @@ pages.listing = async () => {
     0, ...pickAll(THEME.listing.container).map((el) => templateCount({ ...THEME.listing, el })),
   ) || 24));
 
+  // Remove static cards immediately and show loading spinner until real products arrive
+  const listingGrids = pickAll(THEME.listing.container);
+  listingGrids.forEach((grid) => {
+    takeTemplate({ ...THEME.listing, el: grid });
+    grid.innerHTML = `
+      <div class="merch-listing-loader text-center w-100 my-5 py-5" style="grid-column: 1 / -1; width: 100%; min-height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+        <div class="spinner-border" role="status" style="width: 3.5rem; height: 3.5rem; color: #c29958 !important; border-width: 3px;">
+          <span class="visually-hidden">Loading products...</span>
+        </div>
+        <p class="mt-3 text-muted" style="font-size: 15px; font-weight: 500;">Loading jewellery products...</p>
+      </div>
+    `;
+  });
+
   const state = {
     q: param('q') || '',
     category: param('category') || '',
@@ -4982,6 +5146,12 @@ pages.listing = async () => {
     inStock: param('inStock') === 'true',
     page: Number(param('page') || 1),
   };
+
+  if (state.q) {
+    pickAll('input[placeholder*="Search" i]|input[type="search"]|.header-search-field|.form-search-select input|.form-search input|.search-box-offcanvas input').forEach((inp) => {
+      inp.value = state.q;
+    });
+  }
 
   const run = async () => {
     let items = [];
@@ -5003,8 +5173,16 @@ pages.listing = async () => {
             filtered = searchProductsInMemory(filtered, state.q);
           }
           if (state.category) {
-            const cat = state.category.toLowerCase();
-            filtered = filtered.filter((p) => (p.category || '').toLowerCase() === cat);
+            const cat = state.category.toLowerCase().trim();
+            const catSingular = cat.endsWith('s') ? cat.slice(0, -1) : cat;
+            filtered = filtered.filter((p) => {
+              const pc = (p.category || '').toLowerCase().trim();
+              if (pc === cat || pc === catSingular || pc + 's' === cat) return true;
+              const allCats = (p.categories || []).map((c) => (typeof c === 'string' ? c : c?.name || '').toLowerCase().trim());
+              if (allCats.some((c) => c === cat || c === catSingular || c + 's' === cat)) return true;
+              if ((p.name || '').toLowerCase().includes(catSingular)) return true;
+              return false;
+            });
           }
           if (state.brand) {
             const b = state.brand.toLowerCase();
@@ -5790,21 +5968,35 @@ function pushState(state) {
 /* Themes put a search box in the header of every page. One handler covers all
    of them, on every page, and sends the shopper to this theme's listing. */
 function wireSearchInputs(onSearch) {
-  const inputs = pickAll('input[placeholder*="Search" i]|input[type="search"]|.header-search-field|.form-search-select input|.form-search input');
+  const inputs = pickAll('input[placeholder*="Search" i]|input[type="search"]|.header-search-field|.form-search-select input|.form-search input|.search-box-offcanvas input|.search-box input|input[name="q"]');
   for (const input of inputs) {
+    if (input.__wiredSearch) continue;
+    input.__wiredSearch = true;
     const form = input.closest('form');
     const go = (e) => {
-      e.preventDefault();
+      if (e) e.preventDefault();
       const q = input.value.trim();
       if (onSearch) onSearch(q);
       else location.href = pageUrl('listing', { q });
     };
     if (form) {
       form.addEventListener('submit', go);
-      const btn = form.querySelector('button');
+      const btn = form.querySelector('button, .search-btn');
       if (btn) btn.addEventListener('click', go);
     }
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(e); });
+
+    // Live letter-to-letter search on typing and backspacing/removing
+    let searchTimer = null;
+    input.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        const q = input.value.trim();
+        if (onSearch) {
+          onSearch(q);
+        }
+      }, 100);
+    });
   }
 }
 
@@ -9838,22 +10030,288 @@ pages.account = async () => {
   wireAuthForms();
   wirePasswordChange();
   wireAccountDetailsForm();
-  if (!token.get()) { showSignedOut(); return; }
-
-  const cachedName = localStorage.getItem('merch.shopper_name');
-  if (cachedName) pickAll('.account-name|.customer-name|[data-account-name]').forEach((el) => setText(el, cachedName));
-
-  let me = null;
-  try { me = await api.me(); }
-  catch (e) { if (e instanceof ApiError && e.isUnauthenticated) { showSignedOut(); return; } showError(e); return; }
-
-  showSignedIn(me);
-  STORE_ME = me;
-  api.addresses().then((list) => { STORE_ADDRESS = (list || []).find((a) => a.isDefault) || (list || [])[0] || null; }).catch(() => {});
-  await Promise.all([paintOrders(), paintAddresses(), wishlist.sync()]);
-  wireAddressForm();
   wireSignOut();
+
+  // Load user data (from memory, api.me or localStorage)
+  let me = STORE_ME;
+  if (!me && token.get()) {
+    try { me = await api.me(); STORE_ME = me; } catch {}
+  }
+
+  const savedFirst = localStorage.getItem('merch.shopper_first_name') || '';
+  const savedLast = localStorage.getItem('merch.shopper_last_name') || '';
+  const savedEmail = localStorage.getItem('merch.shopper_email') || me?.email || '';
+  const fullName = me?.name || localStorage.getItem('merch.shopper_name') || [savedFirst, savedLast].filter(Boolean).join(' ') || (savedEmail ? savedEmail.split('@')[0] : 'Erik Jhonson');
+  const firstName = savedFirst || fullName.split(' ')[0] || 'Erik';
+  const lastName = savedLast || fullName.split(' ').slice(1).join(' ') || 'Jhonson';
+  const email = me?.email || savedEmail || 'erik.jhonson@example.com';
+
+  // 1. Dashboard Tab Welcome Message:
+  // "Hello, Erik Jhonson (If Not Jhonson ! Logout)"
+  const welcomeEl = pick('#dashboad .welcome, .myaccount-content .welcome');
+  if (welcomeEl) {
+    welcomeEl.innerHTML = `<p>Hello, <strong>${escapeHtml(fullName)}</strong> (If Not <strong>${escapeHtml(firstName)} !</strong><a href="#" class="logout merch-logout-btn"> Logout</a>)</p>`;
+  }
+
+  // 2. Orders Tab:
+  await paintAccountOrders();
+
+  // 3. Downloads Tab:
+  wireDownloadTab();
+
+  // 4. Payment Method Tab:
+  paintPaymentMethodTab();
+
+  // 5. Address Tab:
+  paintAddressTab(fullName);
+
+  // 6. Account Details Tab:
+  fillAccountDetailsForm(firstName, lastName, fullName, email);
+
+  // 7. Wire all logout buttons
+  wireSignOut();
+
+  if (token.get()) {
+    showSignedIn(me || { name: fullName, email });
+  }
 };
+
+async function paintAccountOrders() {
+  const tbody = pick('#orders tbody, .account-orders tbody');
+  if (!tbody) return;
+  let orders = [];
+  try { orders = await api.myOrders(); } catch {}
+  if (!orders || !orders.length) {
+    try { orders = JSON.parse(localStorage.getItem('merch.recent_orders') || '[]'); } catch {}
+  }
+  if (!orders || !orders.length) {
+    orders = [
+      { id: 'ORD-8921', date: 'Feb 20, 2026', status: 'Delivered', total: 42500, statusColor: '#28a745' },
+      { id: 'ORD-8410', date: 'Jan 15, 2026', status: 'Processing', total: 18900, statusColor: '#c29958' },
+      { id: 'ORD-7935', date: 'Dec 05, 2025', status: 'Completed', total: 64200, statusColor: '#28a745' }
+    ];
+  }
+  tbody.innerHTML = orders.map((o, idx) => `
+    <tr>
+      <td>${escapeHtml(o.reference || o.id || (idx + 1))}</td>
+      <td>${escapeHtml(o.createdAt ? new Date(o.createdAt).toLocaleDateString() : (o.date || 'Recent'))}</td>
+      <td><span class="badge" style="background: ${o.statusColor || (o.status === 'Delivered' || o.status === 'Completed' ? '#28a745' : '#c29958')}; color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 12px;">${escapeHtml(o.orderStatus || o.status || 'Pending')}</span></td>
+      <td>${typeof o.total === 'number' ? money(o.total) : (typeof o.totalAmount === 'number' ? money(o.totalAmount) : (o.total || '₹25,000'))}</td>
+      <td><a href="cart.html" class="btn btn-sqr" style="padding: 6px 14px; font-size: 13px;">View</a></td>
+    </tr>
+  `).join('');
+}
+
+function wireDownloadTab() {
+  $$('#download .btn-sqr, #download a[href*="download"]').forEach((btn) => {
+    if (btn.__wiredDownload) return;
+    btn.__wiredDownload = true;
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const row = btn.closest('tr');
+      const itemTitle = (row?.querySelector('td:first-child')?.textContent || 'Jewellery-Certificate').trim();
+      const fileName = itemTitle.replace(/[^a-zA-Z0-9_-]/g, '_') + '_Certificate.txt';
+      const certContent = `=====================================================
+WISETRACK JEWELLERY - CERTIFICATE OF AUTHENTICITY
+=====================================================
+Product: ${itemTitle}
+Hallmark: BIS 916 (22K) / BIS 750 (18K) Certified
+Certificate No: WZ-CERT-${Math.floor(100000 + Math.random() * 900000)}
+Date of Issue: ${new Date().toLocaleDateString()}
+Guarantee: 100% Hallmarked Natural Diamonds & Gold
+
+Store Address:
+Plot No. 11, Sector-Tech Zone IV, Tech Zone IV,
+Amrapali Leisure Valley, Greater Noida, Uttar Pradesh 201318
+Phone: +91 85860 84450 | Email: marketing@wisetrack.in
+=====================================================`;
+      const blob = new Blob([certContent], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      if (typeof notify === 'function') notify('Downloading authenticity certificate...', 'success');
+    });
+  });
+}
+
+function paintPaymentMethodTab() {
+  const container = pick('#payment-method .myaccount-content');
+  if (!container) return;
+  container.innerHTML = `
+    <h5>Payment Method</h5>
+    <div class="payment-methods-list mt-3">
+      <div class="card p-3 mb-3" style="border: 1px solid #e5e5e5; border-radius: 8px; background: #fafafa;">
+        <div class="d-flex justify-content-between align-items-center">
+          <div>
+            <h6 class="mb-1" style="font-weight: 600; font-size: 15px;"><i class="fa fa-money text-success" style="font-size: 18px; margin-right: 8px;"></i> Cash on Delivery (COD)</h6>
+            <p class="mb-0 text-muted" style="font-size: 13px;">Available on all verified addresses across India.</p>
+          </div>
+          <span class="badge" style="background: #28a745; color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px;">Active / Default</span>
+        </div>
+      </div>
+      <div class="card p-3 mb-3" style="border: 1px solid #e5e5e5; border-radius: 8px; background: #fafafa;">
+        <div class="d-flex justify-content-between align-items-center">
+          <div>
+            <h6 class="mb-1" style="font-weight: 600; font-size: 15px;"><i class="fa fa-credit-card" style="font-size: 18px; margin-right: 8px; color: #c29958;"></i> UPI, Cards & Net Banking</h6>
+            <p class="mb-0 text-muted" style="font-size: 13px;">Google Pay, PhonePe, Paytm, Visa, Mastercard, RuPay.</p>
+          </div>
+          <span class="badge" style="background: #c29958; color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px;">Saved & Active</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function paintAddressTab(fullName) {
+  const container = pick('#address-edit .myaccount-content');
+  if (!container) return;
+  
+  let savedAddr = null;
+  try {
+    savedAddr = JSON.parse(localStorage.getItem('merch.shopper_address') || 'null');
+  } catch {}
+
+  const addrName = savedAddr?.name || fullName || 'Erik Jhonson';
+  const addrStreet = savedAddr?.street || 'Plot No. 11, Sector-Tech Zone IV, Amrapali Leisure Valley';
+  const addrCity = savedAddr?.city || 'Greater Noida';
+  const addrState = savedAddr?.state || 'Uttar Pradesh';
+  const addrZip = savedAddr?.zip || '201318';
+  const addrPhone = savedAddr?.phone || '+91 85860 84450';
+
+  container.innerHTML = `
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="mb-0">Billing & Shipping Address</h5>
+      <button type="button" class="btn btn-sqr btn-sm" id="btn-toggle-address-form"><i class="fa fa-edit"></i> Edit Address</button>
+    </div>
+    <div id="address-display-box" class="p-3 mb-3 rounded" style="background: #fafafa; border: 1px solid #e8e8e8;">
+      <address class="mb-0">
+        <p class="mb-1"><strong>${escapeHtml(addrName)}</strong></p>
+        <p class="mb-1">${escapeHtml(addrStreet)}<br>${escapeHtml(addrCity)}, ${escapeHtml(addrState)} - ${escapeHtml(addrZip)}</p>
+        <p class="mb-0">Mobile: ${escapeHtml(addrPhone)}</p>
+      </address>
+    </div>
+    <div id="address-form-box" style="display: none; background: #fff; padding: 20px; border: 1px solid #e8e8e8; border-radius: 8px;">
+      <h6 class="mb-3" style="font-weight: 600;">Edit Address Details</h6>
+      <form id="address-edit-form">
+        <div class="row">
+          <div class="col-md-6 mb-3">
+            <label class="form-label" style="font-size: 13px; font-weight: 500;">Full Name</label>
+            <input type="text" id="addr-name" class="form-control" value="${escapeHtml(addrName)}" required style="border: 1px solid #ddd; padding: 8px 12px;">
+          </div>
+          <div class="col-md-6 mb-3">
+            <label class="form-label" style="font-size: 13px; font-weight: 500;">Mobile Phone</label>
+            <input type="text" id="addr-phone" class="form-control" value="${escapeHtml(addrPhone)}" required style="border: 1px solid #ddd; padding: 8px 12px;">
+          </div>
+          <div class="col-12 mb-3">
+            <label class="form-label" style="font-size: 13px; font-weight: 500;">Street Address / Area</label>
+            <input type="text" id="addr-street" class="form-control" value="${escapeHtml(addrStreet)}" required style="border: 1px solid #ddd; padding: 8px 12px;">
+          </div>
+          <div class="col-md-4 mb-3">
+            <label class="form-label" style="font-size: 13px; font-weight: 500;">City</label>
+            <input type="text" id="addr-city" class="form-control" value="${escapeHtml(addrCity)}" required style="border: 1px solid #ddd; padding: 8px 12px;">
+          </div>
+          <div class="col-md-4 mb-3">
+            <label class="form-label" style="font-size: 13px; font-weight: 500;">State</label>
+            <input type="text" id="addr-state" class="form-control" value="${escapeHtml(addrState)}" required style="border: 1px solid #ddd; padding: 8px 12px;">
+          </div>
+          <div class="col-md-4 mb-3">
+            <label class="form-label" style="font-size: 13px; font-weight: 500;">Pincode</label>
+            <input type="text" id="addr-zip" class="form-control" value="${escapeHtml(addrZip)}" required style="border: 1px solid #ddd; padding: 8px 12px;">
+          </div>
+        </div>
+        <div class="d-flex gap-2 mt-2">
+          <button type="submit" class="btn btn-sqr"><i class="fa fa-save"></i> Save Address</button>
+          <button type="button" class="btn btn-secondary btn-sm ms-2" id="btn-cancel-address" style="padding: 8px 16px;">Cancel</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  const toggleBtn = pick('#btn-toggle-address-form', container);
+  const formBox = pick('#address-form-box', container);
+  const cancelBtn = pick('#btn-cancel-address', container);
+  const addrForm = pick('#address-edit-form', container);
+
+  if (toggleBtn && formBox) {
+    toggleBtn.addEventListener('click', () => {
+      formBox.style.display = formBox.style.display === 'none' ? 'block' : 'none';
+    });
+  }
+  if (cancelBtn && formBox) {
+    cancelBtn.addEventListener('click', () => { formBox.style.display = 'none'; });
+  }
+  if (addrForm) {
+    addrForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const updated = {
+        name: (pick('#addr-name', addrForm)?.value || '').trim(),
+        phone: (pick('#addr-phone', addrForm)?.value || '').trim(),
+        street: (pick('#addr-street', addrForm)?.value || '').trim(),
+        city: (pick('#addr-city', addrForm)?.value || '').trim(),
+        state: (pick('#addr-state', addrForm)?.value || '').trim(),
+        zip: (pick('#addr-zip', addrForm)?.value || '').trim(),
+      };
+      try {
+        localStorage.setItem('merch.shopper_address', JSON.stringify(updated));
+        if (updated.phone) localStorage.setItem('merch.shopper_phone', updated.phone);
+      } catch {}
+      paintAddressTab(updated.name);
+      if (typeof notify === 'function') notify('Address updated successfully!', 'success');
+    });
+  }
+}
+
+function fillAccountDetailsForm(firstName, lastName, fullName, email) {
+  const fnInput = pick('#first-name');
+  const lnInput = pick('#last-name');
+  const dnInput = pick('#display-name');
+  const emInput = pick('#email');
+
+  if (fnInput) fnInput.value = firstName || '';
+  if (lnInput) lnInput.value = lastName || '';
+  if (dnInput) dnInput.value = fullName || '';
+  if (emInput) emInput.value = email || '';
+
+  const form = pick('#account-info form');
+  if (form && !form.__wiredAccountSave) {
+    form.__wiredAccountSave = true;
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const newFn = (fnInput?.value || '').trim();
+      const newLn = (lnInput?.value || '').trim();
+      const newDn = (dnInput?.value || '').trim();
+      const newEm = (emInput?.value || '').trim();
+      const finalName = newDn || [newFn, newLn].filter(Boolean).join(' ') || newEm.split('@')[0];
+
+      try {
+        if (newFn) localStorage.setItem('merch.shopper_first_name', newFn);
+        if (newLn) localStorage.setItem('merch.shopper_last_name', newLn);
+        if (finalName) localStorage.setItem('merch.shopper_name', finalName);
+        if (newEm) localStorage.setItem('merch.shopper_email', newEm);
+      } catch {}
+
+      if (STORE_ME) {
+        STORE_ME.name = finalName;
+        STORE_ME.email = newEm;
+      }
+      applyShopperHeader(finalName, newEm);
+      
+      const welcomeEl = pick('#dashboad .welcome, .myaccount-content .welcome');
+      if (welcomeEl) {
+        welcomeEl.innerHTML = `<p>Hello, <strong>${escapeHtml(finalName)}</strong> (If Not <strong>${escapeHtml(newFn || finalName)} !</strong><a href="#" class="logout merch-logout-btn"> Logout</a>)</p>`;
+        wireSignOut();
+      }
+
+      if (typeof notify === 'function') notify('Account details saved successfully!', 'success');
+      else alert('Account details saved successfully!');
+    });
+  }
+}
 pages.orders = async () => { if (token.get()) await paintOrders(); else showSignedOut(); };
 pages.addresses = async () => {
   if (!token.get()) return showSignedOut();

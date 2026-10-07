@@ -369,6 +369,45 @@
 	});
 
 
+	// category carousel active js
+	$('.category-carousel-active').slick({
+		speed: 800,
+		slidesToShow: 6,
+		slidesToScroll: 2,
+		autoplay: true,
+		autoplaySpeed: 3500,
+		adaptiveHeight: true,
+		prevArrow: '<button type="button" class="slick-prev"><i class="pe-7s-angle-left"></i></button>',
+		nextArrow: '<button type="button" class="slick-next"><i class="pe-7s-angle-right"></i></button>',
+		responsive: [{
+			breakpoint: 1200,
+			settings: {
+				slidesToShow: 5
+			}
+		},
+		{
+			breakpoint: 992,
+			settings: {
+				slidesToShow: 4,
+				arrows: false
+			}
+		},
+		{
+			breakpoint: 768,
+			settings: {
+				slidesToShow: 3,
+				arrows: false
+			}
+		},
+		{
+			breakpoint: 480,
+			settings: {
+				slidesToShow: 2,
+				arrows: false
+			}
+		}]
+	});
+
 	// brand logo carousel active js
 	$('.brand-logo-carousel').slick({
 		speed: 1000,
