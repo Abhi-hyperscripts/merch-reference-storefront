@@ -81,11 +81,24 @@ tapTopElement.addEventListener('click', function () {
     const toggleNav = document.getElementById('toggle-nav');
     const mobileBack = document.getElementById('mobile-back');
     const smHorizontal = document.getElementById('sm-horizontal');
-    toggleNav.addEventListener('click', function() {
-        smHorizontal.classList.add('open');
-    });
-    mobileBack.addEventListener('click', function() {
-        smHorizontal.classList.remove('open');
+    if (toggleNav && smHorizontal) {
+        toggleNav.addEventListener('click', function(e) {
+            e.stopPropagation();
+            smHorizontal.classList.add('open');
+        });
+    }
+    if (mobileBack && smHorizontal) {
+        mobileBack.addEventListener('click', function(e) {
+            e.stopPropagation();
+            smHorizontal.classList.remove('open');
+        });
+    }
+    document.addEventListener('click', function(e) {
+        if (smHorizontal && smHorizontal.classList.contains('open')) {
+            if (!smHorizontal.contains(e.target) && (!toggleNav || !toggleNav.contains(e.target))) {
+                smHorizontal.classList.remove('open');
+            }
+        }
     });
 
  
